@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	pb "gossipsub/proto"
+	pb "rhizome/proto"
 )
 
 type subscription struct{ cancel context.CancelFunc }

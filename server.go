@@ -7,7 +7,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	pb "gossipsub/proto"
+	pb "rhizome/proto"
 )
 
 type server struct {

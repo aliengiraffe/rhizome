@@ -1,4 +1,4 @@
-# gossipsub
+# rhizome
 
 A loopback-only Go proof of concept: each process discovers peers through
 HashiCorp memberlist, hosts a gRPC `sessions` channel, and
@@ -165,7 +165,7 @@ the departing node and its subscription.
 `kill -9` prevents cleanup and sends no leave announcement. Peers can first
 log a stream error, then detect the missing node through gossip failure
 detection and log `LEAVE` after a delay. The rest of the cluster continues.
-When testing signals by PID, build and run `./gossipsub` directly so you target
+When testing signals by PID, build and run `./rhizome` directly so you target
 the node process rather than the `go run` wrapper.
 
 This demo uses insecure gRPC credentials and trusts local peers. It is intended

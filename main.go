@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	pb "gossipsub/proto"
+	pb "rhizome/proto"
 )
 
 func main() {

@@ -1,4 +1,4 @@
-module gossipsub
+module rhizome
 
 go 1.22
 

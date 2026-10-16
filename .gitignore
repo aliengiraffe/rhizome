@@ -34,4 +34,4 @@ go.work.sum
 
 # Local code generators and application binary
 /.bin/
-/gossipsub
+/rhizome
