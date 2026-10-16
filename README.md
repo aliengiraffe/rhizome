@@ -71,6 +71,91 @@ connection management, but there is no custom retry loop. `UPDATE` logs
 membership metadata updates and replaces a connection if its advertised port
 changes. Normal runs need not produce UPDATE events.
 
+## Scaling up and down
+
+Every node has the same role; there is no master or leader election. Gossip
+maintains membership, while gRPC carries messages directly from publishers to
+subscribers. The stream links below illustrate possible subscriptions, not
+mandatory or reciprocal connections. Each node chooses each peer independently
+with probability 0.5 every 10–20 seconds.
+
+```mermaid
+flowchart TB
+    %% ================= STEADY STATE =================
+    subgraph CLUSTER["Steady state: N peer nodes"]
+        direction LR
+        subgraph NA["Node A"]
+            A_g["memberlist"]
+            A_ps["pub/sub<br/>A/sessions"]
+        end
+        subgraph NB["Node B"]
+            B_g["memberlist"]
+            B_ps["pub/sub<br/>B/sessions"]
+        end
+        subgraph NC["Node C"]
+            C_g["memberlist"]
+            C_ps["pub/sub<br/>C/sessions"]
+        end
+        MORE["… Node N<br/>(same shape)"]
+
+        A_g <-. gossip .-> B_g
+        B_g <-. gossip .-> C_g
+        C_g <-. gossip .-> A_g
+        C_g <-. gossip .-> MORE
+
+        A_ps <== "streams only where<br/>a subscription exists" ==> B_ps
+        B_ps <== streams ==> C_ps
+        A_ps <== streams ==> C_ps
+    end
+
+    %% ================= SCALE UP =================
+    subgraph UP["Scale up: a node joins"]
+        direction TB
+        J0["New process starts<br/>knows one seed gossip address"]
+        J1["Join via seed → push/pull sync<br/>learns cluster membership"]
+        J2["Gossip propagates membership<br/>nodes learn the newcomer and its gRPC port"]
+        J3["JOIN callbacks create peer gRPC connections<br/>random selection starts subscription streams"]
+        J4["Newcomer publishes its own sessions channel<br/>active subscribers receive messages"]
+        J0 --> J1 --> J2 --> J3 --> J4
+    end
+
+    %% ================= SCALE DOWN =================
+    subgraph DOWN["Scale down: a node leaves or dies"]
+        direction TB
+        L0{"Graceful leave<br/>or crash?"}
+        L1["Node announces leave<br/>peers learn it has departed"]
+        L2["Probes fail → suspect<br/>indirect probes help detect failure"]
+        L3["Suspicion timeout → dead<br/>membership converges after a delay"]
+        L4["LEAVE callbacks cancel subscriptions<br/>close connections and remove the peer"]
+        L7["Cluster continues at N−1<br/>no leader election needed"]
+        L0 -- graceful --> L1
+        L0 -- crash --> L2 --> L3
+        L1 --> L4
+        L3 --> L4
+        L4 --> L7
+    end
+
+    %% Link lifecycle flows back into the cluster
+    J4 -- "becomes Node N+1" --> MORE
+    NA -- "goes offline" --> L0
+    L7 -- "membership converges" --> CLUSTER
+
+    classDef gossip fill:#2b3a4a,stroke:#7fa6c9,color:#e6eef7
+    classDef data fill:#2f4a3a,stroke:#8fcf9f,color:#e9f7ec
+    classDef up fill:#3a3f2b,stroke:#cfd48f,color:#f5f7e6
+    classDef down fill:#4a2f2f,stroke:#cf8f8f,color:#f7e9e9
+    class A_g,B_g,C_g gossip
+    class A_ps,B_ps,C_ps data
+    class J0,J1,J2,J3,J4 up
+    class L0,L1,L2,L3,L4,L7 down
+```
+
+Publishing begins independently of subscription selection. A crashed node's
+streams may report errors before gossip declares it dead. Its messages are not
+transferred to another node: each process owns only its own `sessions` channel.
+Adding nodes increases connections and expected subscription traffic; this demo
+does not partition channels or automatically balance load.
+
 ## Stopping nodes
 
 Ctrl-C (SIGINT) or SIGTERM cancels work, announces memberlist Leave, shuts down
