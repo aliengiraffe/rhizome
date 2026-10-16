@@ -1,7 +1,7 @@
 # gossipsub
 
 A loopback-only Go proof of concept: each process discovers peers through
-HashiCorp memberlist, hosts a gRPC `sessions` channel, publishes locally, and
+HashiCorp memberlist, hosts a gRPC `sessions` channel, and
 randomly subscribes to other nodes. No central broker or Publish RPC is involved.
 
 ## Setup
@@ -51,16 +51,14 @@ gRPC port uses TCP. Ports must be unused and distinct. Names default to
 `-join` is a gossip address, not a gRPC address. It is only needed to bootstrap
 membership; the first node has no special ongoing role. Run `go run . -h` for flags.
 
-Expect prefixed `JOIN`, `READY`, and `PUBLISH` logs. Every node publishes an
-Office one-liner every 2–5 seconds. After an initial randomized 10–20 seconds,
-each node independently chooses each known peer with probability 0.5, repeating
-every 10–20 seconds. `SUBSCRIBE` and `UNSUBSCRIBE` show these decisions. A node
-can choose zero peers, and subscriptions need not be reciprocal. Received
-messages look like:
+Expect prefixed `JOIN` and `READY` logs. After an initial randomized 10–20
+seconds, each node independently chooses each known peer with probability 0.5,
+repeating every 10–20 seconds. `SUBSCRIBE` and `UNSUBSCRIBE` show these decisions.
+A node can choose zero peers, and subscriptions need not be reciprocal.
 
-```text
-[node-7947] <- node-7946/sessions: node-7946: I declare bankruptcy!
-```
+There is no automatic message generation or command-line publishing input.
+Subscription streams remain idle until application code calls the local server's
+`publish` method. The fan-out implementation remains available for that use.
 
 Messages are live only: there is no replay, persistence, acknowledgement, or
 delivery guarantee. Each incoming subscription has a 32-message queue. A full
@@ -115,7 +113,7 @@ flowchart TB
         J1["Join via seed → push/pull sync<br/>learns cluster membership"]
         J2["Gossip propagates membership<br/>nodes learn the newcomer and its gRPC port"]
         J3["JOIN callbacks create peer gRPC connections<br/>random selection starts subscription streams"]
-        J4["Newcomer publishes its own sessions channel<br/>active subscribers receive messages"]
+        J4["Newcomer hosts its own sessions channel<br/>streams wait for application messages"]
         J0 --> J1 --> J2 --> J3 --> J4
     end
 
@@ -150,9 +148,9 @@ flowchart TB
     class L0,L1,L2,L3,L4,L7 down
 ```
 
-Publishing begins independently of subscription selection. A crashed node's
-streams may report errors before gossip declares it dead. Its messages are not
-transferred to another node: each process owns only its own `sessions` channel.
+A crashed node's streams may report errors before gossip declares it dead. Its
+messages are not transferred to another node: each process owns only its own
+`sessions` channel.
 Adding nodes increases connections and expected subscription traffic; this demo
 does not partition channels or automatically balance load.
 

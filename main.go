@@ -82,9 +82,7 @@ func run() error {
 		}
 	}
 	logger.Printf("READY gossip=127.0.0.1:%d grpc=127.0.0.1:%d", *gossipPort, *grpcPort)
-	publishTimer := time.NewTimer(randomDelay(2, 5))
 	subscriptionTimer := time.NewTimer(randomDelay(10, 20))
-	defer publishTimer.Stop()
 	defer subscriptionTimer.Stop()
 	for {
 		select {
@@ -92,11 +90,6 @@ func run() error {
 			return nil
 		case err := <-serveErr:
 			return fmt.Errorf("gRPC server stopped: %v", err)
-		case <-publishTimer.C:
-			message := &pb.Message{Channel: "sessions", Sender: *name, Text: *name + ": " + quotes[rand.Intn(len(quotes))], UnixMillis: time.Now().UnixMilli()}
-			broker.publish(message)
-			logger.Printf("PUBLISH sessions: %s", message.Text)
-			publishTimer.Reset(randomDelay(2, 5))
 		case <-subscriptionTimer.C:
 			cluster.reevaluate()
 			subscriptionTimer.Reset(randomDelay(10, 20))
