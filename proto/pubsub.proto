@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package pubsub.v1;
+option go_package = "gossipsub/proto;pubsubv1";
+
+service PubSub {
+  // Receive messages published to this node's named channel until cancelled.
+  rpc Subscribe(SubscribeRequest) returns (stream Message);
+}
+
+message SubscribeRequest {
+  string channel = 1;
+  string subscriber = 2;
+}
+
+message Message {
+  string channel = 1;
+  string sender = 2; // Publishing node's name.
+  string text = 3;
+  int64 unix_millis = 4;
+}
