@@ -40,6 +40,10 @@ func (n *Node) NodeMeta(limit int) []byte {
 		}
 		b, _ = json.Marshal(identity)
 	}
+	for len(b) > limit && len(identity.Host) > 0 {
+		identity.Host = identity.Host[:len(identity.Host)-1]
+		b, _ = json.Marshal(identity)
+	}
 	if len(b) > limit {
 		return nil
 	}
@@ -49,11 +53,6 @@ func (*Node) NotifyMsg([]byte)                {}
 func (*Node) GetBroadcasts(int, int) [][]byte { return nil }
 func (*Node) LocalState(bool) []byte          { return nil }
 func (*Node) MergeRemoteState([]byte, bool)   {}
-func loopback(endpoint string) bool {
-	h, p, err := net.SplitHostPort(endpoint)
-	port, e := strconv.Atoi(p)
-	return err == nil && e == nil && h == "127.0.0.1" && port > 0 && port <= 65535
-}
 func (n *Node) authorized(ctx context.Context) error {
 	md, _ := metadata.FromIncomingContext(ctx)
 	v := md.Get("authorization")
@@ -65,14 +64,25 @@ func (n *Node) authorized(ctx context.Context) error {
 func (n *Node) outgoing(ctx context.Context) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+n.token)
 }
-func dial(endpoint string) (*grpc.ClientConn, error) {
-	if !loopback(endpoint) {
-		return nil, errors.New("non-loopback endpoint")
+
+// dial applies the address policy and, in LAN mode, pins TLS to the
+// fingerprint gossip advertised for that identity. Local mode stays plaintext
+// loopback.
+func (n *Node) dial(i *pb.Identity) (*grpc.ClientConn, error) {
+	if i == nil || !n.allowed(i.Endpoint) {
+		return nil, errors.New("endpoint is outside the allowed address policy")
 	}
-	return grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	creds := insecure.NewCredentials()
+	if n.lan {
+		if !validFingerprint(i.CertFingerprint) {
+			return nil, errors.New("peer advertises no certificate fingerprint; refusing unpinned dial")
+		}
+		creds = pinned(i.CertFingerprint)
+	}
+	return grpc.NewClient(i.Endpoint, grpc.WithTransportCredentials(creds))
 }
 func (n *Node) probe(ctx context.Context, i *pb.Identity) (*pb.Identity, error) {
-	c, err := dial(i.Endpoint)
+	c, err := n.dial(i)
 	if err != nil {
 		return nil, err
 	}
@@ -83,15 +93,80 @@ func (n *Node) probe(ctx context.Context, i *pb.Identity) (*pb.Identity, error) 
 	if err != nil {
 		return nil, err
 	}
-	if actual.NodeId != i.NodeId || actual.Protocol != 1 || !loopback(actual.GossipEndpoint) {
+	if actual.NodeId != i.NodeId || actual.Protocol != 1 || !n.allowed(actual.Endpoint) || !n.allowed(actual.GossipEndpoint) {
 		return nil, errors.New("registration identity mismatch")
 	}
 	return actual, nil
 }
 func secureDir(dir string) error { return localstate.SecureDir(dir) }
-func (n *Node) start(runtime string) error {
-	var err error
-	runtime, err = localstate.Runtime(runtime)
+
+// loadToken reads or creates the runtime token under the registry lock. An
+// explicit token (flag, env or file) seeds a machine that has none and must
+// agree with one that already exists.
+func loadToken(runtime string, o Options) (string, error) {
+	provided := strings.TrimSpace(o.Token)
+	if o.TokenFile != "" {
+		raw, err := os.ReadFile(o.TokenFile)
+		if err != nil {
+			return "", err
+		}
+		if provided != "" && provided != strings.TrimSpace(string(raw)) {
+			return "", errors.New("RHIZOME_TOKEN and token file disagree")
+		}
+		provided = strings.TrimSpace(string(raw))
+	}
+	if provided != "" && !validToken(provided) {
+		return "", errors.New("provided token must be 64 hex characters")
+	}
+	tokenPath := filepath.Join(runtime, "token")
+	b, err := os.ReadFile(tokenPath)
+	if os.IsNotExist(err) {
+		b = []byte(provided)
+		if provided == "" {
+			b = []byte(id() + id())
+		}
+		err = os.WriteFile(tokenPath, b, 0600)
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := localstate.PrivateFile(tokenPath); err != nil {
+		return "", err
+	}
+	token := string(b)
+	if len(token) != 64 {
+		return "", errors.New("invalid cluster token length")
+	}
+	if provided != "" && provided != token {
+		return "", errors.New("provided token conflicts with the existing runtime token; remove " + tokenPath + " to rotate")
+	}
+	return token, nil
+}
+
+// Token returns this machine's cluster token, creating it if absent, so it can
+// be copied to other devices.
+func Token(runtime string) (string, error) {
+	runtime, err := localstate.Runtime(runtime)
+	if err != nil {
+		return "", err
+	}
+	if err := secureDir(runtime); err != nil {
+		return "", err
+	}
+	lock, err := localstate.Lock(filepath.Join(runtime, "registry.lock"), true)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Close()
+	return loadToken(runtime, Options{})
+}
+func (n *Node) start(o Options) error {
+	if err := o.validate(); err != nil {
+		return err
+	}
+	n.opts = o
+	n.lan = o.LAN
+	runtime, err := localstate.Runtime(o.Runtime)
 	if err != nil {
 		return err
 	}
@@ -104,28 +179,11 @@ func (n *Node) start(runtime string) error {
 		return err
 	}
 	defer lock.Close()
-	tokenPath := filepath.Join(runtime, "token")
-	b, err := os.ReadFile(tokenPath)
-	if os.IsNotExist(err) {
-		b = []byte(id() + id())
-		err = os.WriteFile(tokenPath, b, 0600)
-	}
-	if err != nil {
+	if n.token, err = loadToken(runtime, o); err != nil {
 		return err
 	}
-	if err := localstate.PrivateFile(tokenPath); err != nil {
-		return err
-	}
-	if len(b) != 64 {
-		return errors.New("invalid cluster token length")
-	}
-	n.token = string(b)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return err
-	}
-	n.identity.Endpoint = listener.Addr().String()
-	n.rpc = grpc.NewServer(grpc.MaxRecvMsgSize(64*1024), grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	bind, advertise := "127.0.0.1", "127.0.0.1"
+	serverOptions := []grpc.ServerOption{grpc.MaxRecvMsgSize(64 * 1024), grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if err := n.authorized(ctx); err != nil {
 			return nil, err
 		}
@@ -135,7 +193,32 @@ func (n *Node) start(runtime string) error {
 			return err
 		}
 		return handler(srv, ss)
-	}))
+	})}
+	if n.lan {
+		bind = "0.0.0.0"
+		if o.BindAddr != "" {
+			if net.ParseIP(o.BindAddr) == nil {
+				return fmt.Errorf("bind address %q is not an IP", o.BindAddr)
+			}
+			bind = o.BindAddr
+		}
+		if advertise, err = advertiseAddress(o); err != nil {
+			return err
+		}
+		cert, fp, err := newCertificate(net.ParseIP(advertise))
+		if err != nil {
+			return err
+		}
+		n.cert = cert
+		n.identity.CertFingerprint = fp
+		serverOptions = append(serverOptions, grpc.Creds(serverCredentials(cert)))
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort(bind, "0"))
+	if err != nil {
+		return err
+	}
+	n.identity.Endpoint = net.JoinHostPort(advertise, strconv.Itoa(listener.Addr().(*net.TCPAddr).Port))
+	n.rpc = grpc.NewServer(serverOptions...)
 	pb.RegisterChannelServer(n.rpc, n)
 	n.wg.Add(1)
 	go func() {
@@ -145,14 +228,18 @@ func (n *Node) start(runtime string) error {
 		}
 	}()
 	config := memberlist.DefaultLocalConfig()
+	if n.lan {
+		// Local timeouts are tuned for loopback and flap over Wi-Fi.
+		config = memberlist.DefaultLANConfig()
+	}
 	config.Name = n.identity.NodeId
-	config.BindAddr = "127.0.0.1"
-	config.AdvertiseAddr = "127.0.0.1"
+	config.BindAddr = bind
+	config.AdvertiseAddr = advertise
 	config.BindPort = 0
 	config.AdvertisePort = 0
 	config.Delegate = n
 	config.Events = n
-	config.Logger = log.New(gossipLog{}, "", 0)
+	config.Logger = log.New(gossipLog{"gossip"}, "", 0)
 	key, err := hex.DecodeString(n.token[:32])
 	if err != nil {
 		return err
@@ -164,7 +251,7 @@ func (n *Node) start(runtime string) error {
 	}
 	local := n.members.LocalNode()
 	n.mu.Lock()
-	n.identity.GossipEndpoint = net.JoinHostPort("127.0.0.1", strconv.Itoa(int(local.Port)))
+	n.identity.GossipEndpoint = net.JoinHostPort(advertise, strconv.Itoa(int(local.Port)))
 	n.mu.Unlock()
 	if err = n.members.UpdateNode(time.Second); err != nil {
 		return err
@@ -187,6 +274,12 @@ func (n *Node) start(runtime string) error {
 			_ = os.Remove(path)
 			continue
 		}
+		if !n.allowed(peer.Endpoint) || (peer.CertFingerprint != "") != n.lan {
+			// A registration from the other discovery mode may be live; it is
+			// unreachable for us but not stale, so leave it in place.
+			slog.Info("bootstrap_skip", "path", filepath.Base(path), "reason", "discovery mode mismatch")
+			continue
+		}
 		actual, e := n.probe(n.ctx, &peer)
 		if e != nil {
 			_ = os.Remove(path)
@@ -196,12 +289,29 @@ func (n *Node) start(runtime string) error {
 			slog.Warn("bootstrap_join", "error", e)
 		}
 	}
+	if n.lan {
+		for _, seed := range o.Join {
+			if err := n.join("join", seed); err != nil {
+				slog.Warn("seed_join", "source", "join", "addr", seed, "error", err)
+			}
+		}
+		if o.MDNS {
+			if err := n.startMDNS(net.ParseIP(advertise), int(local.Port)); err != nil {
+				// Browsing is a convenience; explicit seeds and the registry still work.
+				slog.Warn("mdns_unavailable", "error", err)
+			}
+		}
+	}
 	n.registration = filepath.Join(runtime, n.identity.NodeId+".json")
 	raw, _ := json.Marshal(n.local())
 	if err = os.WriteFile(n.registration, raw, 0600); err != nil {
 		return err
 	}
-	slog.Info("ready", "binding", "UNBOUND", "node_id", n.identity.NodeId, "endpoint", n.identity.Endpoint)
+	mode := "local"
+	if n.lan {
+		mode = "lan"
+	}
+	slog.Info("ready", "binding", "UNBOUND", "node_id", n.identity.NodeId, "mode", mode, "bind", bind, "advertise", advertise, "endpoint", n.identity.Endpoint, "gossip_endpoint", n.local().GossipEndpoint, "join", o.Join, "mdns", n.lan && o.MDNS)
 	return nil
 }
 func (n *Node) unregister() {
@@ -220,11 +330,15 @@ func (n *Node) NotifyLeave(member *memberlist.Node) {
 	n.mu.Unlock()
 }
 func (n *Node) updatePeer(member *memberlist.Node) {
-	if !member.Addr.Equal(net.ParseIP("127.0.0.1")) {
+	if !allowedIP(member.Addr, n.lan) {
 		return
 	}
 	var i pb.Identity
-	if json.Unmarshal(member.Meta, &i) != nil || i.Protocol != 1 || i.NodeId != member.Name || !loopback(i.Endpoint) {
+	if json.Unmarshal(member.Meta, &i) != nil || i.Protocol != 1 || i.NodeId != member.Name || !n.allowed(i.Endpoint) {
+		return
+	}
+	// Peers from the other discovery mode cannot be dialed; keep them invisible.
+	if n.lan && !validFingerprint(i.CertFingerprint) || !n.lan && i.CertFingerprint != "" {
 		return
 	}
 	n.mu.Lock()
@@ -243,8 +357,7 @@ func (n *Node) peers() []*pb.Identity {
 	return out
 }
 func (n *Node) resolve(ctx context.Context, session string) (*pb.Identity, error) {
-	var found *pb.Identity
-	var observed *pb.Identity
+	var found, observed *pb.Identity
 	for _, i := range n.peers() {
 		if i.SessionId != session {
 			continue
@@ -275,9 +388,9 @@ func (n *Node) resolve(ctx context.Context, session string) (*pb.Identity, error
 }
 func (n *Node) Info(context.Context, *pb.InfoRequest) (*pb.Identity, error) { return n.local(), nil }
 
-type gossipLog struct{}
+type gossipLog struct{ source string }
 
-func (gossipLog) Write(p []byte) (int, error) {
-	slog.Info("gossip", "message", strings.TrimSpace(string(p)))
+func (g gossipLog) Write(p []byte) (int, error) {
+	slog.Info(g.source, "message", strings.TrimSpace(string(p)))
 	return len(p), nil
 }

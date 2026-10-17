@@ -1,22 +1,45 @@
 #!/usr/bin/env python3
-"""Real-process MCP framing, routing, restart and EOF checks. Run after task build."""
+"""Real-process MCP framing, routing, restart and EOF checks. Run after task build.
+
+With --lan (or RHIZOME_SMOKE_LAN=1) every process gets its own runtime directory,
+as separate devices would, shares one token, binds LAN mode to loopback with mDNS
+off, and seeds gossip with --join; this exercises pinned TLS and cross-registry
+discovery on one host.
+"""
 import json
 import os
 from pathlib import Path
 import queue
+import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+LAN = '--lan' in sys.argv[1:] or os.environ.get('RHIZOME_SMOKE_LAN') == '1'
 
 class Client:
-    def __init__(self, directory):
+    count = 0
+
+    def __init__(self, directory, join=None, run=None):
+        Client.count += 1
+        if run is None:  # A restarted process on one device keeps its runtime directory.
+            run = directory / ('run-%d' % Client.count if LAN else 'run')
+        self.run = run
+        args = [str(ROOT / 'rhizome'), 'mcp']
+        env = {**os.environ, 'RHIZOME_RUNTIME_DIR': str(run)}
+        token = directory / 'token'
+        if LAN:
+            args += ['--lan', '--bind-addr', '127.0.0.1', '--mdns=false']
+            if join:
+                args += ['--join', join]
+            if token.exists():
+                env['RHIZOME_TOKEN_FILE'] = str(token)
         self.log = tempfile.TemporaryFile()
-        self.proc = subprocess.Popen([str(ROOT / 'rhizome'), 'mcp'], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=self.log, text=True,
-                                     env={**os.environ, 'RHIZOME_RUNTIME_DIR': str(directory / 'run')})
+        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=self.log, text=True, env=env)
         self.messages = queue.Queue()
         self.events = []
         self.number = 0
@@ -33,6 +56,16 @@ class Client:
         assert init['protocolVersion'] == '2025-11-25'
         assert init['capabilities']['experimental']['claude/channel'] == {}
         self.write({'method': 'notifications/initialized'})
+        if LAN and not token.exists():
+            shutil.copy(run / 'token', token)  # The first device's token seeds the rest.
+
+    def gossip(self):
+        identity = self.tool('list_sessions')['identity']
+        if LAN:
+            assert len(identity['cert_fingerprint']) == 64 and identity['host'], identity
+        else:
+            assert 'cert_fingerprint' not in identity, identity
+        return identity['gossip_endpoint']
 
     def write(self, obj):
         self.proc.stdin.write(json.dumps({'jsonrpc': '2.0', **obj}) + '\n')
@@ -88,7 +121,8 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
         try:
-            a, b = Client(directory), Client(directory)
+            a = Client(directory)
+            b = Client(directory, join=a.gossip())
             clients += [a, b]
             assert a.tool('list_sessions')['binding'].startswith('UNBOUND')
             a.bind('alpha', directory)
@@ -114,7 +148,7 @@ def main():
             assert b.event('assistant-marker')['meta']['session_id'] == 'alpha'
             a.close()
             clients.remove(a)
-            a = Client(directory)
+            a = Client(directory, join=b.gossip(), run=a.run)
             clients.append(a)
             a.bind('alpha', directory)
             # Explicit names survive a publisher process restart.
@@ -133,8 +167,9 @@ def main():
         finally:
             for client in clients:
                 client.close()
-        assert not list((directory / 'run').glob('*.json')), 'EOF left registrations'
-    print('PASS: MCP stdout, unbound startup, two-session routing, session names, transcript, restart gap, rebind and EOF')
+        assert not list(directory.glob('run*/*.json')), 'EOF left registrations'
+    print('PASS%s: MCP stdout, unbound startup, two-session routing, session names, transcript, restart gap, rebind and EOF'
+          % (' (LAN mode, pinned TLS, separate registries)' if LAN else ''))
 
 if __name__ == '__main__':
     main()

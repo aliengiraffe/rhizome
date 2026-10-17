@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"rhizome/internal/channel"
 	"rhizome/internal/config"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,7 +28,7 @@ func main() {
 
 func entry() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: rhizome mcp | setup | service | config | demo [flags]")
+		return fmt.Errorf("usage: rhizome mcp | setup | service | config | token | demo [flags]")
 	}
 	mode := os.Args[1]
 	os.Args = append(os.Args[:1], os.Args[2:]...)
@@ -36,6 +37,13 @@ func entry() error {
 		opts := flag.NewFlagSet("mcp", flag.ContinueOnError)
 		agent := opts.String("agent", "claude", "delivery agent: claude or codex")
 		config.Bind(opts, "codex-bin")
+		o := optionsFromEnv()
+		opts.BoolVar(&o.LAN, "lan", o.LAN, "peer with other devices on the local network (RHIZOME_LAN=1)")
+		opts.StringVar(&o.BindAddr, "bind-addr", o.BindAddr, "LAN listen address, default 0.0.0.0 (RHIZOME_BIND_ADDR)")
+		opts.StringVar(&o.AdvertiseAddr, "advertise-addr", o.AdvertiseAddr, "LAN address peers dial, default first private interface (RHIZOME_ADVERTISE_ADDR)")
+		opts.Var((*listFlag)(&o.Join), "join", "gossip host:port of a node on another device; repeatable (RHIZOME_JOIN, comma-separated)")
+		opts.BoolVar(&o.MDNS, "mdns", o.MDNS, "advertise and browse _rhizome._tcp in LAN mode (RHIZOME_MDNS=0 disables)")
+		opts.StringVar(&o.TokenFile, "token-file", o.TokenFile, "file holding the cluster token to adopt (RHIZOME_TOKEN_FILE; RHIZOME_TOKEN holds it inline)")
 		if err := opts.Parse(os.Args[1:]); err != nil {
 			return err
 		}
@@ -48,9 +56,9 @@ func entry() error {
 		}
 		switch *agent {
 		case "claude":
-			return channel.Run(c)
+			return channel.Run(c, o)
 		case "codex":
-			return channel.RunCodex(c)
+			return channel.RunCodex(c, o)
 		default:
 			return fmt.Errorf("unsupported agent %q", *agent)
 		}
@@ -72,12 +80,58 @@ func entry() error {
 		return serviceCommand(os.Args[1:])
 	case "setup":
 		return setup(os.Args[1:])
+	case "token":
+		opts := flag.NewFlagSet("token", flag.ContinueOnError)
+		config.Bind(opts, "runtime-dir")
+		if err := opts.Parse(os.Args[1:]); err != nil {
+			return err
+		}
+		if opts.NArg() != 0 {
+			return fmt.Errorf("unexpected token arguments")
+		}
+		c, err := config.FromFlags(opts)
+		if err != nil {
+			return err
+		}
+		token, err := channel.Token(c.RuntimeDir)
+		if err != nil {
+			return err
+		}
+		fmt.Println(token)
+		return nil
 	case "demo":
 		return run()
 	default:
 		return fmt.Errorf("unknown command %q", mode)
 	}
 }
+
+// optionsFromEnv reads the LAN environment defaults that flags may override.
+// The runtime directory comes from the resolved configuration, not from here.
+func optionsFromEnv() channel.Options {
+	truthy := func(v string) bool {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+		return false
+	}
+	o := channel.Options{LAN: truthy(os.Getenv("RHIZOME_LAN")), BindAddr: os.Getenv("RHIZOME_BIND_ADDR"), AdvertiseAddr: os.Getenv("RHIZOME_ADVERTISE_ADDR"), MDNS: true, Token: os.Getenv("RHIZOME_TOKEN"), TokenFile: os.Getenv("RHIZOME_TOKEN_FILE")}
+	if v, ok := os.LookupEnv("RHIZOME_MDNS"); ok {
+		o.MDNS = truthy(v)
+	}
+	for _, seed := range strings.Split(os.Getenv("RHIZOME_JOIN"), ",") {
+		if seed = strings.TrimSpace(seed); seed != "" {
+			o.Join = append(o.Join, seed)
+		}
+	}
+	return o
+}
+
+type listFlag []string
+
+func (l *listFlag) String() string     { return strings.Join(*l, ",") }
+func (l *listFlag) Set(v string) error { *l = append(*l, v); return nil }
 
 func run() error {
 	name := flag.String("name", "", "unique node name (default node-<gossip port>)")

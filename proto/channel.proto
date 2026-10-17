@@ -18,7 +18,9 @@ message Identity {
  string gossip_endpoint = 8;
  string agent_type = 9; // Empty means Claude for backward compatibility.
  string session_name = 10; // Optional label: explicit override, native title, or fallback. Never an address.
- bool observation_only = 13; // Log observer; cannot deliver into an agent. 11-12 are reserved for LAN mode (PR #4).
+ string host = 11; // Short hostname label; never used for routing.
+ string cert_fingerprint = 12; // Hex SHA-256 of the gRPC TLS SPKI; set only in LAN mode.
+ bool observation_only = 13; // Log observer; cannot deliver into an agent.
 }
 message FollowRequest {
  Identity target = 1;

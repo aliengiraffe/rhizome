@@ -61,10 +61,11 @@ func codexCaller(r *mcp.CallToolRequest) (string, error) {
 }
 
 type codexNodes struct {
-	mu                      sync.Mutex
-	ctx                     context.Context
-	nodes                   map[string]*Node
-	binary, socket, runtime string
+	mu             sync.Mutex
+	ctx            context.Context
+	nodes          map[string]*Node
+	binary, socket string
+	opts           Options
 }
 
 func (m *codexNodes) resolve(r *mcp.CallToolRequest) (*Node, error) {
@@ -101,7 +102,7 @@ func (m *codexNodes) resolve(r *mcp.CallToolRequest) (*Node, error) {
 		}
 		return queueCodex(ctx, m.binary, m.socket, thread, text, meta)
 	}
-	if err := n.start(m.runtime); err != nil {
+	if err := n.start(m.opts); err != nil {
 		n.close()
 		return nil, err
 	}
@@ -237,7 +238,10 @@ func queueCodex(ctx context.Context, binary, socket, thread, text string, meta m
 	return nil
 }
 
-func RunCodex(c config.Config) error {
+// RunCodex serves the Codex channel. c supplies the binary, Codex home and
+// runtime directory; o carries the LAN options.
+func RunCodex(c config.Config, o Options) error {
+	o.Runtime = c.RuntimeDir
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	resolved, err := exec.LookPath(c.Codex.Bin)
 	if err != nil {
@@ -250,7 +254,7 @@ func RunCodex(c config.Config) error {
 	home := c.Codex.Home
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, binary: resolved, socket: filepath.Join(home, "app-server-control", "app-server-control.sock"), runtime: c.RuntimeDir}
+	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, binary: resolved, socket: filepath.Join(home, "app-server-control", "app-server-control.sock"), opts: o}
 	defer manager.close()
 	server := makeServer(manager.resolve, false, func() {})
 	session, err := server.Connect(ctx, &mcp.StdioTransport{}, nil)

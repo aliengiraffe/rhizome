@@ -1,9 +1,11 @@
-// Package channel implements one session-bound, loopback-only Rhizome node.
+// Package channel implements one session-bound Rhizome node, loopback-only by
+// default and optionally peered across the local network.
 package channel
 
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/hashicorp/mdns"
 	"github.com/hashicorp/memberlist"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -110,12 +113,17 @@ type Node struct {
 	notify                       func(context.Context, string, map[string]string) error
 	members                      *memberlist.Memberlist
 	rpc                          *grpc.Server
+	mdns                         *mdns.Server
 	token, runtime, registration string
+	// opts, lan and cert are fixed by start before any goroutine reads them.
+	opts Options
+	lan  bool
+	cert tls.Certificate
 }
 
 func newNode(parent context.Context) *Node {
 	ctx, cancel := context.WithCancel(parent)
-	return &Node{discovered: map[string]*pb.Identity{}, ctx: ctx, cancel: cancel, identity: &pb.Identity{Protocol: 1, NodeId: id(), AgentType: "claude"}, retired: map[string]bool{}, stream: id(), listeners: map[*listener]bool{}, feeds: map[string]*feed{}, seen: map[string]bool{}, rearmed: map[string]bool{}}
+	return &Node{discovered: map[string]*pb.Identity{}, ctx: ctx, cancel: cancel, identity: &pb.Identity{Protocol: 1, NodeId: id(), AgentType: "claude", Host: shortHost()}, retired: map[string]bool{}, stream: id(), listeners: map[*listener]bool{}, feeds: map[string]*feed{}, seen: map[string]bool{}, rearmed: map[string]bool{}}
 }
 func cloneIdentity(i *pb.Identity) *pb.Identity { return proto.Clone(i).(*pb.Identity) }
 func (n *Node) local() *pb.Identity {
@@ -309,6 +317,9 @@ func (n *Node) announce(text, reply string) error {
 }
 func (n *Node) close() {
 	n.cancel()
+	if n.mdns != nil {
+		_ = n.mdns.Shutdown()
+	}
 	if n.rpc != nil {
 		n.rpc.Stop()
 	}

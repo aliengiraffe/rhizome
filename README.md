@@ -6,6 +6,7 @@ selected peer activity over authenticated loopback gRPC into its own MCP channel
 Two sessions in the same directory remain separate. An optional background
 observer discovers local headless sessions from their logs. Install it with
 `rhizome service install`; see [service setup and platform behavior](docs/service.md).
+An opt-in [LAN mode](#lan-mode) peers sessions across devices on the same network.
 
 ## Configuration
 
@@ -119,7 +120,7 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 
 | Tool | Behavior |
 | --- | --- |
-| `list_sessions()` | Bound peer identities, project, `session_name` labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. |
+| `list_sessions()` | Bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. |
 | `set_session_name(name)` | Name the caller's bound session for peers. Empty clears the override. Returns the effective name and its source. |
 | `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
@@ -195,7 +196,7 @@ collectors and streams and remove the registration.
 
 ## Discovery and authentication
 
-Listeners allocate their actual loopback ports automatically. `~/.rhizome/run`
+Listeners allocate their actual ports automatically. `~/.rhizome/run`
 contains a private cluster token, a registry lock and one endpoint registration
 per live process. Set `runtime_dir` in the [configuration file](#configuration),
 or override it with `RHIZOME_RUNTIME_DIR` for an isolated cluster; its
@@ -205,10 +206,75 @@ with authentication before joining, and prune stale registrations. Registry file
 bootstrap gossip; they are not a broker or persisted session state.
 
 The token authenticates gRPC and supplies the memberlist encryption key; it is
-never advertised or logged. All endpoints must be `127.0.0.1`. Processes with the
-same user's token are trusted cluster participants; this is not isolation from a
-malicious process running as your user. Remote machines and permission relay are
-out of scope.
+never advertised or logged. By default all endpoints must be `127.0.0.1` and
+gRPC is plaintext on loopback. Processes with the same user's token are trusted
+cluster participants; this is not isolation from a malicious process running as
+your user. Permission relay, internet peering, NAT traversal and relays are out
+of scope; same-network devices are covered by LAN mode below.
+
+## LAN mode
+
+LAN mode peers Rhizome processes on different devices on the same network. It is
+opt-in and still peer-to-peer: no broker, no rendezvous service. Without it,
+behavior is exactly the loopback-only cluster above.
+
+```sh
+# Device A: create or print this machine's cluster token.
+./rhizome token
+
+# Every device: adopt the same token, enable LAN mode.
+RHIZOME_TOKEN=<token> ./rhizome mcp --lan            # flag
+RHIZOME_TOKEN=<token> RHIZOME_LAN=1 ./rhizome mcp    # or env, for .mcp.json
+```
+
+`RHIZOME_TOKEN` (or `--token-file`/`RHIZOME_TOKEN_FILE`) seeds a machine whose
+runtime directory has no token yet; it must agree with an existing one. After the
+first run the token file is enough. Rotate by deleting the token file on every
+device.
+
+| Flag / env | Default | Meaning |
+| --- | --- | --- |
+| `--lan` / `RHIZOME_LAN=1` | off | Bind and advertise on the network, TLS on gRPC. |
+| `--bind-addr` / `RHIZOME_BIND_ADDR` | `0.0.0.0` | Listen address for gRPC and gossip. |
+| `--advertise-addr` / `RHIZOME_ADVERTISE_ADDR` | first private interface | Address peers dial. Auto-detection failure is a startup error, never a silent loopback fallback. |
+| `--join host:port` / `RHIZOME_JOIN=a,b` | none | Gossip endpoint of a node on another device (see `gossip_endpoint` in `list_sessions`). Repeatable. Unreachable seeds are logged, not fatal. |
+| `--mdns` / `RHIZOME_MDNS=0` | on | Advertise and browse `_rhizome._tcp` so devices find each other without `--join`. |
+
+Discovery: the per-machine registry still bootstraps same-device processes. Across
+devices, one gossip join from any node on A to any node on B is enough; memberlist
+propagates the rest of the membership. mDNS browses every 15 seconds and only joins
+instances that advertise the same cluster tag (a one-way hash of the token). Both
+mDNS and `--join` seeds are authenticated by memberlist itself: the push/pull is
+encrypted with the token-derived key, so a seed with another token fails to join
+and never becomes a peer. gRPC identity is verified by the authenticated `Info`
+probe before any routing, exactly as on loopback.
+
+Transport: in LAN mode each process generates an ephemeral self-signed certificate
+and advertises its SPKI SHA-256 fingerprint in gossip metadata, which the gossip key
+already authenticates. Dialers pin that fingerprint during the TLS 1.3 handshake, so
+the bearer token is only ever sent to the node gossip named, and a peer without a
+fingerprint is never dialed. No CA and nothing beyond the token to distribute.
+
+Address policy: local mode accepts only `127.0.0.1`. LAN mode adds RFC 1918, IPv6
+ULA and link-local ranges. Public addresses are rejected in both modes, for
+advertised endpoints, gossip members and seeds. This is not a substitute for a host
+firewall; `0.0.0.0` exposes the authenticated gRPC and encrypted gossip ports on
+every interface. Processes in different modes on one device ignore each other and
+leave each other's registrations alone; use one mode per device.
+
+`list_sessions` shows a `host` label per session. Like `display_name` and
+`project`, it is a label, never an address; route only by exact `session_id`.
+
+**Trust boundary.** On loopback the boundary is "this user on this machine". In LAN
+mode it is "anyone holding the token, on any device on the network". A token holder
+can subscribe to transcript activity from every session on every device and send
+messages to any of them. There is no per-device or per-user authorization inside a
+cluster. Use a per-team token and treat it like a password.
+
+macOS prompts to allow incoming connections for an unsigned binary bound to
+`0.0.0.0`; allow it or LAN peers cannot reach you. On a Tailscale or WireGuard
+overlay, bind and advertise the overlay address (its ranges are private); TLS and
+the token still apply, so the design does not depend on the overlay.
 
 ## Activity, replay and bounded delivery
 
@@ -304,6 +370,7 @@ task check                         # go vet ./... and go test -race ./...
 task build
 python3 scripts/smoke_stdio.py      # real processes, valid stdout, EOF, restart
 python3 scripts/smoke_service.py    # observer/direct coexistence and restart
+python3 scripts/smoke_stdio.py --lan  # same, LAN mode: separate registries, pinned TLS
 ```
 
 Tests cover binding generations and stale hooks, simultaneous bootstrap,

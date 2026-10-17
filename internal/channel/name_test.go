@@ -44,7 +44,7 @@ func TestCleanNameAndFallback(t *testing.T) {
 func TestNamePrecedenceAndFencing(t *testing.T) {
 	n := node(t)
 	dir := t.TempDir()
-	if err := n.start(filepath.Join(dir, "runtime")); err != nil {
+	if err := n.start(Options{Runtime: filepath.Join(dir, "runtime")}); err != nil {
 		t.Fatal(err)
 	}
 	if n.local().SessionName != "" {
@@ -104,7 +104,7 @@ func TestExplicitNamePersistsAcrossRestartNotAcrossSessions(t *testing.T) {
 	dir := t.TempDir()
 	runtime := filepath.Join(dir, "runtime")
 	a := newNode(context.Background()) // closed explicitly below to simulate a restart
-	if err := a.start(runtime); err != nil {
+	if err := a.start(Options{Runtime: runtime}); err != nil {
 		t.Fatal(err)
 	}
 	bind(t, a, "persisted", dir)
@@ -113,7 +113,7 @@ func TestExplicitNamePersistsAcrossRestartNotAcrossSessions(t *testing.T) {
 	}
 	a.close()
 	b := node(t)
-	if err := b.start(runtime); err != nil {
+	if err := b.start(Options{Runtime: runtime}); err != nil {
 		t.Fatal(err)
 	}
 	bind(t, b, "persisted", dir)
@@ -126,7 +126,7 @@ func TestExplicitNamePersistsAcrossRestartNotAcrossSessions(t *testing.T) {
 		t.Fatal("override displaced after restart")
 	}
 	c := node(t)
-	if err := c.start(runtime); err != nil {
+	if err := c.start(Options{Runtime: runtime}); err != nil {
 		t.Fatal(err)
 	}
 	bind(t, c, "neighbour", dir)
@@ -280,7 +280,7 @@ func TestCodexNativeTitleAndThreadIsolation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtime := filepath.Join(t.TempDir(), "run")
-	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, runtime: runtime, binary: "/bin/false", socket: "/nonexistent.sock"}
+	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, opts: Options{Runtime: runtime}, binary: "/bin/false", socket: "/nonexistent.sock"}
 	defer manager.close()
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := makeServer(manager.resolve, false, func() {}).Connect(ctx, st, nil)

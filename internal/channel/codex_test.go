@@ -106,7 +106,7 @@ func TestCodexCollectionBaselineDeltasAndIsolation(t *testing.T) {
 func TestCodexCallerAndSharedConnection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, runtime: filepath.Join(t.TempDir(), "run"), binary: "/bin/false", socket: "/nonexistent.sock"}
+	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, opts: Options{Runtime: filepath.Join(t.TempDir(), "run")}, binary: "/bin/false", socket: "/nonexistent.sock"}
 	defer manager.close()
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := makeServer(manager.resolve, false, func() {}).Connect(ctx, st, nil)

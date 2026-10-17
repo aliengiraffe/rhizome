@@ -45,10 +45,10 @@ func pair(t *testing.T) (*Node, *Node) {
 	t.Helper()
 	a, b := node(t), node(t)
 	dir := t.TempDir()
-	if err := a.start(filepath.Join(dir, "runtime")); err != nil {
+	if err := a.start(Options{Runtime: filepath.Join(dir, "runtime")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.start(filepath.Join(dir, "runtime")); err != nil {
+	if err := b.start(Options{Runtime: filepath.Join(dir, "runtime")}); err != nil {
 		t.Fatal(err)
 	}
 	bind(t, a, "session-a", dir)
@@ -102,7 +102,7 @@ func TestConcurrentBootstrapAndAmbiguity(t *testing.T) {
 	errs := make(chan error, 3)
 	for _, n := range nodes {
 		wg.Add(1)
-		go func(n *Node) { defer wg.Done(); errs <- n.start(filepath.Join(dir, "runtime")) }(n)
+		go func(n *Node) { defer wg.Done(); errs <- n.start(Options{Runtime: filepath.Join(dir, "runtime")}) }(n)
 	}
 	wg.Wait()
 	close(errs)
@@ -137,7 +137,7 @@ func TestConcurrentBootstrapAndAmbiguity(t *testing.T) {
 		_, err := nodes[0].resolve(context.Background(), "same")
 		return err != nil && strings.Contains(err.Error(), "ambiguous")
 	})
-	conn, err := dial(nodes[0].local().Endpoint)
+	conn, err := nodes[0].dial(nodes[0].local())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestFollowReplayAndDirect(t *testing.T) {
 	a, b := pair(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	conn, err := dial(a.local().Endpoint)
+	conn, err := b.dial(a.local())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestCircuitBreakerAndRearm(t *testing.T) {
 }
 func TestMCPHandshakeAndTools(t *testing.T) {
 	n := node(t)
-	if err := n.start(filepath.Join(t.TempDir(), "runtime")); err != nil {
+	if err := n.start(Options{Runtime: filepath.Join(t.TempDir(), "runtime")}); err != nil {
 		t.Fatal(err)
 	}
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -482,7 +482,7 @@ func TestReplayLiveBoundaryConcurrent(t *testing.T) {
 	a.mu.Lock()
 	streamID := a.stream
 	a.mu.Unlock()
-	conn, err := dial(a.local().Endpoint)
+	conn, err := a.dial(a.local())
 	if err != nil {
 		t.Fatal(err)
 	}

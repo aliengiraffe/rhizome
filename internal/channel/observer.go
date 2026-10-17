@@ -439,7 +439,7 @@ func (o *observer) scan(path string, f *observedFile) {
 		n.identity.Project = clip(f.cwd, 180)
 		n.identity.DisplayName = clip(filepath.Base(f.cwd), 40)
 		n.identity.ObservationOnly = true
-		if err := n.start(o.opts.Runtime); err != nil {
+		if err := n.start(Options{Runtime: o.opts.Runtime}); err != nil {
 			n.close()
 			o.problem("observer publisher startup failed")
 			return

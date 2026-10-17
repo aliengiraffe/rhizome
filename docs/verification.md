@@ -11,6 +11,7 @@ All passed:
 - `go test -race ./...`
 - `task build`
 - `python3 scripts/smoke_stdio.py`
+- `python3 scripts/smoke_stdio.py --lan`
 - `git diff --check`
 
 The Go suite exercises concurrent registry bootstrap, distinct auto-allocated
@@ -175,3 +176,55 @@ Not exercised here: actual logout/login or reboot startup, native Windows Task
 Scheduler and Linux systemd installation/recovery, and Windows ACL behavior at
 runtime. Run those platform smoke checks before claiming runtime verification
 on those operating systems. See [service.md](service.md) for scope and limits.
+
+## LAN mode (2026-10-16)
+
+Automated, all on one macOS host:
+
+- `internal/channel/lan_test.go`: address-policy table for both modes (loopback,
+  RFC 1918, link-local, ULA, public v4/v6, malformed); two LAN-mode nodes with
+  separate runtime directories and a shared token joined via `--join`, exercising
+  subscribe, announce, direct send and replay-gap semantics over pinned TLS; a
+  node with a different token refused at gossip (`No installed keys could
+  decrypt`) and `Unauthenticated` at gRPC; a forged fingerprint failing the
+  handshake with the bearer never sent; unpinned and public endpoints refused
+  before dialing; an unreachable `--join` seed logged without aborting startup;
+  local mode ignoring LAN advertisements and LAN mode ignoring unpinned or
+  public peers; a shared registry across modes leaving the other mode's live
+  registration intact; conflicting, malformed, file-sourced and `rhizome token`
+  tokens.
+- `python3 scripts/smoke_stdio.py --lan`: the full stdio scenario with one
+  runtime directory per process, `--lan --bind-addr 127.0.0.1 --mdns=false`,
+  token seeding via `RHIZOME_TOKEN_FILE`, `--join` seeding, publisher restart
+  rejoining through the surviving peer, and EOF cleanup of every registry.
+- Two real `rhizome mcp --lan` processes with distinct runtime directories on the
+  actual Wi-Fi interface: bind `0.0.0.0`, advertise auto-detected as the private
+  interface address, mDNS advertisement and browse found the other node and
+  joined gossip within the first browse (`seed_joined source=mdns`). mDNS logs
+  one informational line when IPv6 multicast is unavailable; IPv4 is sufficient.
+
+Not verified here: two physically separate devices. Repeat the manual steps below
+when changing discovery, TLS pinning, the address policy or the mDNS library.
+
+### Two-device manual steps
+
+1. On device A, `./rhizome token`; copy the value to device B. Build on both.
+2. Start `claude --dangerously-load-development-channels server:rhizome` on each
+   with the project `.mcp.json` carrying `RHIZOME_LAN=1` (and `RHIZOME_TOKEN` on
+   B's first run). Allow the macOS incoming-connection prompt on both.
+3. In each, call `list_sessions` after the first prompt. Verify the other
+   device's session appears with its `host` label, a non-loopback `endpoint`,
+   and a 64-character `cert_fingerprint`. If mDNS is blocked, add
+   `RHIZOME_JOIN=<other gossip_endpoint>` and restart; verify `seed_joined` in
+   stderr.
+4. Subscribe from A to B's exact session ID, publish a marker from B and verify
+   it arrives in A with B's metadata. Send a direct marker from B to A without a
+   subscription and verify acceptance and delivery.
+5. Start a third process with a different token (`RHIZOME_RUNTIME_DIR` to an
+   empty private directory, no `RHIZOME_TOKEN`). Verify it never lists the
+   cluster's sessions and its stderr shows gossip decryption failures only.
+6. Disconnect B from Wi-Fi during an active subscription. Verify A shows
+   `reconnecting`, then `following` again after reconnection with a visible gap
+   notice if B's retention expired.
+7. Exit both; verify each device's runtime directory keeps only `token` and
+   `registry.lock`.
