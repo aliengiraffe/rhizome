@@ -35,3 +35,6 @@ go.work.sum
 # Local code generators and application binary
 /.bin/
 /rhizome
+
+# Python smoke-test bytecode
+__pycache__/

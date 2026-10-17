@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"rhizome/internal/channel"
 	"syscall"
 	"time"
 
@@ -17,9 +18,41 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := entry(); err != nil {
 		log.Print(err)
 		os.Exit(1)
+	}
+}
+
+func entry() error {
+	if len(os.Args) < 2 {
+		return fmt.Errorf("usage: rhizome mcp | demo [flags]")
+	}
+	mode := os.Args[1]
+	os.Args = append(os.Args[:1], os.Args[2:]...)
+	switch mode {
+	case "mcp":
+		opts := flag.NewFlagSet("mcp", flag.ContinueOnError)
+		agent := opts.String("agent", "claude", "delivery agent: claude or codex")
+		codex := opts.String("codex-bin", "codex", "Codex CLI executable")
+		if err := opts.Parse(os.Args[1:]); err != nil {
+			return err
+		}
+		if opts.NArg() != 0 {
+			return fmt.Errorf("unexpected mcp arguments")
+		}
+		switch *agent {
+		case "claude":
+			return channel.Run()
+		case "codex":
+			return channel.RunCodex(*codex)
+		default:
+			return fmt.Errorf("unsupported agent %q", *agent)
+		}
+	case "demo":
+		return run()
+	default:
+		return fmt.Errorf("unknown command %q", mode)
 	}
 }
 

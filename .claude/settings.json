@@ -1,0 +1,107 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "rhizome",
+            "tool": "observe_session",
+            "input": {
+              "session_id": "${session_id}",
+              "transcript_path": "${transcript_path}",
+              "cwd": "${cwd}",
+              "hook_event_name": "${hook_event_name}",
+              "agent_id": "${agent_id}",
+              "agent_type": "${agent_type}",
+              "source": "${source}"
+            },
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "rhizome",
+            "tool": "observe_session",
+            "input": {
+              "session_id": "${session_id}",
+              "transcript_path": "${transcript_path}",
+              "cwd": "${cwd}",
+              "hook_event_name": "${hook_event_name}",
+              "agent_id": "${agent_id}",
+              "agent_type": "${agent_type}"
+            },
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "rhizome",
+            "tool": "observe_session",
+            "input": {
+              "session_id": "${session_id}",
+              "transcript_path": "${transcript_path}",
+              "cwd": "${cwd}",
+              "hook_event_name": "${hook_event_name}",
+              "agent_id": "${agent_id}",
+              "agent_type": "${agent_type}",
+              "tool_name": "${tool_name}"
+            },
+            "timeout": 5
+          }
+        ],
+        "matcher": "^(?!mcp__rhizome__).*$"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "rhizome",
+            "tool": "observe_session",
+            "input": {
+              "session_id": "${session_id}",
+              "transcript_path": "${transcript_path}",
+              "cwd": "${cwd}",
+              "hook_event_name": "${hook_event_name}",
+              "agent_id": "${agent_id}",
+              "agent_type": "${agent_type}"
+            },
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "rhizome",
+            "tool": "observe_session",
+            "input": {
+              "session_id": "${session_id}",
+              "transcript_path": "${transcript_path}",
+              "cwd": "${cwd}",
+              "hook_event_name": "${hook_event_name}",
+              "agent_id": "${agent_id}",
+              "agent_type": "${agent_type}"
+            },
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

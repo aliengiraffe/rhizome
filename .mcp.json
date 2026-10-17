@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "rhizome": {
+      "type": "stdio",
+      "command": "./rhizome",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

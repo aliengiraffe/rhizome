@@ -1,0 +1,7 @@
+# Merge into ~/.codex/config.toml; use absolute paths for this laptop.
+[mcp_servers.rhizome]
+command = "/absolute/path/to/rhizome/rhizome"
+args = ["mcp", "--agent", "codex", "--codex-bin", "/absolute/path/to/codex"]
+# If Codex uses a non-default home, explicitly preserve that same home here:
+# [mcp_servers.rhizome.env]
+# CODEX_HOME = "/absolute/path/to/.codex"

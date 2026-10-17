@@ -1,172 +1,201 @@
-# rhizome
+# Rhizome
 
-A loopback-only Go proof of concept: each process discovers peers through
-HashiCorp memberlist, hosts a gRPC `sessions` channel, and
-randomly subscribes to other nodes. No central broker or Publish RPC is involved.
+One Go MCP process per Claude Code session. Rhizome binds through that session's
+hooks, watches its transcript, discovers local peers with memberlist, and streams
+selected peer activity over authenticated loopback gRPC into its own MCP channel.
+Two sessions in the same directory remain separate. There is no launch wrapper,
+broker, sidecar, or background device-wide transcript scanner.
 
-## Setup
+## Codex
 
-Install Go 1.22 or newer, then from this directory:
+Local Codex sessions use `rhizome mcp --agent codex`, with the same six tools and
+cross-agent subscriptions. Incoming events use `codex queue`; outgoing activity
+comes from read-only App Server polling. Each caller thread has an independent
+node even when Codex shares an MCP connection. See [Codex setup and tested
+limitations](docs/codex.md) and the samples in `examples/codex/`.
 
-```sh
-go mod download
-go build .
-go vet ./...
-go test -race ./...
-```
+## Claude setup
 
-Generated protobuf Go files are included, so running/building needs no `protoc`.
-To regenerate them, install the protobuf compiler (for example,
-`brew install protobuf` on macOS or `sudo apt-get install protobuf-compiler`
-on Debian/Ubuntu), then run:
-
-```sh
-make proto
-```
-
-The Makefile installs pinned `protoc-gen-go` and `protoc-gen-go-grpc` versions
-into the ignored `.bin/` directory. You can override the compiler path with
-`make proto PROTOC=/path/to/protoc`.
-See the [gRPC Go code generation guide](https://grpc.io/docs/languages/go/quickstart/).
-
-## Run three nodes
-
-In three separate terminals, in this directory:
+Requires Go 1.25+, macOS or Linux. Claude Code **2.1.302** is the tested client;
+older versions are not supported by this verification.
 
 ```sh
-go run . -gossip 7946 -grpc 9000
+make build
 ```
+
+This repository ships both `.mcp.json` and `.claude/settings.json`. From this
+directory, start Claude in two terminals:
 
 ```sh
-go run . -gossip 7947 -grpc 9001 -join 127.0.0.1:7946
+claude --dangerously-load-development-channels server:rhizome
 ```
+
+Accept the local development channel confirmation and project MCP consent if
+shown. This is the current research-preview channel enablement path; organization
+channel policy still applies. The development flag requires an **interactive**
+terminal; `claude -p` does not enable it. See the
+[Claude channel reference](https://code.claude.com/docs/en/channels-reference).
+
+For another project, merge the `rhizome` server entry and hook entries into that
+project's configuration. Set `command` to the **absolute path** of your built
+Rhizome binary. Preserve existing MCP servers and hooks. Do not change the server
+key unless you also update the hook server name, tool exclusions and channel flag.
+
+The process starts **UNBOUND**. Initial `SessionStart` is skipped by Claude because
+its MCP clients are not yet available; Claude 2.1.302 displays a non-blocking hook
+notice. Submit a prompt to bind. Later `SessionStart`, `UserPromptSubmit`,
+`PreToolUse` and `Stop` hooks refresh the binding. The negative-lookahead matcher
+excludes `mcp__rhizome__*`; hooks do not ingest activity themselves. See
+[MCP tool hook timing](https://code.claude.com/docs/en/hooks#mcp-tool-hook-fields).
+Never ask Claude to call `observe_session` manually or invent an ID.
+
+The official Go MCP SDK handles initialization and tools. A transport adapter uses
+the SDK's concurrency-safe writer for `notifications/claude/channel`. It negotiates
+MCP **2025-11-25**: testing found that Claude 2.1.302 disables unsolicited channel
+notifications when the SDK negotiates its newer 2026 protocol family.
+Stdout is exclusively MCP; application diagnostics go to stderr.
+
+## Tools
+
+| Tool | Behavior |
+| --- | --- |
+| `list_sessions()` | Bound peer identities, project, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. |
+| `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
+| `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
+| `publish(text, reply_to?)` | Announce to current subscribers. |
+| `send(session_id, text, reply_to?)` | Direct message without a subscription. Returns a stable message ID and receiver queue acceptance. |
+| `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. |
+
+Use `list_sessions` in each session, then ask one to subscribe to the other's exact
+`session_id`. Display names are labels, never addresses. Multiple live nodes with
+one session ID are ambiguous and cannot be routed. List results are gossip
+snapshots; routing verifies identities over authenticated gRPC.
+
+An accepted direct message is **queued**, not necessarily written, read or acted
+upon. A lost RPC response can leave acceptance uncertain; calling `send` again
+creates a new message. The wire receiver deduplicates retries of a stable message
+ID within its bounded in-memory deduplication window. No exactly-once or semantic
+acknowledgement is claimed.
+
+## Identity and lifecycle
+
+Each process has a random node ID. The exact hook-supplied Claude session ID plus a
+local generation bind that process to its initialized stdio connection. Neither
+cwd, transcript recency, parent PID nor the MCP SDK session ID participates in
+routing. Unbound nodes bootstrap gossip but are not subscribable sessions.
+
+Same-session hooks refresh metadata without resetting collection. A new top-level
+session ID on a lifecycle/prompt hook retires the old binding, cancels outgoing
+subscriptions, disconnects incoming streams, discards queued deliveries and
+captures a fresh transcript baseline. Child-agent hooks do not bind. Unexpected
+session changes on tool/stop hooks and delayed hooks for retired sessions are
+rejected. Resuming a retired session requires a fresh MCP process. A changed
+transcript path for the same session is rejected rather than silently following
+an unrelated file. `SessionEnd` is advisory; stdio EOF and signals stop listeners,
+collectors and streams and remove the registration.
+
+## Discovery and authentication
+
+Listeners allocate their actual loopback ports automatically. `~/.rhizome/run`
+contains a private cluster token, a registry lock and one endpoint registration
+per live process. Override `RHIZOME_RUNTIME_DIR` for an isolated cluster; its
+directory must be owned by you and private (0700). Token and registration files
+are 0600. Concurrent launches serialize bootstrap with `flock`, probe candidates
+with authentication before joining, and prune stale registrations. Registry files
+bootstrap gossip; they are not a broker or persisted session state.
+
+The token authenticates gRPC and supplies the memberlist encryption key; it is
+never advertised or logged. All endpoints must be `127.0.0.1`. Processes with the
+same user's token are trusted cluster participants; this is not isolation from a
+malicious process running as your user. Remote machines and permission relay are
+out of scope.
+
+## Activity, replay and bounded delivery
+
+Only the hook-supplied top-level transcript is opened. First binding starts at its
+current EOF, including discarding a partial historical line. Directory filesystem
+notifications wake incremental JSONL reads, with one-second polling as fallback.
+Incomplete lines are retained; oversized records are skipped with diagnostics.
+Replacement, truncation and changed bytes at the read boundary produce a gap.
+Record IDs and tool-use IDs deduplicate/correlate within bounded 4,096-entry
+windows. Unknown formats increment parser-skip counters without logging content.
+
+Activity includes assistant text, tool start/completion/failure names, and turn
+completion. Thinking, user prompts, channel injections, bookkeeping, full tool
+result bodies, child transcripts and Rhizome tool traffic are excluded. Summaries
+are deterministic; no additional model is called. Automatic output from peer-only
+turns is suppressed until a human prompt resumes work; intentional responses can still use `publish` or `send`. Turn completion
+remains in publisher history but does not wake subscribers.
+
+The publisher retains at most **five minutes, 1,000 events and 8 MiB**, evicting
+at the first limit. New subscriptions begin at the current position. Replay
+snapshot and live registration happen under the same lock. Reconnects use
+exponential backoff with jitter and resume after the last locally accepted
+sequence. Expired cursors and new publisher streams produce visible gap notices.
+Each publisher stream has a 64-event queue; overflow disconnects it for replay
+rather than blocking collection or other subscribers.
+
+The receiver has a 256-event queue and a 4,096-entry deduplication window. Automatic
+activity batches every two seconds per origin, with content capped at 8 KiB;
+individual summaries are capped near 7 KiB with an explicit truncation marker.
+Announcements and direct messages bypass the batching delay, but obey pausing.
+Received, queued, written, dropped, parser skips and pauses are separate counters.
+Written means written to MCP, not acknowledged by Claude. Queue overflow may
+ultimately cause replay gaps. Write failures are counted as dropped.
+
+**Process restarts lose replay history, subscription intent, deduplication state
+and delivery cursors.** The new process waits for a hook again. Existing peers
+retaining subscription intent reconnect and see the new stream as a restart gap.
+There is no disk-backed event history or durable outbox.
+
+## Feedback controls
+
+Received envelopes are never published as local events. Self-origin echoes and
+repeated event IDs are rejected, injected transcript records are excluded, and
+Rhizome's own tool calls/results are filtered. `publish` and `send` share a limit
+of ten calls per rolling minute per node.
+
+After 30 peer notifications in a rolling minute, the receiver pauses further
+peer delivery and writes one local pause notice. Incoming queues stay bounded.
+Explicit `subscribe(session_id)` re-arms that origin; other paused origins remain
+paused. A subsequent burst can trip the breaker again. Unsubscribe does not
+re-arm delivery. Channel instructions discourage unsolicited work/replies.
+
+These controls contain feedback; they do not guarantee silence. In the real
+bidirectional smoke test, Claude generated new commentary saying it was not
+replying. That commentary is genuine local activity and is streamed. Unsubscribe
+or leave feeds paused when you do not want peer-triggered work.
+
+## Verification
 
 ```sh
-go run . -gossip 7948 -grpc 9002 -join 127.0.0.1:7946
+make check                         # go vet ./... and go test -race ./...
+make build
+python3 scripts/smoke_stdio.py      # real processes, valid stdout, EOF, restart
 ```
 
-Both listeners bind to `127.0.0.1`. Each gossip port uses TCP and UDP; each
-gRPC port uses TCP. Ports must be unused and distinct. Names default to
-`node-<gossipPort>`; use `-name alice` to override, keeping names unique.
-`-join` is a gossip address, not a gRPC address. It is only needed to bootstrap
-membership; the first node has no special ongoing role. Run `go run . -h` for flags.
+Tests cover binding generations and stale hooks, simultaneous bootstrap,
+ambiguous routing/authentication, replay boundaries/gaps, overflow, incremental
+partial/duplicate/truncated transcripts, MCP handshake, rate limits, and the
+receiver circuit breaker. The subprocess smoke tests use a private temporary
+cluster and synthetic transcripts; they do not launch models.
 
-Expect prefixed `JOIN` and `READY` logs. After an initial randomized 10–20
-seconds, each node independently chooses each known peer with probability 0.5,
-repeating every 10–20 seconds. `SUBSCRIBE` and `UNSUBSCRIBE` show these decisions.
-A node can choose zero peers, and subscriptions need not be reciprocal.
+For the interactive acceptance checklist and recorded results, see
+[docs/verification.md](docs/verification.md). Re-run the interactive checks when
+upgrading Claude, the Go MCP SDK, hook configuration, or transcript parsing.
 
-There is no automatic message generation or command-line publishing input.
-Subscription streams remain idle until application code calls the local server's
-`publish` method. The fan-out implementation remains available for that use.
+To regenerate the checked-in gRPC/protobuf files, install `protoc`, then run
+`make proto` (pinned Go generators install into `.bin`). Production service
+`rhizome.v1.Channel` is separate from the legacy demo service.
 
-Messages are live only: there is no replay, persistence, acknowledgement, or
-delivery guarantee. Each incoming subscription has a 32-message queue. A full
-queue drops new messages for that subscriber and logs `WARN DROP`; other
-subscribers continue receiving. A stream error is logged and clears that
-subscription; a later randomized selection may start another. gRPC handles
-connection management, but there is no custom retry loop. `UPDATE` logs
-membership metadata updates and replaces a connection if its advertised port
-changes. Normal runs need not produce UPDATE events.
+## Original demo
 
-## Scaling up and down
+Randomized subscriptions are available only via an explicit command:
 
-Every node has the same role; there is no master or leader election. Gossip
-maintains membership, while gRPC carries messages directly from publishers to
-subscribers. The stream links below illustrate possible subscriptions, not
-mandatory or reciprocal connections. Each node chooses each peer independently
-with probability 0.5 every 10–20 seconds.
-
-```mermaid
-flowchart TB
-    %% ================= STEADY STATE =================
-    subgraph CLUSTER["Steady state: N peer nodes"]
-        direction LR
-        subgraph NA["Node A"]
-            A_g["memberlist"]
-            A_ps["pub/sub<br/>A/sessions"]
-        end
-        subgraph NB["Node B"]
-            B_g["memberlist"]
-            B_ps["pub/sub<br/>B/sessions"]
-        end
-        subgraph NC["Node C"]
-            C_g["memberlist"]
-            C_ps["pub/sub<br/>C/sessions"]
-        end
-        MORE["… Node N<br/>(same shape)"]
-
-        A_g <-. gossip .-> B_g
-        B_g <-. gossip .-> C_g
-        C_g <-. gossip .-> A_g
-        C_g <-. gossip .-> MORE
-
-        A_ps <== "streams only where<br/>a subscription exists" ==> B_ps
-        B_ps <== streams ==> C_ps
-        A_ps <== streams ==> C_ps
-    end
-
-    %% ================= SCALE UP =================
-    subgraph UP["Scale up: a node joins"]
-        direction TB
-        J0["New process starts<br/>knows one seed gossip address"]
-        J1["Join via seed → push/pull sync<br/>learns cluster membership"]
-        J2["Gossip propagates membership<br/>nodes learn the newcomer and its gRPC port"]
-        J3["JOIN callbacks create peer gRPC connections<br/>random selection starts subscription streams"]
-        J4["Newcomer hosts its own sessions channel<br/>streams wait for application messages"]
-        J0 --> J1 --> J2 --> J3 --> J4
-    end
-
-    %% ================= SCALE DOWN =================
-    subgraph DOWN["Scale down: a node leaves or dies"]
-        direction TB
-        L0{"Graceful leave<br/>or crash?"}
-        L1["Node announces leave<br/>peers learn it has departed"]
-        L2["Probes fail → suspect<br/>indirect probes help detect failure"]
-        L3["Suspicion timeout → dead<br/>membership converges after a delay"]
-        L4["LEAVE callbacks cancel subscriptions<br/>close connections and remove the peer"]
-        L7["Cluster continues at N−1<br/>no leader election needed"]
-        L0 -- graceful --> L1
-        L0 -- crash --> L2 --> L3
-        L1 --> L4
-        L3 --> L4
-        L4 --> L7
-    end
-
-    %% Link lifecycle flows back into the cluster
-    J4 -- "becomes Node N+1" --> MORE
-    NA -- "goes offline" --> L0
-    L7 -- "membership converges" --> CLUSTER
-
-    classDef gossip fill:#2b3a4a,stroke:#7fa6c9,color:#e6eef7
-    classDef data fill:#2f4a3a,stroke:#8fcf9f,color:#e9f7ec
-    classDef up fill:#3a3f2b,stroke:#cfd48f,color:#f5f7e6
-    classDef down fill:#4a2f2f,stroke:#cf8f8f,color:#f7e9e9
-    class A_g,B_g,C_g gossip
-    class A_ps,B_ps,C_ps data
-    class J0,J1,J2,J3,J4 up
-    class L0,L1,L2,L3,L4,L7 down
+```sh
+./rhizome demo -gossip 7946 -grpc 9000
+./rhizome demo -gossip 7947 -grpc 9001 -join 127.0.0.1:7946
 ```
 
-A crashed node's streams may report errors before gossip declares it dead. Its
-messages are not transferred to another node: each process owns only its own
-`sessions` channel.
-Adding nodes increases connections and expected subscription traffic; this demo
-does not partition channels or automatically balance load.
-
-## Stopping nodes
-
-Ctrl-C (SIGINT) or SIGTERM cancels work, announces memberlist Leave, shuts down
-gossip, cancels outbound streams and closes peer connections, and gracefully
-stops gRPC. Incoming handlers also observe shutdown; a three-second fallback
-forces gRPC to stop if a transport cannot drain. Peers log `LEAVE` and remove
-the departing node and its subscription.
-
-`kill -9` prevents cleanup and sends no leave announcement. Peers can first
-log a stream error, then detect the missing node through gossip failure
-detection and log `LEAVE` after a delay. The rest of the cluster continues.
-When testing signals by PID, build and run `./rhizome` directly so you target
-the node process rather than the `go run` wrapper.
-
-This demo uses insecure gRPC credentials and trusts local peers. It is intended
-for several processes on one laptop, not deployment over a network.
+The demo retains its original unauthenticated, live-only `sessions` channel and
+fixed-port flags. It is not used by `rhizome mcp` and does not join its cluster.

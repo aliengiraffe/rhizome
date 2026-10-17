@@ -1,0 +1,40 @@
+syntax = "proto3";
+package rhizome.v1;
+option go_package = "rhizome/proto;pubsubv1";
+service Channel {
+ rpc Info(InfoRequest) returns (Identity);
+ rpc Subscribe(FollowRequest) returns (stream Event);
+ rpc Send(SendRequest) returns (Acceptance);
+}
+message InfoRequest {}
+message Identity {
+ uint32 protocol = 1;
+ string node_id = 2;
+ string session_id = 3;
+ uint64 generation = 4;
+ string display_name = 5;
+ string project = 6;
+ string endpoint = 7;
+ string gossip_endpoint = 8;
+ string agent_type = 9; // Empty means Claude for backward compatibility.
+}
+message FollowRequest {
+ Identity target = 1;
+ Identity subscriber = 2;
+ string stream_id = 3;
+ uint64 after_sequence = 4;
+}
+message Event {
+ string session_id = 1;
+ string node_id = 2;
+ uint64 generation = 3;
+ string stream_id = 4;
+ uint64 sequence = 5;
+ string kind = 6;
+ int64 unix_millis = 7;
+ string text = 8;
+ string message_id = 9;
+ string reply_to = 10;
+}
+message SendRequest { Identity target = 1; Identity sender = 2; Event event = 3; }
+message Acceptance { bool accepted = 1; string message_id = 2; }
