@@ -1,0 +1,124 @@
+# Local Codex integration
+
+Rhizome supports local Codex CLI sessions with `rhizome mcp --agent codex`.
+Claude remains the default for `rhizome mcp`. Both modes share discovery,
+authenticated gRPC, subscriptions, announcements, direct messages, replay limits,
+and feedback controls. Codex mode does not advertise `claude/channel` or impose
+Claude's MCP protocol pin.
+
+## Install
+
+Build this checkout with `make build`. Merge `examples/codex/config.toml` into
+`~/.codex/config.toml`, replacing both executable paths with absolute paths.
+Merge the hook groups from `examples/codex/hooks.json` into `~/.codex/hooks.json`,
+preserving other hooks. Back up both files first. Do not install the same hooks
+at both user and project scope. If using a different `CODEX_HOME`, pass that same
+absolute directory through the MCP server's `env` table.
+
+Alternatively register the server with the official CLI:
+
+```sh
+codex mcp add rhizome --env CODEX_HOME="$HOME/.codex" -- \
+  /absolute/path/to/rhizome/rhizome mcp --agent codex \
+  --codex-bin /absolute/path/to/codex
+```
+
+This registers MCP only; also merge the hooks. Start a fresh Codex session and
+review the four Rhizome hooks in `/hooks`. Trust only the definitions you reviewed;
+Rhizome does not bypass hook trust. Submit a prompt, then ask Codex to call
+`list_sessions`. Expect `binding: BOUND` and `collection_state: watching` (or
+`watching (empty thread)` before the first message is persisted). Use exact
+session IDs from that result to subscribe or send across Codex and Claude.
+
+`SessionStart` can run before MCP is ready. Binding can instead happen on the
+first successful `UserPromptSubmit`, `PreToolUse`, or `Stop` hook. There is no MCP
+`SessionEnd` hook. The supplied `PreToolUse` matcher covers shell and patch tools;
+it excludes all MCP tools, including Rhizome. Other tool activity is still
+collected by polling. Missing optional placeholders are errors in Codex 0.163.0,
+so the sample does not interpolate `agent_id` or `agent_type`. Rhizome cross-checks
+thread identity and rejects App Server child threads before binding.
+
+## Routing and lifecycle
+
+Verified with Codex CLI **0.163.0** on macOS. That App Server attaches the owning
+thread's UUID in MCP `tools/call.params._meta.threadId`, overriding conflicting
+metadata supplied to `mcpServer/tool/call`. This is a tested version contract,
+not a promise about other releases. Missing, invalid, or conflicting identity
+fails closed. Re-run the smoke tests when upgrading Codex.
+
+A process can serve multiple threads. Each verified thread gets its own node ID,
+listener, binding generation, subscriptions, replay buffer, collector, queue,
+rate limit, and circuit breaker. A hook cannot rebind another thread's node.
+`session_id` in hook arguments must equal the transport caller ID. The model
+cannot select its publishing identity through tool arguments. Up to 64 thread
+nodes are retained until the MCP connection closes; restart MCP to release them.
+A new/forked/cleared thread UUID starts independently. Resume with the same UUID
+retains its node if the process is still alive. Process restart loses in-memory
+state. Session names and working directories are never routing keys.
+
+Discovery includes `agent_type`; older advertisements without it mean Claude.
+The same exact-ID conflict checks apply across agents.
+
+## Collection and delivery
+
+The collector connects by WebSocket over the **existing** local socket at
+`$CODEX_HOME/app-server-control/app-server-control.sock`. It sends only the
+initialization handshake and `thread/read`, `thread/turns/list`, and
+`thread/items/list`. It never starts/restarts a daemon, resumes/loads a thread,
+starts a turn, steers work, or answers approvals. No transcript file is opened.
+
+The first successful history read establishes a live baseline. Polling runs every
+second, with coalesced hook wake-ups and exponential reconnect backoff with jitter.
+Assistant text additions, tool status summaries, and turn completion are collected.
+Peer-only turns are suppressed to prevent subscription feedback loops; explicit
+`publish` and `send` remain available. Turn markers do not wake subscribers.
+User messages (including queue injections), reasoning, child activity, full tool
+results, and Rhizome MCP calls are excluded. IDs and prior text hashes suppress
+duplicates. Replacement, rollback, compaction, and pagination overflow produce
+explicit discontinuity notices. Each scan is limited to four pages of 50 turns,
+four pages of 128 items per turn, 2,048 items, and 8 MiB of retained item text.
+Unsupported ephemeral/legacy history is reported as unavailable; no full-history
+fallback is used. If collection is unavailable at binding, the first successful
+read becomes the baseline, so activity during that interval is not replayed.
+
+Delivery uses an absolute Codex executable with argument arrays:
+`queue --remote unix://<local-control-socket> --thread <UUID> --message <text>`.
+The endpoint is local configuration, never peer input. The formatted text marks
+peer content as untrusted and includes origin IDs. Delivery is serialized per
+thread, has a five-second deadline, and drains CLI output into a bounded private
+capture. Stdout remains MCP-only. No retry follows a CLI error or timeout because
+acceptance may already have happened.
+
+App Server `notLoaded`, `systemError`, a disconnected reader, or unavailable
+history pauses delivery while retaining the bounded queue. The receiver checks
+loaded status again immediately before launching the queue command. There is
+still a race if Codex unloads the thread after that check; the CLI controls final
+queue semantics. Successful handoff is not a promise that a model read or acted
+on the event. `Received`/`Queued` count receiver acceptance; `Written` counts event
+summaries handed off; `QueueHandoffs` counts successful CLI invocations and
+`QueueFailures` counts failed invocations. Status includes the last delivery
+error and the independent collection state.
+
+The existing two-second/8-KiB automatic batches, 256-event receiving queue,
+ten explicit sends/publications per minute per node, and 30-notification circuit
+breaker apply. An explicit `subscribe(session_id)` re-arms that origin. These
+controls do not guarantee that models cannot generate new reactions.
+
+## Verification
+
+```sh
+make check
+make build
+python3 scripts/smoke_stdio.py
+python3 scripts/smoke_codex.py --live
+```
+
+The last command uses the existing daemon, creates two disposable same-directory
+Codex threads, makes small model turns through queue delivery, checks collected
+assistant activity against a Claude MCP protocol client, and archives its threads.
+It does not change config or trust hooks. Use an interactive Codex session to test
+real hook binding and trust separately. See `verification.md` for recorded scope.
+
+References: [Codex hooks](https://learn.chatgpt.com/docs/hooks),
+[queue CLI](https://learn.chatgpt.com/docs/developer-commands),
+[App Server](https://learn.chatgpt.com/docs/app-server).

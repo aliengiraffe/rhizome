@@ -69,10 +69,14 @@ type pending struct {
 	token        string
 	generation   uint64
 }
-type counters struct{ Received, Queued, Written, Dropped, Pauses, ParserSkips uint64 }
+type counters struct{ Received, Queued, Written, Dropped, Pauses, ParserSkips, QueueHandoffs, QueueFailures, CollectionGaps uint64 }
 type Node struct {
-	directSequence uint64
-	discovered     map[string]*pb.Identity
+	codex           *codexCollector
+	collectionState string
+	deliveryError   string
+	deliveryReady   bool
+	directSequence  uint64
+	discovered      map[string]*pb.Identity
 	pb.UnimplementedChannelServer
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -107,7 +111,7 @@ type Node struct {
 
 func newNode(parent context.Context) *Node {
 	ctx, cancel := context.WithCancel(parent)
-	return &Node{discovered: map[string]*pb.Identity{}, ctx: ctx, cancel: cancel, identity: &pb.Identity{Protocol: 1, NodeId: id()}, retired: map[string]bool{}, stream: id(), listeners: map[*listener]bool{}, feeds: map[string]*feed{}, seen: map[string]bool{}, rearmed: map[string]bool{}}
+	return &Node{discovered: map[string]*pb.Identity{}, ctx: ctx, cancel: cancel, identity: &pb.Identity{Protocol: 1, NodeId: id(), AgentType: "claude"}, retired: map[string]bool{}, stream: id(), listeners: map[*listener]bool{}, feeds: map[string]*feed{}, seen: map[string]bool{}, rearmed: map[string]bool{}}
 }
 func cloneIdentity(i *pb.Identity) *pb.Identity { return proto.Clone(i).(*pb.Identity) }
 func (n *Node) local() *pb.Identity {
@@ -290,5 +294,8 @@ func (n *Node) close() {
 		_ = n.members.Shutdown()
 	}
 	n.wg.Wait()
+	if n.codex != nil {
+		n.codex.reader.close()
+	}
 	n.unregister()
 }

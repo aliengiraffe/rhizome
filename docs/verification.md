@@ -79,3 +79,50 @@ forcing every failure in the interactive UI.
 8. For transport/replay failure cases run the automated suite and subprocess test.
    Debugging uses Claude's `--debug-file` and Rhizome stderr; do not commit private
    transcripts or tokens as fixtures.
+
+## Codex 0.163.0 (2026-10-16)
+
+- Generated schemas and CLI help checked against installed `codex-cli 0.163.0`.
+  The running local daemon also reported 0.163.0. Unix control transport is
+  WebSocket, not newline JSON or a raw `app-server proxy` pipe.
+- Two same-directory diagnostic threads exposed different `_meta.threadId`
+  values. A deliberately conflicting `mcpServer/tool/call._meta.threadId` was
+  overwritten by Codex. The sanitized request contract is captured in
+  `internal/channel/testdata/codex-0.163.0-call.json`. These probes used separate
+  processes; the shared-process case is exercised concurrently by Go SDK tests.
+- Interactive TUI hook review/trust was exercised through the normal `/hooks`
+  flow. A real `UserPromptSubmit` bound the session automatically; an independent
+  status read confirmed `BOUND`, its exact thread UUID, and `watching`. No manual
+  binding call was made for that TUI thread. Missing `agent_id` placeholders failed
+  in the first attempt; the final sample omits unavailable optional fields. The
+  model's subsequent `list_sessions` call waited for ordinary tool approval and
+  was interrupted during cleanup; automatic hook binding itself succeeded.
+- `scripts/smoke_codex.py --live` passed against the running daemon: two new
+  Codex threads, exact routing despite conflicting request metadata, direct
+  Codex-to-Codex queue handoff, real generated `ACK` and turn completion collected
+  through read-only pagination, Codex-to-Claude channel notification, and reverse
+  Claude-protocol-to-Codex queue delivery. Disposable threads were archived.
+  The Claude endpoint in this test is an MCP protocol harness, not another
+  interactive Claude model. The earlier Claude interactive results above remain
+  the evidence for actual Claude channel rendering.
+- `make check` (`go vet ./...`, `go test -race ./...`) and
+  `scripts/smoke_stdio.py` pass. Codex tests cover missing/malformed caller
+  metadata, conflicting hooks, nullable transcript path, concurrent callers on
+  one MCP connection, baseline/delta deduplication, tool completion, excluded
+  content, rollback gaps, bounded pagination, unavailable/unloaded delivery,
+  shell-safe queue arguments, cancellation, nonzero exit, bounded CLI output,
+  and rejection of mutating App Server methods. Existing replay/backpressure and
+  circuit-breaker tests exercise the shared delivery path.
+- Ephemeral threads reject pagination. New durable threads reject pagination
+  until their first message is materialized; this known empty state is treated
+  as an empty live baseline. Unsupported history remains visibly paused.
+- Installed a user MCP entry and four hooks on this laptop, with a timestamped
+  config backup and unrelated config text preserved. The normal TUI flow trusted
+  those four definitions. No daemon restart, hook-trust bypass, remote endpoint,
+  or env-manager runtime change was used.
+
+Remaining manual coverage: interactive `/clear`, fork/resume/compaction and MCP
+restart in Codex, an active-turn queue smoke, and a simultaneous real Claude model
+plus real Codex model smoke. These platform lifecycle cases are not claimed as
+verified by the automated protocol tests. Process restart still intentionally
+loses subscriptions, replay, deduplication and delivery cursors.

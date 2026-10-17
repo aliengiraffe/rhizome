@@ -1,0 +1,80 @@
+{
+  "description": "Rhizome local Codex binding and collection wake-ups. Review in /hooks before trusting.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "rhizome",
+            "tool": "observe_session",
+            "input": {
+              "session_id": "${session_id}",
+              "transcript_path": "${transcript_path}",
+              "cwd": "${cwd}",
+              "hook_event_name": "${hook_event_name}",
+              "source": "${source}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "rhizome",
+            "tool": "observe_session",
+            "input": {
+              "session_id": "${session_id}",
+              "transcript_path": "${transcript_path}",
+              "cwd": "${cwd}",
+              "hook_event_name": "${hook_event_name}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "rhizome",
+            "tool": "observe_session",
+            "input": {
+              "session_id": "${session_id}",
+              "transcript_path": "${transcript_path}",
+              "cwd": "${cwd}",
+              "hook_event_name": "${hook_event_name}",
+              "tool_name": "${tool_name}"
+            },
+            "timeout": 10
+          }
+        ],
+        "matcher": "^(Bash|Edit|Write|apply_patch|exec_command|write_stdin)$"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "rhizome",
+            "tool": "observe_session",
+            "input": {
+              "session_id": "${session_id}",
+              "transcript_path": "${transcript_path}",
+              "cwd": "${cwd}",
+              "hook_event_name": "${hook_event_name}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

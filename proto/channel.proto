@@ -16,6 +16,7 @@ message Identity {
  string project = 6;
  string endpoint = 7;
  string gossip_endpoint = 8;
+ string agent_type = 9; // Empty means Claude for backward compatibility.
 }
 message FollowRequest {
  Identity target = 1;

@@ -6,7 +6,15 @@ selected peer activity over authenticated loopback gRPC into its own MCP channel
 Two sessions in the same directory remain separate. There is no launch wrapper,
 broker, sidecar, or background device-wide transcript scanner.
 
-## Setup
+## Codex
+
+Local Codex sessions use `rhizome mcp --agent codex`, with the same six tools and
+cross-agent subscriptions. Incoming events use `codex queue`; outgoing activity
+comes from read-only App Server polling. Each caller thread has an independent
+node even when Codex shares an MCP connection. See [Codex setup and tested
+limitations](docs/codex.md) and the samples in `examples/codex/`.
+
+## Claude setup
 
 Requires Go 1.25+, macOS or Linux. Claude Code **2.1.302** is the tested client;
 older versions are not supported by this verification.
@@ -115,8 +123,9 @@ windows. Unknown formats increment parser-skip counters without logging content.
 Activity includes assistant text, tool start/completion/failure names, and turn
 completion. Thinking, user prompts, channel injections, bookkeeping, full tool
 result bodies, child transcripts and Rhizome tool traffic are excluded. Summaries
-are deterministic; no additional model is called. Actual new assistant work in
-response to peer activity is included.
+are deterministic; no additional model is called. Automatic output from peer-only
+turns is suppressed until a human prompt resumes work; intentional responses can still use `publish` or `send`. Turn completion
+remains in publisher history but does not wake subscribers.
 
 The publisher retains at most **five minutes, 1,000 events and 8 MiB**, evicting
 at the first limit. New subscriptions begin at the current position. Replay

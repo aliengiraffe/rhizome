@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -21,7 +22,8 @@ func eventKey(e *pb.Event) string {
 // Acceptance is local queue acceptance, never a semantic acknowledgement.
 func (n *Node) enqueueLocked(e *pb.Event, subscription, token string, generation uint64) bool {
 	n.stats.Received++
-	if e.NodeId == n.identity.NodeId || generation != n.identity.Generation || n.identity.SessionId == "" {
+	// Completion alone carries no work and must never wake another agent.
+	if e.Kind == "turn" || e.NodeId == n.identity.NodeId || generation != n.identity.Generation || n.identity.SessionId == "" {
 		n.stats.Dropped++
 		return false
 	}
@@ -67,7 +69,7 @@ func (n *Node) deliver(ctx context.Context) {
 			due = map[string]time.Time{}
 			generation = n.identity.Generation
 		}
-		if !n.ready || n.notify == nil || n.identity.SessionId == "" {
+		if !n.ready || n.notify == nil || n.identity.SessionId == "" || (n.codex != nil && !n.deliveryReady) {
 			n.mu.Unlock()
 			n.gate.Unlock()
 			continue
@@ -112,6 +114,7 @@ func (n *Node) deliver(ctx context.Context) {
 		e := first.event
 		content := fmt.Sprintf("[%s] %s", e.Kind, e.Text)
 		take := map[int]bool{index: true}
+		retry := []pending{first}
 		count := 1
 		if automatic(e) {
 			for j := index + 1; j < len(n.incoming); j++ {
@@ -123,6 +126,7 @@ func (n *Node) deliver(ctx context.Context) {
 					}
 					content += line
 					take[j] = true
+					retry = append(retry, p)
 					count++
 				}
 			}
@@ -145,9 +149,26 @@ func (n *Node) deliver(ctx context.Context) {
 		n.mu.Lock()
 		if err == nil {
 			n.stats.Written += uint64(count)
+			if n.codex != nil {
+				n.stats.QueueHandoffs++
+				n.deliveryError = ""
+			}
 			n.notifications = append(n.notifications, now)
+		} else if errors.Is(err, errCodexUnavailable) {
+			// Preserve selected events ahead of later arrivals while the reader is
+			// unavailable; the same bounded queue still applies.
+			available := maxQueue - len(n.incoming)
+			if len(retry) > available {
+				n.stats.Dropped += uint64(len(retry) - available)
+				retry = retry[:available]
+			}
+			n.incoming = append(retry, n.incoming...)
 		} else {
 			n.stats.Dropped += uint64(count)
+			if n.codex != nil {
+				n.stats.QueueFailures++
+				n.deliveryError = err.Error()
+			}
 			slog.Warn("channel_write", "error", err)
 		}
 		n.mu.Unlock()

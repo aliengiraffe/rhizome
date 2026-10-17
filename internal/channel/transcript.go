@@ -18,17 +18,18 @@ const maxRecord = 2 * 1024 * 1024
 
 // Only this collector's goroutine accesses offset, tail and normalization state.
 type collector struct {
-	path      string
-	offset    int64
-	info      os.FileInfo
-	tail      []byte
-	dropping  bool
-	wake      chan struct{}
-	seen      map[string]bool
-	order     []string
-	tools     map[string]string
-	toolOrder []string
-	anchor    []byte
+	path         string
+	offset       int64
+	info         os.FileInfo
+	tail         []byte
+	dropping     bool
+	wake         chan struct{}
+	seen         map[string]bool
+	order        []string
+	tools        map[string]string
+	toolOrder    []string
+	anchor       []byte
+	peerResponse bool
 }
 
 func newCollector(path string) (*collector, error) {
@@ -120,6 +121,7 @@ func (c *collector) scan(n *Node, gen uint64) {
 	}
 	if changed {
 		c.offset = 0
+		c.peerResponse = false
 		c.tail = nil
 		c.dropping = false
 		c.anchor = nil
@@ -208,7 +210,7 @@ func (c *collector) normalize(line []byte, n *Node, gen uint64) {
 		c.skip(n, "invalid JSON")
 		return
 	}
-	if r.Sidechain || r.IsMeta {
+	if r.Sidechain {
 		return
 	}
 	local := n.local()
@@ -244,6 +246,23 @@ func (c *collector) normalize(line []byte, n *Node, gen uint64) {
 			c.skip(n, "unknown content")
 			return
 		}
+	}
+	// Meta channel records must be inspected before ignoring them: their
+	// assistant responses otherwise look like fresh locally authored activity.
+	if r.Type == "user" {
+		for _, b := range blocks {
+			if b.Type != "text" || strings.TrimSpace(b.Text) == "" {
+				continue
+			}
+			if isPeerInput(b.Text) {
+				c.peerResponse = true
+			} else if !r.IsMeta {
+				c.peerResponse = false
+			}
+		}
+	}
+	if r.IsMeta || (r.Type == "assistant" && c.peerResponse) {
+		return
 	}
 	// Channel injection is a user record. Never publish user text, even if it resembles assistant output.
 	for _, b := range blocks {
@@ -297,4 +316,11 @@ func (c *collector) normalize(line []byte, n *Node, gen uint64) {
 	if r.Type == "assistant" && r.Message.StopReason == "end_turn" {
 		n.activity(gen, "turn", "Turn completed")
 	}
+}
+
+// Match transport envelopes, not natural-language mentions of Rhizome.
+func isPeerInput(text string) bool {
+	return strings.Contains(text, "<rhizome-peer-event>") ||
+		(strings.Contains(text, "<channel ") &&
+			(strings.Contains(text, `source="rhizome"`) || strings.Contains(text, `source="mcp__rhizome"`)))
 }
