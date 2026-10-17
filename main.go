@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"rhizome/internal/channel"
 	"syscall"
 	"time"
 
@@ -17,9 +18,25 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := entry(); err != nil {
 		log.Print(err)
 		os.Exit(1)
+	}
+}
+
+func entry() error {
+	if len(os.Args) < 2 {
+		return fmt.Errorf("usage: rhizome mcp | demo [flags]")
+	}
+	mode := os.Args[1]
+	os.Args = append(os.Args[:1], os.Args[2:]...)
+	switch mode {
+	case "mcp":
+		return channel.Run()
+	case "demo":
+		return run()
+	default:
+		return fmt.Errorf("unknown command %q", mode)
 	}
 }
 
