@@ -1,170 +1,110 @@
 # Rhizome
 
-One Go MCP process per Claude Code session. Rhizome binds through that session's
-hooks, watches its transcript, discovers local peers with memberlist, and streams
-selected peer activity over authenticated loopback gRPC into its own MCP channel.
-Two sessions in the same directory remain separate. There is no launch wrapper,
-broker, sidecar, or background device-wide transcript scanner.
+Rhizome lets coding agents on different machines subscribe to each other's
+sessions, so an agent working on a PR hears what the other agents on that PR just
+did, and adjusts.
 
-## Codex
+**One server on your network. A small client per agent.**
 
-Local Codex sessions use `rhizome mcp --agent codex`, with the same six tools and
-cross-agent subscriptions. Incoming events use `codex queue`; outgoing activity
-comes from read-only App Server polling. Each caller thread has an independent
-node even when Codex shares an MCP connection. See [Codex setup and tested
-limitations](docs/codex.md) and the samples in `examples/codex/`.
+For example, one agent changes an API while another updates its tests. The test
+agent receives the API agent's progress and tool activity as it happens, giving it
+context to update its approach without you copying messages between sessions.
+You choose which sessions to follow.
 
-## Claude setup
+## How it fits together
 
-Requires Go 1.25+, macOS or Linux. Claude Code **2.1.302** is the tested client;
-older versions are not supported by this verification.
+Run one Rhizome server on your network. Each coding agent uses a small client to
+connect its session to that server. When an agent subscribes to another session,
+the server passes that session's updates to the subscribing agent.
+
+The server gives agents a shared place to exchange activity across machines.
+The clients connect that activity to the tools the agents already use. You keep
+control of the work: choose which sessions to follow and tell each agent how to
+use their updates.
+
+**Status:** this is the planned server/client architecture. The code in this
+checkout currently connects local Claude Code and Codex sessions directly. The
+setup below lets you try subscriptions on one machine today; server deployment
+instructions will follow when that implementation is available. Cross-machine
+peer-to-peer support is being developed separately in the
+[LAN PR](https://github.com/aliengiraffe/rhizome/pull/4) and
+[Tailscale issue](https://github.com/aliengiraffe/rhizome/issues/7).
+
+## How you use it
+
+1. Set up Rhizome in each coding agent you want to connect.
+2. Ask your agent to list the available sessions.
+3. Choose the sessions working on your PR and ask it to subscribe to their IDs.
+4. Continue working. Updates from those sessions arrive in the agent's context.
+
+For example, after setup:
+
+> List the Rhizome sessions. Subscribe to session `<session_id>` and use its
+> updates as context while you update the tests for this PR.
+
+Use an actual ID from the session list. Subscriptions are directional: if both
+agents need updates, subscribe in both sessions. Rhizome does not automatically
+match sessions to PRs or synchronize files; each agent still uses its own checkout
+and tools.
+
+## What gets shared
+
+Subscribers receive assistant text and summaries of tool activity, including tool
+starts, completions, and failures. User prompts, private reasoning, full tool
+results, and child-agent activity are excluded. Rhizome creates these summaries
+without calling another model.
+
+Subscriptions start with new activity, not the entire conversation history.
+Agents can also send a direct message to a session or publish an announcement to
+their subscribers. Updates provide context; delivery does not guarantee that an
+agent has read a message or acted on it.
+
+## Try the current implementation
+
+You need Go 1.25+ and macOS or Linux. Build the binary from this repository:
 
 ```sh
 make build
 ```
 
-This repository ships both `.mcp.json` and `.claude/settings.json`. From this
-directory, start Claude in two terminals:
+Rhizome connects through MCP, the tool interface used by coding agents. Hooks
+associate each connection with the correct agent session. Setup differs by agent.
+
+### Claude Code
+
+Claude Code **2.1.302** is the tested version. This repository includes the MCP
+configuration in [.mcp.json](.mcp.json) and hooks in
+[.claude/settings.json](.claude/settings.json).
+
+From the repository directory, start Claude in two interactive terminals:
 
 ```sh
 claude --dangerously-load-development-channels server:rhizome
 ```
 
-Accept the local development channel confirmation and project MCP consent if
-shown. This is the current research-preview channel enablement path; organization
-channel policy still applies. The development flag requires an **interactive**
-terminal; `claude -p` does not enable it. See the
-[Claude channel reference](https://code.claude.com/docs/en/channels-reference).
+Accept the development channel and project MCP confirmations when prompted.
+Organization channel policy still applies. The development channel flag requires
+an interactive terminal; `claude -p` does not enable it.
 
-For another project, merge the `rhizome` server entry and hook entries into that
-project's configuration. Set `command` to the **absolute path** of your built
-Rhizome binary. Preserve existing MCP servers and hooks. Do not change the server
-key unless you also update the hook server name, tool exclusions and channel flag.
+Submit a prompt in each session, then ask Claude to list Rhizome sessions. The
+first prompt lets the hooks bind Rhizome to the session; a startup hook notice
+before MCP is ready is expected. Once the sessions appear, ask one to subscribe
+to the other's exact `session_id`.
 
-The process starts **UNBOUND**. Initial `SessionStart` is skipped by Claude because
-its MCP clients are not yet available; Claude 2.1.302 displays a non-blocking hook
-notice. Submit a prompt to bind. Later `SessionStart`, `UserPromptSubmit`,
-`PreToolUse` and `Stop` hooks refresh the binding. The negative-lookahead matcher
-excludes `mcp__rhizome__*`; hooks do not ingest activity themselves. See
-[MCP tool hook timing](https://code.claude.com/docs/en/hooks#mcp-tool-hook-fields).
-Never ask Claude to call `observe_session` manually or invent an ID.
+To use Rhizome in another project, merge the MCP server and hook entries into
+that project's configuration. Replace `./rhizome` with the absolute path to your
+built binary, preserve existing entries, and keep the server name `rhizome`.
+The hooks handle `observe_session` automatically; do not call it manually.
 
-The official Go MCP SDK handles initialization and tools. A transport adapter uses
-the SDK's concurrency-safe writer for `notifications/claude/channel`. It negotiates
-MCP **2025-11-25**: testing found that Claude 2.1.302 disables unsolicited channel
-notifications when the SDK negotiates its newer 2026 protocol family.
-Stdout is exclusively MCP; application diagnostics go to stderr.
+### Codex
 
-## Tools
+Codex uses `rhizome mcp --agent codex`. Follow the
+[Codex setup guide](docs/codex.md) to configure MCP and hooks using the files in
+[examples/codex](examples/codex/). The guide covers the required local App Server
+and the tested Codex CLI version, **0.163.0**.
 
-| Tool | Behavior |
-| --- | --- |
-| `list_sessions()` | Bound peer identities, project, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. |
-| `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
-| `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
-| `publish(text, reply_to?)` | Announce to current subscribers. |
-| `send(session_id, text, reply_to?)` | Direct message without a subscription. Returns a stable message ID and receiver queue acceptance. |
-| `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. |
-
-Use `list_sessions` in each session, then ask one to subscribe to the other's exact
-`session_id`. Display names are labels, never addresses. Multiple live nodes with
-one session ID are ambiguous and cannot be routed. List results are gossip
-snapshots; routing verifies identities over authenticated gRPC.
-
-An accepted direct message is **queued**, not necessarily written, read or acted
-upon. A lost RPC response can leave acceptance uncertain; calling `send` again
-creates a new message. The wire receiver deduplicates retries of a stable message
-ID within its bounded in-memory deduplication window. No exactly-once or semantic
-acknowledgement is claimed.
-
-## Identity and lifecycle
-
-Each process has a random node ID. The exact hook-supplied Claude session ID plus a
-local generation bind that process to its initialized stdio connection. Neither
-cwd, transcript recency, parent PID nor the MCP SDK session ID participates in
-routing. Unbound nodes bootstrap gossip but are not subscribable sessions.
-
-Same-session hooks refresh metadata without resetting collection. A new top-level
-session ID on a lifecycle/prompt hook retires the old binding, cancels outgoing
-subscriptions, disconnects incoming streams, discards queued deliveries and
-captures a fresh transcript baseline. Child-agent hooks do not bind. Unexpected
-session changes on tool/stop hooks and delayed hooks for retired sessions are
-rejected. Resuming a retired session requires a fresh MCP process. A changed
-transcript path for the same session is rejected rather than silently following
-an unrelated file. `SessionEnd` is advisory; stdio EOF and signals stop listeners,
-collectors and streams and remove the registration.
-
-## Discovery and authentication
-
-Listeners allocate their actual loopback ports automatically. `~/.rhizome/run`
-contains a private cluster token, a registry lock and one endpoint registration
-per live process. Override `RHIZOME_RUNTIME_DIR` for an isolated cluster; its
-directory must be owned by you and private (0700). Token and registration files
-are 0600. Concurrent launches serialize bootstrap with `flock`, probe candidates
-with authentication before joining, and prune stale registrations. Registry files
-bootstrap gossip; they are not a broker or persisted session state.
-
-The token authenticates gRPC and supplies the memberlist encryption key; it is
-never advertised or logged. All endpoints must be `127.0.0.1`. Processes with the
-same user's token are trusted cluster participants; this is not isolation from a
-malicious process running as your user. Remote machines and permission relay are
-out of scope.
-
-## Activity, replay and bounded delivery
-
-Only the hook-supplied top-level transcript is opened. First binding starts at its
-current EOF, including discarding a partial historical line. Directory filesystem
-notifications wake incremental JSONL reads, with one-second polling as fallback.
-Incomplete lines are retained; oversized records are skipped with diagnostics.
-Replacement, truncation and changed bytes at the read boundary produce a gap.
-Record IDs and tool-use IDs deduplicate/correlate within bounded 4,096-entry
-windows. Unknown formats increment parser-skip counters without logging content.
-
-Activity includes assistant text, tool start/completion/failure names, and turn
-completion. Thinking, user prompts, channel injections, bookkeeping, full tool
-result bodies, child transcripts and Rhizome tool traffic are excluded. Summaries
-are deterministic; no additional model is called. Automatic output from peer-only
-turns is suppressed until a human prompt resumes work; intentional responses can still use `publish` or `send`. Turn completion
-remains in publisher history but does not wake subscribers.
-
-The publisher retains at most **five minutes, 1,000 events and 8 MiB**, evicting
-at the first limit. New subscriptions begin at the current position. Replay
-snapshot and live registration happen under the same lock. Reconnects use
-exponential backoff with jitter and resume after the last locally accepted
-sequence. Expired cursors and new publisher streams produce visible gap notices.
-Each publisher stream has a 64-event queue; overflow disconnects it for replay
-rather than blocking collection or other subscribers.
-
-The receiver has a 256-event queue and a 4,096-entry deduplication window. Automatic
-activity batches every two seconds per origin, with content capped at 8 KiB;
-individual summaries are capped near 7 KiB with an explicit truncation marker.
-Announcements and direct messages bypass the batching delay, but obey pausing.
-Received, queued, written, dropped, parser skips and pauses are separate counters.
-Written means written to MCP, not acknowledged by Claude. Queue overflow may
-ultimately cause replay gaps. Write failures are counted as dropped.
-
-**Process restarts lose replay history, subscription intent, deduplication state
-and delivery cursors.** The new process waits for a hook again. Existing peers
-retaining subscription intent reconnect and see the new stream as a restart gap.
-There is no disk-backed event history or durable outbox.
-
-## Feedback controls
-
-Received envelopes are never published as local events. Self-origin echoes and
-repeated event IDs are rejected, injected transcript records are excluded, and
-Rhizome's own tool calls/results are filtered. `publish` and `send` share a limit
-of ten calls per rolling minute per node.
-
-After 30 peer notifications in a rolling minute, the receiver pauses further
-peer delivery and writes one local pause notice. Incoming queues stay bounded.
-Explicit `subscribe(session_id)` re-arms that origin; other paused origins remain
-paused. A subsequent burst can trip the breaker again. Unsubscribe does not
-re-arm delivery. Channel instructions discourage unsolicited work/replies.
-
-These controls contain feedback; they do not guarantee silence. In the real
-bidirectional smoke test, Claude generated new commentary saying it was not
-replying. That commentary is genuine local activity and is streamed. Unsubscribe
-or leave feeds paused when you do not want peer-triggered work.
+After setup, start a fresh session, submit a prompt, and ask Codex to list Rhizome
+sessions. Claude Code and Codex sessions can subscribe to each other.
 
 ## Collaboration skill
 
@@ -195,36 +135,51 @@ ln -s "$PWD/skills/rhizome-collab" ~/.codex/skills/rhizome-collab    # Codex
 
 Then run `/rhizome-collab` in the agent with an optional task description.
 
-## Verification
+## Tools
+
+| Tool | Use it to |
+| --- | --- |
+| `list_sessions()` | Find session IDs, projects, agent types, and connection status. |
+| `subscribe(session_id)` | Follow a session's activity or resume its paused feed. |
+| `unsubscribe(session_id)` | Stop following a session. |
+| `publish(text, reply_to?)` | Send an announcement to your subscribers. |
+| `send(session_id, text, reply_to?)` | Send a direct message, without requiring a subscription. |
+| `observe_session(...)` | Internal tool used by hooks to bind the session. |
+
+Always address sessions by their exact IDs. Names and project directories are
+labels; two sessions in the same directory are still separate sessions.
+
+## Practical limits
+
+- **Local connections in this checkout.** Sessions connect on the same machine
+  using a private token under `~/.rhizome/run`. Processes running as the same user
+  with that token are trusted participants.
+- **Temporary history.** Each publisher retains up to five minutes, 1,000 events,
+  or 8 MiB, whichever limit comes first. Reconnecting subscribers may receive a
+  gap notice if they missed more than that.
+- **State resets on restart.** Restarting a Rhizome process loses its subscriptions
+  and event history. Subscribe again after restarting.
+- **Busy feeds can pause.** Delivery pauses after 30 peer notifications in a minute.
+  Subscribe again to resume that session's feed, or unsubscribe to stop it.
+- **Peer updates are context.** They are untrusted input, not permission to start
+  new work. Feedback controls reduce loops between agents but cannot guarantee
+  that agents will never react to each other's updates.
+
+For binding rules, authentication, queues, replay, and feedback controls, see the
+[technical reference](docs/architecture.md).
+
+## Development
 
 ```sh
-make check                         # go vet ./... and go test -race ./...
 make build
-python3 scripts/smoke_stdio.py      # real processes, valid stdout, EOF, restart
+make check                     # go vet and tests with the race detector
+python3 scripts/smoke_stdio.py  # process checks using synthetic transcripts
 ```
 
-Tests cover binding generations and stale hooks, simultaneous bootstrap,
-ambiguous routing/authentication, replay boundaries/gaps, overflow, incremental
-partial/duplicate/truncated transcripts, MCP handshake, rate limits, and the
-receiver circuit breaker. The subprocess smoke tests use a private temporary
-cluster and synthetic transcripts; they do not launch models.
+See [verification](docs/verification.md) for interactive checks and recorded
+results, and [AGENTS.md](AGENTS.md) for repository guidance. Client integrations
+are version-sensitive; repeat the interactive checks when upgrading clients,
+hooks, or transcript parsing.
 
-For the interactive acceptance checklist and recorded results, see
-[docs/verification.md](docs/verification.md). Re-run the interactive checks when
-upgrading Claude, the Go MCP SDK, hook configuration, or transcript parsing.
-
-To regenerate the checked-in gRPC/protobuf files, install `protoc`, then run
-`make proto` (pinned Go generators install into `.bin`). Production service
-`rhizome.v1.Channel` is separate from the legacy demo service.
-
-## Original demo
-
-Randomized subscriptions are available only via an explicit command:
-
-```sh
-./rhizome demo -gossip 7946 -grpc 9000
-./rhizome demo -gossip 7947 -grpc 9001 -join 127.0.0.1:7946
-```
-
-The demo retains its original unauthenticated, live-only `sessions` channel and
-fixed-port flags. It is not used by `rhizome mcp` and does not join its cluster.
+The original randomized pub/sub demo is separate from the MCP integration. Its
+commands and protocol notes are in the [technical reference](docs/architecture.md#original-demo).
