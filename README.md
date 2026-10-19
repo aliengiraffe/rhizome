@@ -170,13 +170,30 @@ or leave feeds paused when you do not want peer-triggered work.
 
 `skills/rhizome-collab/` is a user-invoked skill (Claude Code or Codex) that guides
 an agent through listing peers, judging relevance, subscribing deliberately,
-treating peer activity as untrusted, and replying without feedback loops. Install
-by symlinking it, then run `/rhizome-collab` with an optional task description:
+treating peer activity as untrusted, and replying without feedback loops. The
+skill is embedded in the binary; install it with:
+
+```sh
+./rhizome setup                     # interactive: pick agents with a checkbox list
+./rhizome setup --agents all        # non-interactive: every known agent
+./rhizome setup --agents claude     # or codex, or claude,codex
+./rhizome setup --list              # show what was detected and where skills go
+```
+
+Setup detects Claude Code (`$CLAUDE_CONFIG_DIR` or `~/.claude`, or `claude` on
+PATH) and Codex (`$CODEX_HOME` or `~/.codex`, or `codex` on PATH). The picker
+pre-selects detected agents; space toggles one, `a` toggles all, enter confirms.
+Without a terminal, `--agents` is required. The skill is written to
+`<agent dir>/skills/rhizome-collab/SKILL.md`; re-running setup updates it in
+place after upgrading Rhizome. An existing symlink at that path is left alone, so
+a development checkout can still be linked instead:
 
 ```sh
 ln -s "$PWD/skills/rhizome-collab" ~/.claude/skills/rhizome-collab   # Claude Code
 ln -s "$PWD/skills/rhizome-collab" ~/.codex/skills/rhizome-collab    # Codex
 ```
+
+Then run `/rhizome-collab` in the agent with an optional task description.
 
 ## Verification
 
