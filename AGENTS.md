@@ -38,14 +38,16 @@ task build                         # Build the rhizome executable.
 task check                         # go vet ./... and go test -race ./...
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
 python3 scripts/smoke_service.py    # Separate observer/MCP processes and handoffs.
+python3 scripts/smoke_stdio.py --lan # Same scenario in LAN mode: pinned TLS, separate registries.
 git diff --check                   # Check whitespace errors.
 task proto                         # Requires protoc; installs pinned generators in .bin.
 python3 scripts/smoke_codex.py --help # Inspect live smoke prerequisites/options.
 ```
 
-Before marking a change done, build, check (including race tests), the stdio
-smoke, service smoke, and the whitespace check must pass. Format touched Go files
-with `gofmt`; run targeted package tests first. Regenerate protobufs only for protocol changes
+Before marking a change done, build, check (including race tests), both stdio
+smokes (loopback and `--lan`), the service smoke, and the whitespace check must pass.
+Format touched Go files with `gofmt`; run targeted package tests first. Regenerate
+protobufs only for protocol changes
 and review the generated diff. Check all documentation links and paths.
 
 For Codex integration changes, follow the opt-in live smoke instructions in
@@ -54,10 +56,10 @@ create disposable threads, and run model turns. The script refuses to run withou
 live opt-in; help output does not validate integration. Use the manual checklist
 for client/hook upgrades.
 
-**LAN coverage caveat:** this checkout has no LAN mode. The requested invocation
-`python3 scripts/smoke_stdio.py --lan` currently runs the same loopback test because
-the script ignores arguments; it does not validate LAN behavior. When LAN support
-lands, implement and verify that option and update this guidance in the same change.
+**LAN coverage:** `python3 scripts/smoke_stdio.py --lan` runs the stdio scenario
+with `--lan` on an isolated runtime directory per process and verifies pinned TLS.
+It exercises one machine only; cross-device behavior is covered by the manual
+two-machine check in [docs/verification.md](docs/verification.md).
 
 ## Go engineering principles
 
@@ -111,11 +113,13 @@ lands, implement and verify that option and update this guidance in the same cha
   synthetic test harnesses are not a user workflow (`internal/channel/node.go`, `internal/channel/codex.go`).
 - **Never log or advertise the cluster token.** It authenticates trusted peers;
   keep runtime files private (`internal/channel/discovery.go`, README).
-- **Preserve loopback-only defaults and behavior without `--lan`.** Current MCP
-  endpoints must be `127.0.0.1`; widening discovery changes the trust boundary
-  (`internal/channel/discovery.go`). Future LAN support must allow private ranges
-  only, reject public addresses, and pin TLS certificate fingerprints to authenticate
-  remote endpoints. These are requirements for LAN work, not implemented guarantees.
+- **Preserve loopback-only defaults and behavior without `--lan`.** Without
+  `--lan`/`RHIZOME_LAN=1` every endpoint must be `127.0.0.1`. LAN mode allows
+  loopback, private and link-local ranges only, rejects public addresses in both
+  modes, and pins TLS certificate fingerprints carried in gossip metadata before
+  sending the token (`internal/channel/lan.go`, `internal/channel/discovery.go`).
+  Widening the address policy or skipping pinning changes the trust boundary;
+  processes in different modes on one device must keep ignoring each other.
 - **Never silently loosen retention, queue, or deduplication limits.** They bound
   memory and slow-peer impact: publisher retention is five minutes/1,000 events/
   8 MiB, stream queues are 64 events, receiver queues 256, and dedup windows 4,096
