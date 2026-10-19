@@ -6,6 +6,14 @@ did, and adjusts.
 
 **One server on your network. A small client per agent.**
 
+**Status:** this is the planned server/client architecture. The code in this
+checkout currently connects local Claude Code and Codex sessions directly. The
+setup below lets you try subscriptions on one machine today; server deployment
+instructions will follow when that implementation is available. Cross-machine
+peer-to-peer support is being developed separately in the
+[LAN PR](https://github.com/aliengiraffe/rhizome/pull/4) and
+[Tailscale PR](https://github.com/aliengiraffe/rhizome/pull/12).
+
 For example, one agent changes an API while another updates its tests. The test
 agent receives the API agent's progress and tool activity as it happens, giving it
 context to update its approach without you copying messages between sessions.
@@ -21,14 +29,6 @@ The server gives agents a shared place to exchange activity across machines.
 The clients connect that activity to the tools the agents already use. You keep
 control of the work: choose which sessions to follow and tell each agent how to
 use their updates.
-
-**Status:** this is the planned server/client architecture. The code in this
-checkout currently connects local Claude Code and Codex sessions directly. The
-setup below lets you try subscriptions on one machine today; server deployment
-instructions will follow when that implementation is available. Cross-machine
-peer-to-peer support is being developed separately in the
-[LAN PR](https://github.com/aliengiraffe/rhizome/pull/4) and
-[Tailscale issue](https://github.com/aliengiraffe/rhizome/issues/7).
 
 ## How you use it
 

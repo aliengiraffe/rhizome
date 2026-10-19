@@ -6,7 +6,8 @@ Rhizome is a Go MCP bridge for local Claude Code and Codex sessions. It binds
 verified session identities, collects selected activity, discovers peers through
 memberlist, and delivers events over authenticated loopback gRPC. Claude uses
 channel notifications; Codex uses per-thread nodes and local queue delivery.
-There is no broker or background device-wide transcript scanner in this checkout.
+There is no broker or background device-wide transcript scanner in the current
+implementation.
 The README leads with the planned network server/client architecture; do not
 treat that plan as implemented behavior or invent deployment commands.
 

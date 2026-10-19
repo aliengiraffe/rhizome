@@ -4,6 +4,27 @@ Implementation details for the local MCP integration. For setup and everyday use
 see the [README](../README.md). Codex-specific behavior is documented in the
 [Codex guide](codex.md).
 
+## Claude startup and channel compatibility
+
+The process starts **UNBOUND**. In the tested Claude Code 2.1.302 client, the
+initial `SessionStart` hook is skipped because MCP clients are not ready yet;
+Claude displays a non-blocking hook notice. Submit a prompt to bind. Later
+`SessionStart`, `UserPromptSubmit`, `PreToolUse`, and `Stop` hooks refresh the
+binding. The hook matcher excludes `mcp__rhizome__*`; hooks do not ingest activity
+themselves. Never call `observe_session` manually or invent a session ID.
+
+Claude's development channel flag requires an interactive terminal. See the
+[Claude channel reference](https://code.claude.com/docs/en/channels-reference)
+and [MCP tool hook timing](https://code.claude.com/docs/en/hooks#mcp-tool-hook-fields)
+for the client-side requirements.
+
+The Go MCP SDK handles initialization and tools. A transport adapter uses the
+SDK's concurrency-safe writer for `notifications/claude/channel` and negotiates
+MCP **2025-11-25**. Testing with Claude 2.1.302 found that the SDK's newer 2026
+protocol negotiation disabled unsolicited channel notifications. See the
+[recorded verification results](verification.md) before changing this contract.
+Stdout is exclusively MCP; application diagnostics go to stderr.
+
 ## Identity and lifecycle
 
 Each process has a random node ID. The exact hook-supplied Claude session ID plus a
@@ -32,10 +53,17 @@ with authentication before joining, and prune stale registrations. Registry file
 bootstrap gossip; they are not a broker or persisted session state.
 
 The token authenticates gRPC and supplies the memberlist encryption key; it is
-never advertised or logged. All endpoints must be `127.0.0.1`. Processes with the
-same user's token are trusted cluster participants; this is not isolation from a
-malicious process running as your user. Remote machines and permission relay are
-out of scope.
+never advertised or logged. In the current implementation, all endpoints must be
+`127.0.0.1`. Processes with the same user's token are trusted cluster participants;
+this is not isolation from a malicious process running as your user. Remote
+machines and permission relay are out of scope for the current implementation.
+
+The [README](../README.md) describes the planned server/client architecture.
+Separate peer-to-peer network support is proposed in the
+[LAN PR](https://github.com/aliengiraffe/rhizome/pull/4) and
+[Tailscale PR](https://github.com/aliengiraffe/rhizome/pull/12), which addresses
+[issue #7](https://github.com/aliengiraffe/rhizome/issues/7). These proposals do not
+change the local implementation documented here.
 
 ## Activity, replay and bounded delivery
 
@@ -51,8 +79,9 @@ Activity includes assistant text, tool start/completion/failure names, and turn
 completion. Thinking, user prompts, channel injections, bookkeeping, full tool
 result bodies, child transcripts and Rhizome tool traffic are excluded. Summaries
 are deterministic; no additional model is called. Automatic output from peer-only
-turns is suppressed until a human prompt resumes work; intentional responses can still use `publish` or `send`. Turn completion
-remains in publisher history but does not wake subscribers.
+turns is suppressed until a human prompt resumes work; intentional responses can
+still use `publish` or `send`. Turn completion remains in publisher history but
+does not wake subscribers.
 
 The publisher retains at most **five minutes, 1,000 events and 8 MiB**, evicting
 at the first limit. New subscriptions begin at the current position. Replay
