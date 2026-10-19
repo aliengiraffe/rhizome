@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -65,15 +66,15 @@ func (n *Node) outgoing(ctx context.Context) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+n.token)
 }
 
-// dial applies the address policy and, in LAN mode, pins TLS to the
-// fingerprint gossip advertised for that identity. Local mode stays plaintext
-// loopback.
+// dial applies the address policy and, in LAN and Tailscale modes, pins TLS
+// to the fingerprint gossip advertised for that identity. Local mode stays
+// plaintext loopback.
 func (n *Node) dial(i *pb.Identity) (*grpc.ClientConn, error) {
 	if i == nil || !n.allowed(i.Endpoint) {
 		return nil, errors.New("endpoint is outside the allowed address policy")
 	}
 	creds := insecure.NewCredentials()
-	if n.lan {
+	if n.mode != modeLocal {
 		if !validFingerprint(i.CertFingerprint) {
 			return nil, errors.New("peer advertises no certificate fingerprint; refusing unpinned dial")
 		}
@@ -87,7 +88,13 @@ func (n *Node) probe(ctx context.Context, i *pb.Identity) (*pb.Identity, error) 
 		return nil, err
 	}
 	defer c.Close()
-	ctx, cancel := context.WithTimeout(ctx, 700*time.Millisecond)
+	timeout := 700 * time.Millisecond
+	if n.mode == modeTailscale {
+		// Tailnet peers are often DERP-relayed; a pinned handshake plus one
+		// round trip can exceed the loopback budget.
+		timeout = 3 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	actual, err := pb.NewChannelClient(c).Info(n.outgoing(ctx), &pb.InfoRequest{})
 	if err != nil {
@@ -165,7 +172,7 @@ func (n *Node) start(o Options) error {
 		return err
 	}
 	n.opts = o
-	n.lan = o.LAN
+	n.mode = o.mode()
 	runtime, err := localstate.Runtime(o.Runtime)
 	if err != nil {
 		return err
@@ -183,6 +190,34 @@ func (n *Node) start(o Options) error {
 		return err
 	}
 	bind, advertise := "127.0.0.1", "127.0.0.1"
+	var ts *tailscaleStatus
+	if n.mode == modeTailscale {
+		n.ts = o.tailscale
+		if n.ts == nil {
+			n.ts = tailscaleCLI{}
+		}
+		if ts, err = tailscaleSelf(n.ctx, n.ts); err != nil {
+			return err
+		}
+		self := ts.Self.ipv4().String()
+		if o.BindAddr == "" {
+			o.BindAddr = self
+		}
+		if o.AdvertiseAddr == "" {
+			o.AdvertiseAddr = self
+		}
+		if o.GossipPort == 0 {
+			o.GossipPort = defaultBeaconPort
+		}
+		if o.Discovery == 0 {
+			o.Discovery = defaultDiscoveryInterval
+		}
+		n.beaconPort = o.GossipPort
+		if label := ts.Self.label(ts.MagicDNSEnabled); label != "" {
+			n.identity.Host = clip(label, 64)
+		}
+	}
+	n.opts = o
 	serverOptions := []grpc.ServerOption{grpc.MaxRecvMsgSize(64 * 1024), grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if err := n.authorized(ctx); err != nil {
 			return nil, err
@@ -194,7 +229,7 @@ func (n *Node) start(o Options) error {
 		}
 		return handler(srv, ss)
 	})}
-	if n.lan {
+	if n.mode != modeLocal {
 		bind = "0.0.0.0"
 		if o.BindAddr != "" {
 			if net.ParseIP(o.BindAddr) == nil {
@@ -213,6 +248,7 @@ func (n *Node) start(o Options) error {
 		n.identity.CertFingerprint = fp
 		serverOptions = append(serverOptions, grpc.Creds(serverCredentials(cert)))
 	}
+	n.bind, n.advertiseAddr = bind, advertise
 	listener, err := net.Listen("tcp", net.JoinHostPort(bind, "0"))
 	if err != nil {
 		return err
@@ -227,29 +263,15 @@ func (n *Node) start(o Options) error {
 			slog.Error("grpc_serve", "error", err)
 		}
 	}()
-	config := memberlist.DefaultLocalConfig()
-	if n.lan {
-		// Local timeouts are tuned for loopback and flap over Wi-Fi.
-		config = memberlist.DefaultLANConfig()
-	}
-	config.Name = n.identity.NodeId
-	config.BindAddr = bind
-	config.AdvertiseAddr = advertise
-	config.BindPort = 0
-	config.AdvertisePort = 0
-	config.Delegate = n
-	config.Events = n
-	config.Logger = log.New(gossipLog{"gossip"}, "", 0)
-	key, err := hex.DecodeString(n.token[:32])
+	config, err := n.gossipConfig()
 	if err != nil {
 		return err
 	}
-	config.SecretKey = key
-	n.members, err = memberlist.Create(config)
-	if err != nil {
+	if n.members, err = memberlist.Create(config); err != nil {
 		return err
 	}
 	local := n.members.LocalNode()
+	n.gossipAddr = net.JoinHostPort(bind, strconv.Itoa(int(local.Port)))
 	n.mu.Lock()
 	n.identity.GossipEndpoint = net.JoinHostPort(advertise, strconv.Itoa(int(local.Port)))
 	n.mu.Unlock()
@@ -274,7 +296,7 @@ func (n *Node) start(o Options) error {
 			_ = os.Remove(path)
 			continue
 		}
-		if !n.allowed(peer.Endpoint) || (peer.CertFingerprint != "") != n.lan {
+		if !n.allowed(peer.Endpoint) || (peer.CertFingerprint != "") != (n.mode != modeLocal) {
 			// A registration from the other discovery mode may be live; it is
 			// unreachable for us but not stale, so leave it in place.
 			slog.Info("bootstrap_skip", "path", filepath.Base(path), "reason", "discovery mode mismatch")
@@ -289,7 +311,7 @@ func (n *Node) start(o Options) error {
 			slog.Warn("bootstrap_join", "error", e)
 		}
 	}
-	if n.lan {
+	if n.mode != modeLocal {
 		for _, seed := range o.Join {
 			if err := n.join("join", seed); err != nil {
 				slog.Warn("seed_join", "source", "join", "addr", seed, "error", err)
@@ -307,13 +329,60 @@ func (n *Node) start(o Options) error {
 	if err = os.WriteFile(n.registration, raw, 0600); err != nil {
 		return err
 	}
-	mode := "local"
-	if n.lan {
-		mode = "lan"
+	attrs := []any{"binding", "UNBOUND", "node_id", n.identity.NodeId, "mode", n.mode.String(), "bind", bind, "advertise", advertise, "endpoint", n.identity.Endpoint, "gossip_endpoint", n.local().GossipEndpoint, "join", o.Join, "mdns", n.mode != modeLocal && o.MDNS}
+	switch n.mode {
+	case modeLAN:
+		slog.Info("trust_boundary", "mode", "lan", "boundary", "anyone holding the cluster token on the local network")
+	case modeTailscale:
+		slog.Info("trust_boundary", "mode", "tailscale", "boundary", "anyone holding the cluster token on this tailnet; narrow it further with tailnet ACLs")
+		beacon := "ephemeral"
+		if n.acquireBeacon() {
+			beacon = strconv.Itoa(n.beaconPort)
+		} else {
+			slog.Info("beacon_busy", "port", n.beaconPort, "message", "another process holds the beacon; reachable through it, re-acquiring when free")
+		}
+		attrs = append(attrs, "tailscale_ip", advertise, "magicdns", strings.TrimSuffix(ts.Self.DNSName, "."), "magicdns_enabled", ts.MagicDNSEnabled, "beacon_port", beacon, "discovery_interval", o.Discovery.String())
+		n.wg.Add(1)
+		go func() { defer n.wg.Done(); n.tailnet(o.Discovery) }()
 	}
-	slog.Info("ready", "binding", "UNBOUND", "node_id", n.identity.NodeId, "mode", mode, "bind", bind, "advertise", advertise, "endpoint", n.identity.Endpoint, "gossip_endpoint", n.local().GossipEndpoint, "join", o.Join, "mdns", n.lan && o.MDNS)
+	slog.Info("ready", attrs...)
 	return nil
 }
+
+// gossipConfig builds the memberlist profile for the mode. Gossip always
+// binds an ephemeral port; in Tailscale mode the beacon forwards to it. The
+// key is derived from the token; Tailscale mode derives a distinct key so
+// clusters in other modes never merge with a tailnet cluster, even on one
+// device.
+func (n *Node) gossipConfig() (*memberlist.Config, error) {
+	config := memberlist.DefaultLocalConfig()
+	key, err := hex.DecodeString(n.token[:32])
+	if err != nil {
+		return nil, err
+	}
+	switch n.mode {
+	case modeLAN:
+		// Local timeouts are tuned for loopback and flap over Wi-Fi.
+		config = memberlist.DefaultLANConfig()
+	case modeTailscale:
+		// Tailnet peers are often DERP-relayed with RTTs of hundreds of ms.
+		config = memberlist.DefaultWANConfig()
+		config.TCPTimeout = 10 * time.Second
+		sum := sha256.Sum256([]byte("rhizome-tailscale:" + n.token))
+		key = sum[:16]
+	}
+	config.Name = n.identity.NodeId
+	config.BindAddr = n.bind
+	config.AdvertiseAddr = n.advertiseAddr
+	config.BindPort = 0
+	config.AdvertisePort = 0
+	config.Delegate = n
+	config.Events = n
+	config.Logger = log.New(gossipLog{"gossip"}, "", 0)
+	config.SecretKey = key
+	return config, nil
+}
+
 func (n *Node) unregister() {
 	if n.registration != "" {
 		_ = os.Remove(n.registration)
@@ -330,7 +399,7 @@ func (n *Node) NotifyLeave(member *memberlist.Node) {
 	n.mu.Unlock()
 }
 func (n *Node) updatePeer(member *memberlist.Node) {
-	if !allowedIP(member.Addr, n.lan) {
+	if !allowedIP(member.Addr, n.mode) {
 		return
 	}
 	var i pb.Identity
@@ -338,7 +407,7 @@ func (n *Node) updatePeer(member *memberlist.Node) {
 		return
 	}
 	// Peers from the other discovery mode cannot be dialed; keep them invisible.
-	if n.lan && !validFingerprint(i.CertFingerprint) || !n.lan && i.CertFingerprint != "" {
+	if lan := n.mode != modeLocal; lan && !validFingerprint(i.CertFingerprint) || !lan && i.CertFingerprint != "" {
 		return
 	}
 	n.mu.Lock()

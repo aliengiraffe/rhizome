@@ -40,10 +40,10 @@ func TestAllowedEndpointPolicy(t *testing.T) {
 		{"", false, false},
 	}
 	for _, c := range cases {
-		if got := allowedEndpoint(c.endpoint, false); got != c.local {
+		if got := allowedEndpoint(c.endpoint, modeLocal); got != c.local {
 			t.Errorf("local %q: got %v want %v", c.endpoint, got, c.local)
 		}
-		if got := allowedEndpoint(c.endpoint, true); got != c.lan {
+		if got := allowedEndpoint(c.endpoint, modeLAN); got != c.lan {
 			t.Errorf("lan %q: got %v want %v", c.endpoint, got, c.lan)
 		}
 	}
@@ -191,7 +191,7 @@ func TestModeIsolation(t *testing.T) {
 	}
 	discovered := func(n *Node) bool { n.mu.Lock(); defer n.mu.Unlock(); _, ok := n.discovered["peer"]; return ok }
 	local, lan := node(t), node(t)
-	lan.lan = true
+	lan.mode = modeLAN
 	fp := strings.Repeat("a", 64)
 	// Local mode ignores LAN advertisements, even ones reachable on loopback.
 	local.updatePeer(&memberlist.Node{Name: "peer", Addr: net.ParseIP("192.168.1.5"), Meta: meta("192.168.1.5:4000", fp)})

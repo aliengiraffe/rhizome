@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,15 +116,22 @@ type Node struct {
 	rpc                          *grpc.Server
 	mdns                         *mdns.Server
 	token, runtime, registration string
-	// opts, lan and cert are fixed by start before any goroutine reads them.
-	opts Options
-	lan  bool
-	cert tls.Certificate
+	// opts, mode, bind, advertiseAddr, gossipAddr, beaconPort, ts and cert are
+	// fixed by start before any goroutine reads them.
+	opts                            Options
+	mode                            mode
+	bind, advertiseAddr, gossipAddr string
+	beaconPort                      int
+	ts                              tailscaleClient
+	cert                            tls.Certificate
+	// beacon and warned are guarded by mu.
+	beacon net.Listener
+	warned map[string]bool
 }
 
 func newNode(parent context.Context) *Node {
 	ctx, cancel := context.WithCancel(parent)
-	return &Node{discovered: map[string]*pb.Identity{}, ctx: ctx, cancel: cancel, identity: &pb.Identity{Protocol: 1, NodeId: id(), AgentType: "claude", Host: shortHost()}, retired: map[string]bool{}, stream: id(), listeners: map[*listener]bool{}, feeds: map[string]*feed{}, seen: map[string]bool{}, rearmed: map[string]bool{}}
+	return &Node{discovered: map[string]*pb.Identity{}, ctx: ctx, cancel: cancel, identity: &pb.Identity{Protocol: 1, NodeId: id(), AgentType: "claude", Host: shortHost()}, retired: map[string]bool{}, stream: id(), listeners: map[*listener]bool{}, feeds: map[string]*feed{}, seen: map[string]bool{}, rearmed: map[string]bool{}, warned: map[string]bool{}}
 }
 func cloneIdentity(i *pb.Identity) *pb.Identity { return proto.Clone(i).(*pb.Identity) }
 func (n *Node) local() *pb.Identity {
@@ -323,8 +331,18 @@ func (n *Node) close() {
 	if n.rpc != nil {
 		n.rpc.Stop()
 	}
+	n.mu.Lock()
+	if n.beacon != nil {
+		_ = n.beacon.Close()
+	}
+	n.mu.Unlock()
 	if n.members != nil {
-		_ = n.members.Leave(300 * time.Millisecond)
+		// The WAN gossip interval is 500ms; give the leave time to go out.
+		leave := 300 * time.Millisecond
+		if n.mode == modeTailscale {
+			leave = time.Second
+		}
+		_ = n.members.Leave(leave)
 		_ = n.members.Shutdown()
 	}
 	n.wg.Wait()

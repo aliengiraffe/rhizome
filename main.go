@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"rhizome/internal/channel"
 	"rhizome/internal/config"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -37,13 +38,19 @@ func entry() error {
 		opts := flag.NewFlagSet("mcp", flag.ContinueOnError)
 		agent := opts.String("agent", "claude", "delivery agent: claude or codex")
 		config.Bind(opts, "codex-bin")
-		o := optionsFromEnv()
+		o, err := optionsFromEnv()
+		if err != nil {
+			return err
+		}
 		opts.BoolVar(&o.LAN, "lan", o.LAN, "peer with other devices on the local network (RHIZOME_LAN=1)")
-		opts.StringVar(&o.BindAddr, "bind-addr", o.BindAddr, "LAN listen address, default 0.0.0.0 (RHIZOME_BIND_ADDR)")
-		opts.StringVar(&o.AdvertiseAddr, "advertise-addr", o.AdvertiseAddr, "LAN address peers dial, default first private interface (RHIZOME_ADVERTISE_ADDR)")
-		opts.Var((*listFlag)(&o.Join), "join", "gossip host:port of a node on another device; repeatable (RHIZOME_JOIN, comma-separated)")
-		opts.BoolVar(&o.MDNS, "mdns", o.MDNS, "advertise and browse _rhizome._tcp in LAN mode (RHIZOME_MDNS=0 disables)")
+		opts.BoolVar(&o.Tailscale, "tailscale", o.Tailscale, "peer with devices on this tailnet via the local Tailscale daemon; implies the LAN transport (RHIZOME_TAILSCALE=1)")
+		opts.StringVar(&o.BindAddr, "bind-addr", o.BindAddr, "LAN listen address, default 0.0.0.0, or the Tailscale IP with --tailscale (RHIZOME_BIND_ADDR)")
+		opts.StringVar(&o.AdvertiseAddr, "advertise-addr", o.AdvertiseAddr, "LAN address peers dial, default first private interface, or the Tailscale IP with --tailscale (RHIZOME_ADVERTISE_ADDR)")
+		opts.Var((*listFlag)(&o.Join), "join", "gossip host:port of a node on another device, MagicDNS names allowed; repeatable (RHIZOME_JOIN, comma-separated)")
+		opts.BoolVar(&o.MDNS, "mdns", o.MDNS, "advertise and browse _rhizome._tcp in LAN mode; off by default with --tailscale (RHIZOME_MDNS=0 disables)")
 		opts.StringVar(&o.TokenFile, "token-file", o.TokenFile, "file holding the cluster token to adopt (RHIZOME_TOKEN_FILE; RHIZOME_TOKEN holds it inline)")
+		opts.IntVar(&o.GossipPort, "gossip-port", o.GossipPort, "Tailscale mode: well-known gossip port tried first so other devices can find this one, default 7946 (RHIZOME_GOSSIP_PORT)")
+		opts.DurationVar(&o.Discovery, "discovery-interval", o.Discovery, "Tailscale mode: how often to enumerate tailnet peers, default 20s (RHIZOME_DISCOVERY_INTERVAL)")
 		if err := opts.Parse(os.Args[1:]); err != nil {
 			return err
 		}
@@ -53,6 +60,12 @@ func entry() error {
 		c, err := config.FromFlags(opts)
 		if err != nil {
 			return err
+		}
+		// mDNS cannot cross the tunnel; in Tailscale mode it is opt-in.
+		_, mdnsSet := os.LookupEnv("RHIZOME_MDNS")
+		opts.Visit(func(f *flag.Flag) { mdnsSet = mdnsSet || f.Name == "mdns" })
+		if o.Tailscale && !mdnsSet {
+			o.MDNS = false
 		}
 		switch *agent {
 		case "claude":
@@ -106,9 +119,10 @@ func entry() error {
 	}
 }
 
-// optionsFromEnv reads the LAN environment defaults that flags may override.
-// The runtime directory comes from the resolved configuration, not from here.
-func optionsFromEnv() channel.Options {
+// optionsFromEnv reads the LAN and Tailscale environment defaults that flags
+// may override. The runtime directory comes from the resolved configuration,
+// not from here.
+func optionsFromEnv() (channel.Options, error) {
 	truthy := func(v string) bool {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "1", "true", "yes", "on":
@@ -116,16 +130,30 @@ func optionsFromEnv() channel.Options {
 		}
 		return false
 	}
-	o := channel.Options{LAN: truthy(os.Getenv("RHIZOME_LAN")), BindAddr: os.Getenv("RHIZOME_BIND_ADDR"), AdvertiseAddr: os.Getenv("RHIZOME_ADVERTISE_ADDR"), MDNS: true, Token: os.Getenv("RHIZOME_TOKEN"), TokenFile: os.Getenv("RHIZOME_TOKEN_FILE")}
+	o := channel.Options{LAN: truthy(os.Getenv("RHIZOME_LAN")), Tailscale: truthy(os.Getenv("RHIZOME_TAILSCALE")), BindAddr: os.Getenv("RHIZOME_BIND_ADDR"), AdvertiseAddr: os.Getenv("RHIZOME_ADVERTISE_ADDR"), MDNS: true, Token: os.Getenv("RHIZOME_TOKEN"), TokenFile: os.Getenv("RHIZOME_TOKEN_FILE")}
 	if v, ok := os.LookupEnv("RHIZOME_MDNS"); ok {
 		o.MDNS = truthy(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("RHIZOME_GOSSIP_PORT")); v != "" {
+		port, err := strconv.Atoi(v)
+		if err != nil {
+			return o, fmt.Errorf("RHIZOME_GOSSIP_PORT: %w", err)
+		}
+		o.GossipPort = port
+	}
+	if v := strings.TrimSpace(os.Getenv("RHIZOME_DISCOVERY_INTERVAL")); v != "" {
+		interval, err := time.ParseDuration(v)
+		if err != nil {
+			return o, fmt.Errorf("RHIZOME_DISCOVERY_INTERVAL: %w", err)
+		}
+		o.Discovery = interval
 	}
 	for _, seed := range strings.Split(os.Getenv("RHIZOME_JOIN"), ",") {
 		if seed = strings.TrimSpace(seed); seed != "" {
 			o.Join = append(o.Join, seed)
 		}
 	}
-	return o
+	return o, nil
 }
 
 type listFlag []string

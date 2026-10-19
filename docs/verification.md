@@ -228,3 +228,97 @@ when changing discovery, TLS pinning, the address policy or the mDNS library.
    notice if B's retention expired.
 7. Exit both; verify each device's runtime directory keeps only `token` and
    `registry.lock`.
+
+## Tailscale mode (2026-10-19)
+
+Automated, all on one macOS host:
+
+- `internal/channel/tailscale_test.go`: address-policy table for all three modes
+  (CGNAT boundaries `100.63.255.255`, `100.64.0.1`, `100.127.255.254`,
+  `100.128.0.1`, the Tailscale ULA, RFC 1918, link-local, public);
+  `--lan --advertise-addr 100.x` still rejected with the LAN message; Tailscale
+  mode rejecting a private advertise address and refusing to fall back to an
+  interface address; Tailscale-only options rejected in other modes; parsing of
+  a `tailscale status --json` fixture (self IP, sorted online/offline peers,
+  MagicDNS suffix and flag, MagicDNS-off labels and dial hosts, `NeedsLogin`,
+  empty `TailscaleIPs`, malformed JSON); MagicDNS short-name derivation; startup
+  failing without listeners when the CLI is missing, the backend is `Stopped` or
+  no IPv4 exists; target selection skipping self, offline devices, devices
+  already in the cluster and peers with nothing to dial, by MagicDNS name or by
+  IP; a loopback integration with an injected daemon view: beacon held by the
+  first process, a second process on the busy port reaching the first purely
+  through enumeration (no `--join`, no mDNS), `host` labels, subscribe, announce
+  and direct send over pinned TLS, a `--join localhost:<beacon>` seed resolved
+  preferring IPv4, the holder exiting and a remaining process re-acquiring the
+  beacon with its gossip identity unchanged, and a new device still discovering
+  through it; LAN-mode and Tailscale-mode nodes with the same token on one device
+  refusing each other's gossip and never listing each other; a wrong-token
+  tailnet device logged, retried and never a peer.
+- `go vet ./...`, `go test -race ./...` (three consecutive runs),
+  `git diff --check`, `python3 scripts/smoke_stdio.py` with and without `--lan`.
+  `govulncheck ./...` reports only pre-existing advisories in the unchanged
+  `grpc` and `x/net` dependencies.
+
+Single device on a real tailnet (macOS, standalone Tailscale 1.104.1, MagicDNS
+on, one other device online but not running Rhizome):
+
+- `rhizome mcp --tailscale`: `ready` with `mode=tailscale`, bind and advertise
+  `100.93.74.31`, `magicdns=delta.tail2fdf06.ts.net`, `beacon_port=7946`. `lsof`
+  showed the beacon listening on `100.93.74.31:7946` only, coexisting with the
+  demo's unauthenticated `127.0.0.1:7946`.
+- The first tick enumerated the other device and tried
+  `nicos-macbook-pro.tail2fdf06.ts.net:7946`: MagicDNS resolved it to
+  `100.114.80.29`, the address passed the policy, and the join was refused
+  (`connection refused`), logged once at warn and retried every tick. The
+  process kept running.
+- A second process on the same device logged `beacon_busy` with
+  `beacon_port=ephemeral`, and its `--join delta.tail2fdf06.ts.net:7946`
+  produced `seed_joined addr=100.93.74.31:7946` through the first process's
+  beacon forwarder.
+- When the first process exited, the second logged `beacon_acquired` on its next
+  tick with its gossip endpoint unchanged.
+- `--lan --advertise-addr 100.93.74.31` still fails with `must be a loopback,
+  private or link-local IP`. `RHIZOME_TAILSCALE=1 RHIZOME_GOSSIP_PORT=7950
+  RHIZOME_DISCOVERY_INTERVAL=30s` matched the flags. `--tailscale --mdns`
+  reported `mdns=true`; without it, `mdns=false`.
+- Not reproducible here: a missing CLI (the macOS app bundle is found even with
+  an empty `PATH`), a stopped daemon and a logged-out state. Those paths are
+  covered by the fixture tests.
+
+Not verified here: two physically separate devices. Run the steps below on
+macOS plus one Linux or macOS device and record the result in the PR.
+
+### Two-device Tailscale steps
+
+1. Both devices on one tailnet, `tailscale status` showing each other online.
+   On device A, `./rhizome token`; copy the value to device B. Build a checkout
+   containing Tailscale mode on both.
+2. Start `claude --dangerously-load-development-channels server:rhizome` on each
+   with the project `.mcp.json` carrying `RHIZOME_TAILSCALE=1` (and
+   `RHIZOME_TOKEN` on B's first run). No `--join`, no `--advertise-addr`. Check
+   each stderr `ready` line: `mode=tailscale`, the device's `100.x` address, its
+   MagicDNS name and `beacon_port=7946`.
+3. Within one discovery interval (20 s), call `list_sessions` on each after the
+   first prompt. Verify the other device's session appears with `host` equal to
+   its MagicDNS short name, a `100.x` `endpoint` and a 64-character
+   `cert_fingerprint`. The joining side's stderr shows
+   `seed_joined source=tailscale addr=100.x.y.z:7946`.
+4. Subscribe from A to B's exact session ID, publish a marker from B and verify
+   it arrives in A with B's metadata. Send a direct marker from B to A without a
+   subscription and verify acceptance and delivery.
+5. Start a third process on A with A's runtime directory (same token): stderr
+   shows `beacon_busy`, and B's `list_sessions` lists it once bound. Exit A's
+   first process: the third logs `beacon_acquired` within one interval, and a
+   fresh process on B still joins A via `seed_joined`.
+6. Start a process with a different token (`RHIZOME_RUNTIME_DIR` to an empty
+   private directory, no `RHIZOME_TOKEN`). Verify it logs
+   `tailnet_peer_unreachable` with `No installed keys could decrypt`, never lists
+   the cluster's sessions, and is never listed by the cluster.
+7. If the tailnet ACL is not "allow all", confirm the devices can reach each
+   other's beacon port and ephemeral ports (an own-devices rule suffices);
+   otherwise the join in step 3 times out and is retried each tick.
+8. Run `tailscale down` on B and start `rhizome mcp --tailscale`: it must exit
+   non-zero with `tailscale is not running (state "Stopped")` and bind nothing.
+   Bring Tailscale back up before step 9.
+9. Exit both; verify each device's runtime directory keeps only `token` and
+   `registry.lock`.

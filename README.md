@@ -216,7 +216,8 @@ of scope; same-network devices are covered by LAN mode below.
 
 LAN mode peers Rhizome processes on different devices on the same network. It is
 opt-in and still peer-to-peer: no broker, no rendezvous service. Without it,
-behavior is exactly the loopback-only cluster above.
+behavior is exactly the loopback-only cluster above. For devices on a Tailscale
+tailnet, see [Tailscale mode](#tailscale-mode) below.
 
 ```sh
 # Device A: create or print this machine's cluster token.
@@ -272,9 +273,90 @@ messages to any of them. There is no per-device or per-user authorization inside
 cluster. Use a per-team token and treat it like a password.
 
 macOS prompts to allow incoming connections for an unsigned binary bound to
-`0.0.0.0`; allow it or LAN peers cannot reach you. On a Tailscale or WireGuard
-overlay, bind and advertise the overlay address (its ranges are private); TLS and
-the token still apply, so the design does not depend on the overlay.
+`0.0.0.0`; allow it or LAN peers cannot reach you. Tailscale IPv4 addresses are
+CGNAT space (`100.64.0.0/10`), which the LAN policy does not treat as private, so
+`--lan --advertise-addr 100.x.y.z` is rejected; use Tailscale mode below. On
+another WireGuard overlay whose addresses are RFC 1918 or ULA, bind and advertise
+the overlay address; TLS and the token still apply, so the design does not depend
+on the overlay.
+
+### Tailscale mode
+
+Tailscale mode peers Rhizome processes across a tailnet with no `--join`, no
+copied endpoints and no `--advertise-addr`. It relies on the host's running
+Tailscale daemon (not an embedded `tsnet` node) and implies the LAN transport:
+TLS on gRPC, fingerprint pinning, encrypted gossip. Every device must run a build
+with Tailscale mode and the same token.
+
+```sh
+# Device A: print the cluster token; copy it to every device.
+./rhizome token
+
+# Every device:
+RHIZOME_TOKEN=<token> ./rhizome mcp --tailscale             # flag
+RHIZOME_TOKEN=<token> RHIZOME_TAILSCALE=1 ./rhizome mcp     # or env, for .mcp.json
+```
+
+| Flag / env | Default | Meaning |
+| --- | --- | --- |
+| `--tailscale` / `RHIZOME_TAILSCALE=1` | off | Bind and advertise the Tailscale IP, enumerate tailnet peers, LAN transport. Takes precedence over `--lan`. |
+| `--gossip-port` / `RHIZOME_GOSSIP_PORT` | `7946` | Beacon port each device tries to hold (below). |
+| `--discovery-interval` / `RHIZOME_DISCOVERY_INTERVAL` | `20s` | How often online tailnet peers are enumerated and joined. |
+| `--bind-addr`, `--advertise-addr` | this device's Tailscale IPv4 | Explicit values still win. `--bind-addr 0.0.0.0` exposes the ports on every interface and brings back the macOS prompt. |
+| `--mdns` | off | mDNS cannot cross the tunnel; pass `--mdns` to force it on for mixed setups. |
+| `--join host:port` | none | Still works, with MagicDNS names: `--join desktop.<tailnet>.ts.net:7946`. |
+
+At startup Rhizome runs `tailscale status --json` (the CLI is looked up on `PATH`,
+then at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`; verified with the
+standalone macOS build 1.104) and binds gRPC and gossip to this device's Tailscale
+IPv4, so nothing is exposed on the physical LAN. The `host` label becomes the
+MagicDNS short name (`delta` for `delta.tail2fdf06.ts.net`). Every discovery
+interval it enumerates online peers and, for each device not yet in the cluster,
+attempts a gossip join against `<magicdns name>:<beacon port>` (the Tailscale IP
+when MagicDNS is disabled). As with mDNS and `--join`, memberlist's token-keyed
+push/pull is the authentication step: a device without Rhizome, or with another
+token, fails to join, is logged as `tailnet_peer_unreachable` (once at warn, then
+at debug) and is retried on the next tick. Gossip uses memberlist's WAN profile so
+DERP-relayed peers do not flap.
+
+**Beacon port.** MagicDNS has no SRV records, so a remote device needs a
+predictable port to try. gRPC and gossip ports stay ephemeral per process; in
+addition, the first process on a device listens on the beacon port (default 7946)
+and forwards those TCP connections to its own gossip listener. One reachable
+process per device is enough: the join returns the whole membership with real
+addresses. Later processes on the same device log `beacon_busy`, are reachable
+through the holder, and re-acquire the port on their next discovery tick after the
+holder exits, so the device stays discoverable. The `demo` subcommand's
+unauthenticated loopback cluster also uses 7946, but on `127.0.0.1`; it cannot
+join a Tailscale cluster.
+
+**Tailnet ACLs.** Discovery needs TCP to the beacon port; gossip (TCP and UDP)
+and gRPC (TCP) then use ephemeral ports on the Tailscale IPs, so devices in a
+cluster must reach each other on any port. The default "allow all" policy and the
+usual own-devices rule both suffice:
+
+```json
+{"action": "accept", "src": ["autogroup:member"], "dst": ["autogroup:self:*"]}
+```
+
+**Trust boundary.** The cluster token remains the only credential; Tailscale node
+identity and ACL tags are not used for authorization. The boundary is "anyone
+holding the token on this tailnet"; ACLs can narrow which devices reach the ports
+but never widen access. Processes in local, LAN and Tailscale mode never peer,
+even on one device: Tailscale mode accepts only loopback and Tailscale addresses
+(`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), plain LAN mode still rejects `100.x`,
+and the gossip key is derived per mode. Nodes built before this feature drop
+Tailscale-mode peers by address policy.
+
+**Failures are loud.** `rhizome mcp --tailscale` exits non-zero without binding
+anything when the CLI is missing (`tailscale CLI not found on PATH`), the daemon
+is stopped or logged out (`tailscale is not running (state "NeedsLogin")`), or the
+device has no Tailscale IPv4 (`this device has no Tailscale IPv4 address`). It
+never falls back to loopback or `0.0.0.0`. When MagicDNS is disabled on the
+tailnet it logs `magicdns_disabled` once, dials peers by Tailscale IP and labels
+`host` with the Tailscale hostname. The `ready` line reports `mode=tailscale`,
+`tailscale_ip`, `magicdns`, `beacon_port` (or `ephemeral` when another process
+holds it) and `discovery_interval`.
 
 ## Activity, replay and bounded delivery
 
