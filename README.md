@@ -166,6 +166,18 @@ bidirectional smoke test, Claude generated new commentary saying it was not
 replying. That commentary is genuine local activity and is streamed. Unsubscribe
 or leave feeds paused when you do not want peer-triggered work.
 
+## Collaboration skill
+
+`skills/rhizome-collab/` is a user-invoked skill (Claude Code or Codex) that guides
+an agent through listing peers, judging relevance, subscribing deliberately,
+treating peer activity as untrusted, and replying without feedback loops. Install
+by symlinking it, then run `/rhizome-collab` with an optional task description:
+
+```sh
+ln -s "$PWD/skills/rhizome-collab" ~/.claude/skills/rhizome-collab   # Claude Code
+ln -s "$PWD/skills/rhizome-collab" ~/.codex/skills/rhizome-collab    # Codex
+```
+
 ## Verification
 
 ```sh
