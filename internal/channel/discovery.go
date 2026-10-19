@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"github.com/hashicorp/memberlist"
-	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"rhizome/internal/localstate"
 	pb "rhizome/proto"
 )
 
@@ -88,26 +88,7 @@ func (n *Node) probe(ctx context.Context, i *pb.Identity) (*pb.Identity, error) 
 	}
 	return actual, nil
 }
-func secureDir(dir string) error {
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	st, err := os.Lstat(dir)
-	if err != nil {
-		return err
-	}
-	var stat unix.Stat_t
-	if err := unix.Lstat(dir, &stat); err != nil {
-		return err
-	}
-	if stat.Uid != uint32(os.Getuid()) {
-		return errors.New("runtime directory must belong to current user")
-	}
-	if !st.IsDir() || st.Mode().Perm()&0077 != 0 {
-		return errors.New("runtime directory must be private (0700), not a symlink")
-	}
-	return nil
-}
+func secureDir(dir string) error { return localstate.SecureDir(dir) }
 func (n *Node) start(runtime string) error {
 	if runtime == "" {
 		home, err := os.UserHomeDir()
@@ -120,15 +101,11 @@ func (n *Node) start(runtime string) error {
 		return err
 	}
 	n.runtime = runtime
-	lock, err := os.OpenFile(filepath.Join(runtime, "registry.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := localstate.Lock(filepath.Join(runtime, "registry.lock"), true)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
-	if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
-		return err
-	}
-	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
 	tokenPath := filepath.Join(runtime, "token")
 	b, err := os.ReadFile(tokenPath)
 	if os.IsNotExist(err) {
@@ -138,12 +115,8 @@ func (n *Node) start(runtime string) error {
 	if err != nil {
 		return err
 	}
-	st, err := os.Lstat(tokenPath)
-	if err != nil {
+	if err := localstate.PrivateFile(tokenPath); err != nil {
 		return err
-	}
-	if !st.Mode().IsRegular() || st.Mode().Perm()&0077 != 0 {
-		return errors.New("token must be a private regular file")
 	}
 	if len(b) != 64 {
 		return errors.New("invalid cluster token length")
@@ -203,6 +176,13 @@ func (n *Node) start(runtime string) error {
 		return err
 	}
 	for _, path := range files {
+		base := filepath.Base(path)
+		if len(base) != 37 {
+			continue
+		}
+		if _, err := hex.DecodeString(base[:32]); err != nil {
+			continue
+		}
 		raw, e := os.ReadFile(path)
 		var peer pb.Identity
 		if e != nil || json.Unmarshal(raw, &peer) != nil {
@@ -266,6 +246,7 @@ func (n *Node) peers() []*pb.Identity {
 }
 func (n *Node) resolve(ctx context.Context, session string) (*pb.Identity, error) {
 	var found *pb.Identity
+	var observed *pb.Identity
 	for _, i := range n.peers() {
 		if i.SessionId != session {
 			continue
@@ -274,10 +255,20 @@ func (n *Node) resolve(ctx context.Context, session string) (*pb.Identity, error
 		if err != nil || actual.SessionId != session {
 			continue
 		}
+		if actual.ObservationOnly {
+			if observed != nil {
+				return nil, fmt.Errorf("ambiguous session %q: multiple observers", session)
+			}
+			observed = actual
+			continue
+		}
 		if found != nil {
 			return nil, fmt.Errorf("ambiguous session %q: multiple live nodes", session)
 		}
 		found = actual
+	}
+	if found == nil {
+		found = observed
 	}
 	if found == nil {
 		return nil, fmt.Errorf("session %q is not currently available", session)

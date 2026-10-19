@@ -6,7 +6,8 @@ Rhizome is a Go MCP bridge for local Claude Code and Codex sessions. It binds
 verified session identities, collects selected activity, discovers peers through
 memberlist, and delivers events over authenticated loopback gRPC. Claude uses
 channel notifications; Codex uses per-thread nodes and local queue delivery.
-There is no broker or background device-wide transcript scanner.
+An optional per-user service observes Claude/Codex logs independently of MCP;
+see [docs/service.md](docs/service.md) for lifecycle, boundaries, and validation.
 
 Start with [README.md](README.md) for behavior and setup,
 [docs/codex.md](docs/codex.md) for Codex contracts, and
@@ -14,7 +15,8 @@ Start with [README.md](README.md) for behavior and setup,
 
 | Path | Responsibility |
 | --- | --- |
-| `main.go` | CLI dispatch, including MCP and the separate legacy demo. |
+| `main.go`, `service.go` | CLI dispatch, MCP, setup, service lifecycle and legacy demo. |
+| `internal/service/`, `internal/localstate/` | Native user-service definitions, configuration, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
 | `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, and session naming (`name.go`). |
 | `proto/` | Protocol definitions and generated Go bindings. |
@@ -33,14 +35,15 @@ lists them. Use `PROTOC=/path/to/protoc task proto` to override the compiler.
 task build                         # Build the rhizome executable.
 task check                         # go vet ./... and go test -race ./...
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
+python3 scripts/smoke_service.py    # Separate observer/MCP processes and handoffs.
 git diff --check                   # Check whitespace errors.
 task proto                         # Requires protoc; installs pinned generators in .bin.
 python3 scripts/smoke_codex.py --help # Inspect live smoke prerequisites/options.
 ```
 
 Before marking a change done, build, check (including race tests), the stdio
-smoke, and the whitespace check must pass. Format touched Go files with `gofmt`;
-run targeted package tests first. Regenerate protobufs only for protocol changes
+smoke, service smoke, and the whitespace check must pass. Format touched Go files
+with `gofmt`; run targeted package tests first. Regenerate protobufs only for protocol changes
 and review the generated diff. Check all documentation links and paths.
 
 For Codex integration changes, follow the opt-in live smoke instructions in
@@ -90,9 +93,9 @@ lands, implement and verify that option and update this guidance in the same cha
   derive a name from prompts or transcript content, and a name-only change must
   not touch generation, streams, subscriptions, cursors, or queues
   (`internal/channel/name.go`, README "Session names").
-- **Never manually invoke `observe_session` or invent an ID.** Trusted hooks and
-  verified transport identity own binding; synthetic test harnesses are not a user
-  workflow (`internal/channel/node.go`, `internal/channel/codex.go`).
+- **Never manually invoke `observe_session` or invent an ID.** Trusted hooks,
+  verified transport identity, and authoritative log metadata own binding;
+  synthetic test harnesses are not a user workflow (`internal/channel/node.go`, `internal/channel/codex.go`).
 - **Never log or advertise the cluster token.** It authenticates trusted peers;
   keep runtime files private (`internal/channel/discovery.go`, README).
 - **Preserve loopback-only defaults and behavior without `--lan`.** Current MCP
@@ -115,6 +118,13 @@ lands, implement and verify that option and update this guidance in the same cha
 - **Codex collection stays read-only and local.** Do not start/restart its daemon
   or mutate threads through collection; preserve per-thread isolation and bounded
   polling (`internal/channel/codex_rpc.go`, [docs/codex.md](docs/codex.md)).
+- **Coordinate collection across processes.** Direct integrations acquire the
+  per-session OS lease before baselining. Passive scans yield and expose handoff
+  gaps. Never route delivery to `observation_only` identities or replay another
+  collector's history on handoff. All local processes must share runtime scope.
+- **Native watches drive observer collection.** Do not add normal-path tree
+  polling. Keep file/directory/session limits and visible degraded coverage.
+  See `internal/channel/observer.go`, `ownership.go`, and `docs/service.md`.
 
 ## Git and PR conventions
 

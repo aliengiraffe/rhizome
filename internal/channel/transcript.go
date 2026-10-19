@@ -19,6 +19,9 @@ const maxRecord = 2 * 1024 * 1024
 
 // Only this collector's goroutine accesses offset, tail and normalization state.
 type collector struct {
+	passive      bool
+	agent        string
+	more         bool
 	path         string
 	offset       int64
 	info         os.FileInfo
@@ -105,6 +108,7 @@ func (c *collector) run(ctx context.Context, n *Node, gen uint64) {
 	}
 }
 func (c *collector) scan(n *Node, gen uint64) {
+	c.more = false
 	f, err := os.Open(c.path)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -122,6 +126,16 @@ func (c *collector) scan(n *Node, gen uint64) {
 		b := make([]byte, len(c.anchor))
 		_, err = f.ReadAt(b, c.offset-int64(len(b)))
 		changed = err != nil || !bytes.Equal(b, c.anchor)
+	}
+	if changed && c.passive {
+		c.offset = st.Size()
+		c.tail = nil
+		c.dropping = true
+		c.peerResponse = true
+		c.info = st
+		c.setAnchor(f)
+		n.activity(gen, "gap", "Observed log replaced or truncated; resumed at current EOF")
+		return
 	}
 	if changed {
 		c.offset = 0
@@ -156,6 +170,7 @@ func (c *collector) scan(n *Node, gen uint64) {
 		}
 	}
 	c.setAnchor(f)
+	c.more = c.offset < st.Size()
 }
 func (c *collector) consume(b []byte, n *Node, gen uint64) {
 	for len(b) > 0 {
@@ -272,6 +287,10 @@ type block struct {
 }
 
 func (c *collector) normalize(line []byte, n *Node, gen uint64) {
+	if c.agent == "codex" {
+		c.normalizeCodexLog(line, n, gen)
+		return
+	}
 	var r struct {
 		Type      string `json:"type"`
 		UUID      string `json:"uuid"`

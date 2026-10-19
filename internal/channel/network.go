@@ -90,6 +90,9 @@ func (n *Node) Subscribe(req *pb.FollowRequest, ss pb.Channel_SubscribeServer) e
 	}
 }
 func (n *Node) Send(ctx context.Context, req *pb.SendRequest) (*pb.Acceptance, error) {
+	if n.local().ObservationOnly {
+		return nil, status.Error(codes.FailedPrecondition, "session is observation-only; configure a Rhizome MCP/channel integration for delivery")
+	}
 	if req.Event == nil || req.Event.Kind != "direct" || req.Event.MessageId == "" || len(req.Event.MessageId) > 128 || len(req.Event.Text) > maxText || strings.TrimSpace(req.Event.Text) == "" {
 		return nil, status.Error(codes.InvalidArgument, "invalid direct message")
 	}
@@ -199,6 +202,7 @@ func (n *Node) unsubscribe(session string) error {
 }
 func (n *Node) follow(ctx context.Context, session string, f *feed, generation uint64) {
 	var streamID string
+	var previous *pb.Identity
 	var sequence uint64
 	backoff := 250 * time.Millisecond
 	for ctx.Err() == nil {
@@ -207,6 +211,17 @@ func (n *Node) follow(ctx context.Context, session string, f *feed, generation u
 			if err != nil {
 				return err
 			}
+			if previous != nil && !matches(previous, target) && (previous.ObservationOnly || target.ObservationOnly) {
+				// Independent collectors do not share replay cursors. Starting
+				// live prevents replay of activity already delivered by the old owner.
+				streamID = ""
+				sequence = 0
+				n.mu.Lock()
+				f.gaps++
+				n.enqueueLocked(&pb.Event{SessionId: session, NodeId: target.NodeId, Generation: target.Generation, StreamId: "handoff", MessageId: id(), Kind: "gap", Text: "Collection owner changed; subscription resumed live", UnixMillis: time.Now().UnixMilli()}, session, f.token, generation)
+				n.mu.Unlock()
+			}
+			previous = target
 			sender := n.local()
 			if sender.Generation != generation {
 				return context.Canceled

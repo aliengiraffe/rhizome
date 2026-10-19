@@ -116,7 +116,7 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), claude bool, 
 		if err := n.bound(); err != nil {
 			return result(state, nil)
 		}
-		peers := n.peers()
+		peers := logicalPeers(n.peers())
 		counts := map[string]int{}
 		for _, p := range peers {
 			if p.SessionId != "" {
@@ -133,10 +133,13 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), claude bool, 
 				p.AgentType = "claude"
 			}
 			status := "live"
+			if p.ObservationOnly {
+				status = "observed (liveness unknown)"
+			}
 			if counts[p.SessionId] > 1 {
 				status = "ambiguous"
 			}
-			sessions = append(sessions, map[string]any{"identity": p, "status": status})
+			sessions = append(sessions, map[string]any{"identity": p, "status": status, "delivery_capable": !p.ObservationOnly})
 		}
 		state["sessions"] = sessions
 		return result(state, nil)

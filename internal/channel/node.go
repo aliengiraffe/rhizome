@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -69,14 +70,16 @@ type pending struct {
 	token        string
 	generation   uint64
 }
-type counters struct{ Received, Queued, Written, Dropped, Pauses, ParserSkips, QueueHandoffs, QueueFailures, CollectionGaps uint64 }
+type counters struct{ Suppressed, Received, Queued, Written, Dropped, Pauses, ParserSkips, QueueHandoffs, QueueFailures, CollectionGaps uint64 }
 type Node struct {
-	codex           *codexCollector
-	collectionState string
-	deliveryError   string
-	deliveryReady   bool
-	directSequence  uint64
-	discovered      map[string]*pb.Identity
+	collectionLease  *os.File
+	suppressActivity bool
+	codex            *codexCollector
+	collectionState  string
+	deliveryError    string
+	deliveryReady    bool
+	directSequence   uint64
+	discovered       map[string]*pb.Identity
 	pb.UnimplementedChannelServer
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -165,9 +168,18 @@ func (n *Node) observe(h Hook) error {
 		return errors.New("transcript path changed for current session; refusing unrelated file")
 	}
 	if old != h.SessionID {
+		// Serialize the baseline with passive scans before advertising this binding.
+		lease, err := n.claimCollection(h.SessionID)
+		if err != nil {
+			n.mu.Unlock()
+			return err
+		}
 		// Establish the baseline synchronously, before any hook returns.
 		c, err := newCollector(h.TranscriptPath)
 		if err != nil {
+			if lease != nil {
+				lease.Close()
+			}
 			n.mu.Unlock()
 			return err
 		}
@@ -193,6 +205,10 @@ func (n *Node) observe(h Hook) error {
 		n.paused = false
 		n.rearmed = map[string]bool{}
 		n.notifications = nil
+		if n.collectionLease != nil {
+			n.collectionLease.Close()
+		}
+		n.collectionLease = lease
 		n.identity.SessionId = h.SessionID
 		n.identity.Generation++
 		n.names = nameState{explicit: loadOverride(n.runtime, h.SessionID)}
@@ -253,6 +269,10 @@ func (n *Node) publishLocked(kind, text, reply string) *pb.Event {
 func (n *Node) activity(gen uint64, kind, text string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.suppressActivity {
+		n.stats.Suppressed++
+		return
+	}
 	if n.identity.Generation == gen && n.identity.SessionId != "" {
 		n.publishLocked(kind, text, "")
 	}
@@ -299,6 +319,9 @@ func (n *Node) close() {
 	n.wg.Wait()
 	if n.codex != nil {
 		n.codex.reader.close()
+	}
+	if n.collectionLease != nil {
+		n.collectionLease.Close()
 	}
 	n.unregister()
 }

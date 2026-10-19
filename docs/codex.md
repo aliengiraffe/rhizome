@@ -77,7 +77,11 @@ The collector connects by WebSocket over the **existing** local socket at
 `$CODEX_HOME/app-server-control/app-server-control.sock`. It sends only the
 initialization handshake and `thread/read`, `thread/turns/list`, and
 `thread/items/list`. It never starts/restarts a daemon, resumes/loads a thread,
-starts a turn, steers work, or answers approvals. No transcript file is opened.
+starts a turn, steers work, or answers approvals. No transcript file is opened by this direct collector. The optional
+[background observer](service.md) reads Codex JSONL logs without an MCP connection
+and yields collection to a direct integration through the shared runtime lease.
+Windows service observation does not add a Windows transport to this Unix-socket
+App Server delivery integration.
 
 The first successful history read establishes a live baseline. Polling runs every
 second, with coalesced hook wake-ups and exponential reconnect backoff with jitter.
