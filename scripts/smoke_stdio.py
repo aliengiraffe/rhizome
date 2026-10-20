@@ -6,11 +6,13 @@ as separate devices would, shares one token, binds LAN mode to loopback with mDN
 off, and seeds gossip with --join; this exercises pinned TLS and cross-registry
 discovery on one host.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
 import queue
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -23,12 +25,12 @@ LAN = '--lan' in sys.argv[1:] or os.environ.get('RHIZOME_SMOKE_LAN') == '1'
 class Client:
     count = 0
 
-    def __init__(self, directory, join=None, run=None, env=None):
+    def __init__(self, directory, join=None, run=None, env=None, agent='claude', cwd=None):
         Client.count += 1
         if run is None:  # A restarted process on one device keeps its runtime directory.
             run = directory / ('run-%d' % Client.count if LAN else 'run')
         self.run = run
-        args = [str(ROOT / 'rhizome'), 'mcp']
+        args = [str(ROOT / 'rhizome'), 'mcp'] + ([] if agent == 'claude' else ['--agent', agent])
         # Isolate every process from the developer's ~/.rhizome/config.toml: an
         # explicit hostname also verifies shared labels never affect session routing.
         isolated = directory / 'smoke-config.toml'
@@ -44,7 +46,7 @@ class Client:
             if token.exists():
                 env['RHIZOME_TOKEN_FILE'] = str(token)
         self.log = tempfile.TemporaryFile()
-        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.proc = subprocess.Popen(args, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=self.log, text=True, env=env)
         self.messages = queue.Queue()
         self.events = []
@@ -60,7 +62,10 @@ class Client:
         init = self.call('initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
                                       'clientInfo': {'name': 'stdio-smoke', 'version': '1'}})
         assert init['protocolVersion'] == '2025-11-25'
-        assert init['capabilities']['experimental']['claude/channel'] == {}
+        if agent == 'claude':
+            assert init['capabilities']['experimental']['claude/channel'] == {}
+        else:
+            assert 'claude/channel' not in init['capabilities'].get('experimental', {})
         self.write({'method': 'notifications/initialized'})
         if LAN and not token.exists():
             shutil.copy(run / 'token', token)  # The first device's token seeds the rest.
@@ -89,8 +94,11 @@ class Client:
                 return msg['result']
             self.events.append(msg)
 
-    def tool(self, name, args=None):
-        result = self.call('tools/call', {'name': name, 'arguments': args or {}})
+    def tool(self, name, args=None, meta=None):
+        params = {'name': name, 'arguments': args or {}}
+        if meta:
+            params['_meta'] = meta
+        result = self.call('tools/call', params)
         assert not result.get('isError'), result
         return json.loads(result['content'][0]['text'])
 
@@ -99,6 +107,14 @@ class Client:
         result = self.call('tools/call', {'name': name, 'arguments': args or {}})
         assert result.get('isError'), result
         return json.loads(result['content'][0]['text'])['error']
+
+    def tool_error(self, name, args=None, meta=None):
+        params = {'name': name, 'arguments': args or {}}
+        if meta:
+            params['_meta'] = meta
+        result = self.call('tools/call', params)
+        assert result.get('isError'), result
+        return result['content'][0]['text']
 
     def bind(self, session, directory):
         self.tool('observe_session', {'session_id': session, 'transcript_path': str(directory / (session + '.jsonl')),
@@ -127,6 +143,66 @@ def until(check):
             return
         time.sleep(.05)
     raise AssertionError('condition timed out')
+
+class FakePlugin:
+    """Speaks the OpenCode plugin side of the bridge protocol."""
+    def __init__(self, path):
+        until(lambda: path.exists())
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(str(path))
+        self.sock.settimeout(10)
+        self.file = self.sock.makefile('r')
+        self.send({'type': 'hello', 'version': 1, 'opencode': 'smoke'})
+
+    def send(self, frame):
+        self.sock.sendall((json.dumps(frame) + '\n').encode())
+
+    def expect(self, kind):
+        while True:
+            frame = json.loads(self.file.readline())
+            if frame['type'] == kind:
+                return frame
+
+    def close(self):
+        self.file.close()
+        self.sock.close()
+
+def opencode_scenario(directory, claude):
+    project = directory / 'oc'
+    project.mkdir()
+    oc = Client(directory, join=claude.gossip(), agent='opencode', cwd=project)
+    try:
+        digest = hashlib.sha256(os.path.realpath(project).encode()).hexdigest()[:12]
+        path = oc.run / f'opencode-{os.getpid()}-{digest}.sock'
+        names = [t['name'] for t in oc.call('tools/list', {})['tools']]
+        assert 'observe_session' not in names and len(names) == 12, names
+        assert 'verified _meta' in oc.tool_error('list_sessions')
+        alpha = {'ai.opencode/sessionID': 'ses_smokeAlpha1'}
+        assert 'rhizome setup --agents opencode' in oc.tool_error('list_sessions', meta=alpha)
+        plugin = FakePlugin(path)
+        plugin.send({'type': 'bind', 'sessionID': 'ses_smokeChild', 'parentID': 'ses_smokeAlpha1', 'directory': str(project), 'title': 'child'})
+        plugin.send({'type': 'bind', 'sessionID': 'ses_smokeAlpha1', 'parentID': '', 'directory': str(project), 'title': 'smoke title'})
+        until(lambda: not oc.call('tools/call', {'name': 'list_sessions', 'arguments': {}, '_meta': alpha}).get('isError'))
+        assert oc.tool('list_sessions', meta=alpha)['identity']['session_name'] == 'smoke title'
+        assert 'UNBOUND' in oc.tool_error('list_sessions', meta={'ai.opencode/sessionID': 'ses_smokeChild'})
+        until(lambda: any(s['identity']['session_id'] == 'ses_smokeAlpha1' and s['identity']['agent_type'] == 'opencode'
+                          for s in claude.tool('list_sessions')['sessions']))
+        claude.tool('subscribe', {'session_id': 'ses_smokeAlpha1'})
+        until(lambda: claude.tool('list_sessions')['subscriptions']['ses_smokeAlpha1']['state'] == 'following')
+        plugin.send({'type': 'input', 'sessionID': 'ses_smokeAlpha1', 'kind': 'user', 'rhizome': False})
+        plugin.send({'type': 'text', 'sessionID': 'ses_smokeAlpha1', 'messageID': 'm1', 'text': 'opencode-marker'})
+        assert claude.event('opencode-marker')['meta']['session_id'] == 'ses_smokeAlpha1'
+        claude.tool('send', {'session_id': 'ses_smokeAlpha1', 'text': 'deliver-marker'})
+        frame = plugin.expect('deliver')
+        assert frame['sessionID'] == 'ses_smokeAlpha1' and 'deliver-marker' in frame['text'] and '<rhizome-peer-event>' in frame['text']
+        plugin.send({'type': 'ack', 'id': frame['id']})
+        until(lambda: oc.tool('list_sessions', meta=alpha)['counters']['Written'] == 1)
+        plugin.close()
+        until(lambda: oc.tool('list_sessions', meta=alpha)['collection_state'] == 'plugin disconnected')
+        claude.tool('unsubscribe', {'session_id': 'ses_smokeAlpha1'})
+    finally:
+        oc.close()
+    assert not path.exists(), 'bridge socket left behind'
 
 def main():
     clients = []
@@ -178,11 +254,12 @@ def main():
                 'session_id': 'beta', 'transcript_path': str(directory / 'beta.jsonl'),
                 'cwd': str(directory), 'hook_event_name': 'SessionStart'}})
             assert result['isError']
+            opencode_scenario(directory, b)
         finally:
             for client in clients:
                 client.close()
         assert not list(directory.glob('run*/*.json')), 'EOF left registrations'
-    print('PASS%s: MCP stdout, unbound startup, two-session routing, session names, transcript, restart gap, rebind and EOF'
+    print('PASS%s: MCP stdout, unbound startup, two-session routing, session names, transcript, restart gap, rebind, EOF, OpenCode bridge identity, activity and delivery'
           % (' (LAN mode, pinned TLS, separate registries)' if LAN else ''))
 
 if __name__ == '__main__':
