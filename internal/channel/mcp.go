@@ -111,6 +111,7 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), claude bool, 
 		})
 	}
 
+	addFileTools(s, resolve)
 	mcp.AddTool(s, &mcp.Tool{Name: "list_sessions", Description: "List bound local sessions, exact IDs, untrusted session_name labels, conflicts, subscriptions and operational status."}, func(ctx context.Context, r *mcp.CallToolRequest, in empty) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)
 		if resolveErr != nil {

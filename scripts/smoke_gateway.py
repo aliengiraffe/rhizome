@@ -67,6 +67,24 @@ def main():
             paired = json.loads(command(b, 'join', code))
             command(c, 'join', code, ok=False)
             until(lambda: 'gateway-b' in sessions(ca) and 'gateway-a' in sessions(cb))
+            # Explicit binary attachment: offer metadata, immutable staging, acceptance,
+            # verified local file, sender receipt, CLI listing and cancellation.
+            payload = bytes(range(256)) * 2051
+            source = base / 'a' / 'attachment.bin'
+            source.write_bytes(payload)
+            offer = ca.tool('send_file', {'session_id': 'gateway-b', 'path': str(source)})
+            assert offer['state'] == 'offered'
+            cb.event('File offered:')
+            source.write_bytes(b'changed after offer')
+            offers = cb.tool('list_files')
+            assert offers[0]['id'] == offer['id'] and 'path' not in offers[0]
+            received = cb.tool('accept_file', {'transfer_id': offer['id']})
+            assert received['state'] == 'verified' and received['receipt_confirmed']
+            assert Path(received['path']).read_bytes() == payload
+            assert ca.tool('list_files')[0]['state'] == 'verified'
+            assert json.loads(command(b, 'files', 'list', '--session', 'gateway-b'))[0]['id'] == offer['id']
+            cb.tool('cancel_file', {'transfer_id': offer['id']})
+            assert not Path(received['path']).exists()
             ca.tool('send', {'session_id': 'gateway-b', 'text': 'gateway forward'})
             cb.event('gateway forward')
             cb.tool('send', {'session_id': 'gateway-a', 'text': 'gateway reverse'})
@@ -95,7 +113,7 @@ def main():
             until(lambda: 'gateway-a' not in sessions(cb))
             assert cb.call('tools/call', {'name': 'send', 'arguments': {'session_id': 'gateway-a', 'text': 'must fail'}}).get('isError')
             assert [(h['run'] / 'token').read_bytes() for h in hosts] == tokens
-            print('gateway smoke: PASS (pairing, distinct tokens, bidirectional routing, activity, restart, non-transitivity, revocation)')
+            print('gateway smoke: PASS (pairing, distinct tokens, bidirectional routing, file transfers, activity, restart, non-transitivity, revocation)')
         finally:
             for client in clients:
                 client.close()

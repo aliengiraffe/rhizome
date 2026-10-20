@@ -176,3 +176,10 @@ Verify private addressing, unchanged local token files, reconnect, withdrawal,
 and failed post-revocation sends. Follow [Codex live smoke prerequisites](codex.md)
 when validating actual Codex delivery; synthetic MCP tests do not substitute for
 that opt-in workflow.
+
+## File attachments
+
+Paired hosts can offer files to exact live sessions through the authenticated
+`/v1/files` TLS endpoint. Older gateways return an unsupported-endpoint error;
+normal messaging remains compatible. File bytes do not enter WebSocket frames,
+gossip, or activity notifications. See [file transfers](files.md).

@@ -744,7 +744,7 @@ func TestHistoryToolsRegisteredInBothModes(t *testing.T) {
 	}
 	defer cs.Close()
 	tools, err := cs.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 9 {
+	if err != nil || len(tools.Tools) != 13 {
 		t.Fatalf("tools %v %v", tools, err)
 	}
 	schemas := map[string]*jsonschema.Schema{}
@@ -831,7 +831,7 @@ func TestHistoryToolsRegisteredInBothModes(t *testing.T) {
 	}
 	defer cs2.Close()
 	tools, err = cs2.ListTools(cctx, nil)
-	if err != nil || len(tools.Tools) != 9 {
+	if err != nil || len(tools.Tools) != 13 {
 		t.Fatalf("codex tools %v %v", tools, err)
 	}
 	r, err = cs2.CallTool(cctx, &mcp.CallToolParams{Name: "read_session_history", Arguments: map[string]any{"session_id": "s", "agent_type": "claude"}})

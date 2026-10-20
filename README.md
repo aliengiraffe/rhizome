@@ -564,3 +564,15 @@ Randomized subscriptions are available only via an explicit command:
 
 The demo retains its original unauthenticated, live-only `sessions` channel and
 fixed-port flags. It is not used by `rhizome mcp` and does not join its cluster.
+
+### File attachments between paired hosts
+
+After pairing hosts, use `send_file(session_id, path)` to offer an explicitly
+selected regular file. The recipient uses `list_files` and, with user approval,
+`accept_file(transfer_id)` to download and verify it. `cancel_file` cancels a
+transfer. Both hosts need a build with file-transfer support.
+
+Files are limited to 16 MiB and arrive in a private **temporary** inbox. Copy a
+verified download to your project to keep it: expiry, disconnection, or service
+restart removes inbox files. Offers never authorize automatic acceptance or
+execution. See [file transfers](docs/files.md) for CLI usage, limits and lifecycle.

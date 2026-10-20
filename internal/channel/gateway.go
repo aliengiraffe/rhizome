@@ -29,6 +29,7 @@ type gatewayRetry struct {
 	next     time.Time
 }
 type gateway struct {
+	files                              *gatewayFiles
 	retry                              map[string]gatewayRetry
 	proxySlots                         chan struct{}
 	enrollmentRate                     *rate.Limiter
@@ -53,6 +54,9 @@ type GatewayCommand struct {
 	Code    string `json:"code,omitempty"`
 	ID      string `json:"id,omitempty"`
 	Expires string `json:"expires,omitempty"`
+	Session string `json:"session,omitempty"`
+	Target  string `json:"target,omitempty"`
+	Path    string `json:"path,omitempty"`
 }
 type gatewayEnrollment struct{ ID, Secret, Endpoint, Mode string }
 
@@ -98,6 +102,11 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	g := &gateway{retry: map[string]gatewayRetry{}, proxySlots: make(chan struct{}, 128), enrollmentRate: rate.NewLimiter(4, 8), ctx: ctx, cancel: cancel, cfg: cfg, runtime: runtime, host: host, endpoint: endpoint, cert: cert, statePath: statePath, state: state, links: map[string]*gatewayLink{}, dialing: map[string]bool{}}
+	g.files, err = newGatewayFiles(runtime)
+	if err != nil {
+		return err
+	}
+	defer g.files.close()
 	g.base = newNode(ctx)
 	if err := g.base.start(Options{Runtime: runtime}); err != nil {
 		g.base.close()
@@ -111,6 +120,7 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/enroll", g.enroll)
 	mux.HandleFunc("/v1/connect", g.connect)
+	mux.HandleFunc("/v1/files", g.fileHTTP)
 	slots := make(chan struct{}, 32)
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -159,14 +169,18 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway) error {
 			http.Error(w, "invalid request", 400)
 			return
 		}
-		result, e := g.command(r.Context(), cmd)
+		ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+		defer cancel()
+		stop := context.AfterFunc(g.ctx, cancel)
+		defer stop()
+		result, e := g.command(ctx, cmd)
 		if e != nil {
 			http.Error(w, e.Error(), 400)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
-	}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 5 * time.Second, MaxHeaderBytes: 8192}
+	}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 125 * time.Second, IdleTimeout: 5 * time.Second, MaxHeaderBytes: 8192}
 	errs := make(chan error, 2)
 	go func() {
 		errs <- server.Serve(tls.NewListener(&gatewayListener{Listener: listener, slots: make(chan struct{}, 64)}, tlsCfg))
@@ -209,7 +223,11 @@ func GatewayAdmin(ctx context.Context, runtime string, cmd GatewayCommand) (json
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+ctl.Secret)
-	client := &http.Client{Timeout: 25 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect refused") }}
+	timeout := 25 * time.Second
+	if cmd.Action == "files-accept" {
+		timeout = 120 * time.Second
+	}
+	client := &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect refused") }}
 	defer client.CloseIdleConnections()
 	res, err := client.Do(req)
 	if err != nil {
@@ -301,6 +319,9 @@ func (g *gateway) enroll(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"host": g.host, "created": invite.Created})
 }
 func (g *gateway) command(ctx context.Context, cmd GatewayCommand) (any, error) {
+	if len(cmd.Action) > 6 && cmd.Action[:6] == "files-" {
+		return g.fileCommand(ctx, cmd)
+	}
 	switch cmd.Action {
 	case "invite":
 		d, err := time.ParseDuration(cmd.Expires)
@@ -553,6 +574,7 @@ func (g *gateway) reconnect() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
+		g.files.expire()
 		g.mu.Lock()
 		hosts := []string{}
 		for h, p := range g.state.Peers {

@@ -18,7 +18,7 @@ Start with [README.md](README.md) for behavior and setup,
 
 | Path | Responsibility |
 | --- | --- |
-| `main.go`, `service.go`, `gateway.go` | CLI dispatch, MCP, setup, service lifecycle and legacy demo. |
+| `main.go`, `service.go`, `gateway.go`, `files.go` | CLI dispatch, MCP, setup, service lifecycle and legacy demo. |
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
@@ -101,7 +101,7 @@ a real tailnet; the two-device Tailscale checklist in
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
-  CLI usage: `rhizome mcp | setup | service | config | token | invite | join | peers | demo [flags]`.
+  CLI usage: `rhizome mcp | setup | service | config | token | invite | join | peers | files | demo [flags]`.
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
   `mcp` only, with flag > env > file > default. `rhizome setup` is the only
@@ -124,6 +124,18 @@ a real tailnet; the two-device Tailscale checklist in
   for enrollment recovery, bounds, configuration, compatibility, and manual checks.
   Run `python3 scripts/smoke_gateway.py` for gateway changes in addition to the
   required existing checks. Gateway protocol code is in `internal/channel/gateway*.go`.
+
+- **File transfers require explicit selection and acceptance.** The service stages
+  regular files and serves bounded chunks over pinned host TLS (`/v1/files`),
+  never gossip or activity text. MCP binds the source/recipient to its verified
+  local session; CLI `files` requires `--session`. Every remote operation checks
+  the exact sessions through the gateway's shared access policy. No peer-selected
+  paths, symlinks, execution, overwrite, or automatic acceptance. Limits: 16 MiB
+  per file, 32 records (512 MiB maximum), two local transfers, 128 KiB chunks,
+  59-minute expiry. Transfers are connection-scoped; revocation/disconnection
+  fences them. The private inbox is ephemeral: copy verified files out to keep
+  them before expiry, disconnection, or service restart. See [docs/files.md](docs/files.md).
+  Run the gateway smoke for file changes; tests cover byte integrity and boundaries.
 
 - **Hostnames are display labels.** Shared top-level `hostname` is written by
   the setup prompt or `setup --network ... --hostname ...`. Blank clears an
