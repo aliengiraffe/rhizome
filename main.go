@@ -36,7 +36,7 @@ func entry() error {
 	switch mode {
 	case "mcp":
 		opts := flag.NewFlagSet("mcp", flag.ContinueOnError)
-		agent := opts.String("agent", "claude", "delivery agent: claude or codex")
+		agent := opts.String("agent", "claude", "delivery agent: claude, codex or opencode")
 		config.Bind(opts, "codex-bin")
 		o, err := optionsFromEnv()
 		if err != nil {
@@ -80,6 +80,8 @@ func entry() error {
 			return channel.Run(c, o)
 		case "codex":
 			return channel.RunCodex(c, o)
+		case "opencode":
+			return channel.RunOpenCode(c, o)
 		default:
 			return fmt.Errorf("unsupported agent %q", *agent)
 		}
