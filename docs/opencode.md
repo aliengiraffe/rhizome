@@ -17,7 +17,9 @@ deliveries; all filtering and routing decisions are made in Go.
 3. Merge [`examples/opencode/opencode.json`](../examples/opencode/opencode.json)
    into `~/.config/opencode/opencode.json`, using an absolute binary path. The
    server key must stay `rhizome`: Rhizome identifies its own tools by the
-   `rhizome_` prefix. Rhizome never edits OpenCode config.
+   `rhizome_` prefix. The MCP `command` must start the rhizome binary directly
+   (no `sh -c`, `npx` or other wrapper), because the plugin pairs with the
+   Rhizome process by OpenCode's process ID. Rhizome never edits OpenCode config.
 4. Restart the OpenCode service: `opencode service restart`.
 5. If `RHIZOME_RUNTIME_DIR` is set, it must be identical in the OpenCode service
    environment and for the MCP entry, or the plugin and Rhizome will not find the
@@ -49,7 +51,10 @@ Published: assistant text, tool lifecycle from the `execute` tool hooks (Code Mo
 inner tools by their real name; the `execute` wrapper and `rhizome_*` tools are
 excluded as `Tool started|completed|failed: <name>`), turn completion, and titles
 as native session names. Turns started only by Rhizome deliveries are suppressed
-until a human prompt arrives. Never forwarded: reasoning, prompts, or tool outputs.
+until a human prompt arrives. Inputs are applied when OpenCode delivers them into
+the session's agent loop (`session.inbox.delivered`), not when they are queued
+(`session.inbox.enqueued`), so a queued item never flips suppression mid-turn.
+Never forwarded: reasoning, prompts, or tool outputs.
 Text and tool-call IDs are deduplicated in 4,096-entry windows; existing rate
 limits and the circuit breaker apply unchanged.
 
@@ -76,7 +81,9 @@ untrusted-peer envelope as Codex and are never republished.
   `RHIZOME_RUNTIME_DIR` otherwise). Only a stale socket at the exact path is
   removed at startup; shutdown removes it.
 - One plugin connection at a time. Replacing a ready connection reports a
-  disconnect then reconnect. While disconnected, nodes stay bound, tools work,
+  disconnect then reconnect. On every (re)connect the plugin re-sends the bind
+  of each session it has bound, right after `hello`, so a restarted Rhizome
+  recovers its bindings. While disconnected, nodes stay bound, tools work,
   `collection_state` is `plugin disconnected` and delivery pauses. Every
   reconnect, and any plugin buffer overflow, produces an "OpenCode activity
   discontinuity" gap notice.
@@ -90,6 +97,7 @@ untrusted-peer envelope as Codex and are never republished.
   | Text | 16 KiB in the plugin (Go clips further); serialized text frames bounded to 60 KiB |
   | Other string fields | 1 KiB |
   | Plugin buffer | 256 frames while disconnected; drop-oldest plus an overflow marker that becomes a gap |
+  | Plugin queued inputs awaiting delivery | 256 inbox items; oldest evicted |
   | Manager frame queue | 512 frames, one worker, order preserved; overflow drops frames, counts them and records a gap |
   | Delivery acknowledgement | 5 s |
   | Bound sessions per process | 64 (further binds are refused) |

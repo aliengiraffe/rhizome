@@ -15,6 +15,7 @@ const MAX_LINE = 64 * 1024
 const MAX_PENDING_WRITE = 1024 * 1024
 const MAX_FIELD = 1024
 const MAX_FRAME = 60 * 1024
+const MAX_INBOX = 256
 const PEER_MARKER = "<rhizome-peer-event>"
 
 // Must match bridgeSocketPath in internal/channel/opencode_bridge.go.
@@ -53,10 +54,16 @@ export default {
     const directory = ctx.location?.directory
     let realDirectory
     try { realDirectory = realpathSync(directory) } catch { return () => {} }
-    // Session IDs this instance has bound as top-level sessions. OpenCode
-    // delivers every session event to every location's plugin instance, so
-    // only these sessions are relayed.
-    const local = new Set()
+    // Top-level sessions this instance has bound, mapped to their last bind
+    // frame. OpenCode delivers every session event to every location's plugin
+    // instance, so only these sessions are relayed. The binds are re-sent on
+    // every (re)connect because a restarted Rhizome has lost its bindings.
+    const local = new Map()
+    // Queued inbox items of local sessions, by inbox ID, awaiting delivery into
+    // the agent loop. Their input frames are sent on delivery, not at enqueue,
+    // so a queued item cannot flip peer-turn suppression early. Bounded; the
+    // oldest entry is evicted first.
+    const pending = new Map()
     const path = socketPath(realDirectory)
     const queue = []
     let dropped = 0
@@ -97,6 +104,7 @@ export default {
       s.on("connect", () => {
         backoff = 250
         s.write(line({ type: "hello", version: PROTOCOL, opencode: String(ctx.app?.version ?? "") }))
+        for (const frame of local.values()) s.write(line(frame))
         ready = true
         flush()
       })
@@ -138,8 +146,9 @@ export default {
       try { info = await ctx.session.get({ sessionID }) } catch { return false }
       if (!inThisLocation(info)) return false
       const parentID = field(info?.parentID)
-      send({ type: "bind", sessionID, parentID, directory, title: field(info?.title) })
-      if (parentID === "") local.add(sessionID)
+      const frame = { type: "bind", sessionID, parentID, directory, title: field(info?.title) }
+      send(frame)
+      if (parentID === "") local.set(sessionID, frame)
       return true
     }
 
@@ -153,8 +162,20 @@ export default {
           if (kind !== "user" && kind !== "synthetic") return
           const rhizome = String(d.item?.payload?.text ?? "").includes(PEER_MARKER)
           if (kind === "user" && !rhizome) await bind(id)
-          if (!local.has(id)) return
-          send({ type: "input", sessionID: id, kind, rhizome })
+          const inboxID = sid(d.inboxID)
+          if (!local.has(id) || inboxID === "") return
+          pending.delete(inboxID)
+          if (pending.size >= MAX_INBOX) pending.delete(pending.keys().next().value)
+          pending.set(inboxID, { sessionID: id, kind, rhizome })
+          return
+        }
+        case "session.inbox.delivered": {
+          const inboxID = sid(d.inboxID)
+          const p = pending.get(inboxID)
+          if (!p) return
+          pending.delete(inboxID)
+          if (p.sessionID !== id || !local.has(id)) return
+          send({ type: "input", sessionID: id, kind: p.kind, rhizome: p.rhizome })
           return
         }
         case "session.text.ended":
@@ -167,12 +188,14 @@ export default {
           return
         case "session.renamed":
           if (!local.has(id)) return
+          local.set(id, { ...local.get(id), title: field(d.title) })
           send({ type: "title", sessionID: id, title: field(d.title) })
           return
         case "session.deleted":
           if (!local.has(id)) return
           send({ type: "forget", sessionID: id })
           local.delete(id)
+          for (const [inboxID, p] of pending) if (p.sessionID === id) pending.delete(inboxID)
           return
       }
     }

@@ -80,6 +80,8 @@ Changes to existing code:
   `export default { id: "rhizome", setup(ctx) }`.
 - Connects to the socket path below, reconnecting with backoff from 250 ms up to
   15 s. With no connection, its handlers do nothing and never block OpenCode.
+  After `hello` on every (re)connect it re-sends the last bind of each local
+  session, since a restarted Rhizome has lost its bindings.
 - Forwards a fixed allowlist of events with only the fields Go needs. It never
   forwards tool outputs or reasoning, and truncates assistant text to 16 KiB.
 - Executes `deliver` requests with `ctx.session.synthetic` and replies with `ack`
@@ -117,7 +119,7 @@ Plugin to Rhizome:
 | `hello` | `version`, `opencode` | Plugin protocol version and OpenCode version. A protocol mismatch closes the connection. |
 | `bind` | `sessionID`, `parentID`, `directory`, `title` | A human prompt arrived. |
 | `title` | `sessionID`, `title` | `session.renamed`. |
-| `input` | `sessionID`, `kind` (`user` or `synthetic`), `rhizome` (bool) | An inbox item was enqueued. `rhizome` is true when the text holds a `<rhizome-peer-event>` envelope. The text itself is never sent. |
+| `input` | `sessionID`, `kind` (`user` or `synthetic`), `rhizome` (bool) | An inbox item was delivered into the agent loop (`session.inbox.delivered`; the plugin records kind and marker at `session.inbox.enqueued`). `rhizome` is true when the text holds a `<rhizome-peer-event>` envelope. The text itself is never sent. |
 | `text` | `sessionID`, `messageID`, `text` | `session.text.ended`, assistant text. |
 | `tool` | `sessionID`, `callID`, `name`, `phase` (`start`, `completed`, or `failed`) | From the `execute.before`/`after` tool hooks. |
 | `turn` | `sessionID` | `session.execution.succeeded`. |
@@ -150,6 +152,12 @@ Rhizome to plugin: `deliver {id, sessionID, text}`.
        are not published.
      - A `user` input resets suppression. This mirrors `peerResponse` in
        `transcript.go`.
+     - Inputs are applied when OpenCode delivers them into the session
+       (`session.inbox.delivered`), not when they are queued. Deliveries use
+       `delivery: "queue"`, so applying them at enqueue would let a peer item
+       queued mid human turn hide the rest of that turn, or a human prompt
+       queued during a peer turn un-suppress it early. The plugin keeps a
+       bounded (256) map of pending inbox items for its local sessions.
    - Text and tool-call IDs are deduplicated within 4,096-entry windows.
 4. **Delivery.**
    - `notify` sends `deliver`, using the Codex untrusted-peer envelope (a header
