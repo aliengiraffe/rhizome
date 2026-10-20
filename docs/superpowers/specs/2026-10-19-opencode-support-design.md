@@ -251,12 +251,29 @@ dependency.
 
 ## Verify first
 
-These are open spike questions and are the first implementation step:
+Results (2026-10-19, OpenCode 2.0.32, `opencode serve` plus the V2 spike plugin):
 
-1. The `session.deleted` event name and shape.
-2. One MCP process and plugin instance per location.
-3. `_meta` and `parentID` for subagent MCP calls.
-4. Interactive TUI parity with `run`/`serve`.
+1. Deletion event: `session.deleted` with `data: {sessionID}` (plus a
+   `durable` block with `aggregateID`, `seq`, `version`; no `location`). Deleting
+   a parent also emits one for each child session, children first. With two
+   locations loaded in one server, each event reached the plugin subscriber
+   twice, so `forget` must be idempotent.
+2. One MCP process and one plugin instance per location: the server spawned a
+   separate MCP process (distinct `pid`, `cwd` equal to the location directory)
+   and ran `setup` once per location directory (each with its own trigger
+   port). The `init` `location` has `directory` and `project`
+   (`id`, `directory`, `canonical`). A plain `git init` directory with no commits
+   reports project id `global`, the same as a non-git directory, so route and
+   pair by `directory`, not `project.id`.
+3. Subagent MCP calls: `_meta["ai.opencode/sessionID"]` carries the child
+   session ID, which differs from the parent's. `ctx.session.get` on the child
+   returns `parentID` (the parent session ID), `agent` (`general`) and `title`;
+   top-level sessions have no `parentID` and no `agent` field. The plugin hook
+   `tool.before` also reports the child `sessionID`. Models reach MCP tools
+   through an `execute` sandbox, which fires `tool.before` for `execute` and
+   then for `spike_echo`.
+4. Interactive TUI parity with `run`/`serve`: not verified here; it is a manual
+   check in Task 9.
 
 ## Out of scope
 
