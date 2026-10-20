@@ -39,6 +39,20 @@ OpenCode mode exposes six tools: the usual seven minus `observe_session`.
   instance. The plugin therefore binds only sessions whose
   `ctx.session.get(...).location.directory` matches its own directory, and
   forwards frames only for sessions it bound.
+- OpenCode periodically disposes and rebuilds a location instance (cause inside
+  OpenCode unconfirmed; `opencode reload` forces it): the plugin is set up afresh
+  and a new Rhizome process starts. So that idle sessions do not vanish, Rhizome
+  persists the location's bound top-level session IDs with their last-activity
+  time in `<runtime>/opencode-bindings/<hash>.json` (mode 0600; `<hash>` is the
+  first 32 hex characters of SHA-256 of the resolved directory; merged under a
+  flock with atomic rename, at most 64 entries, entries idle over 24 h dropped).
+  After every `hello` Rhizome sends `{"type":"restore","sessions":[...]}`; the
+  plugin verifies each ID exactly like a prompt bind and answers with an ordinary
+  `bind`, or `{"type":"unrestorable","sessionID":...}` when it is missing, a
+  child or another location's, which removes the entry. Only sessions a human
+  prompt bound ever enter the store; `session.deleted` and idle eviction remove
+  them, a shutdown keeps them. A restored session starts like a fresh bind
+  (human turn state) and keeps its stored activity time.
 - There is no `observe_session` in OpenCode mode; never invent an ID.
 - Without the plugin (or before the first prompt) tools return `UNBOUND` with a
   setup hint.
@@ -78,8 +92,9 @@ untrusted-peer envelope as Codex and are never republished.
   is the first 12 hex characters of SHA-256 of the symlink-resolved working
   directory. The pid and directory only pair a plugin with its MCP process; they
   never route. The full path must be at most 103 bytes (use a shorter
-  `RHIZOME_RUNTIME_DIR` otherwise). Only a stale socket at the exact path is
-  removed at startup; shutdown removes it.
+  `RHIZOME_RUNTIME_DIR` otherwise). A socket file at the exact path is replaced
+  at startup (during a reload the successor takes over the path); shutdown
+  removes it only if it is still the process's own socket.
 - One plugin connection at a time. Replacing a ready connection reports a
   disconnect then reconnect. On every (re)connect the plugin re-sends the bind
   of each session it has bound, right after `hello`, so a restarted Rhizome
@@ -106,7 +121,8 @@ untrusted-peer envelope as Codex and are never republished.
 - `session.deleted` makes the plugin send `forget`, which retires the node (it is
   idempotent; events can arrive more than once).
 - A Rhizome restart loses state (subscriptions, replay, dedup, cursors). Sessions
-  rebind on their next human prompt.
+  rebind on their next human prompt, or through the restore list when the plugin
+  (re)connects.
 
 ## Trust boundary
 
@@ -122,7 +138,9 @@ content or names.
 - `python3 scripts/smoke_stdio.py` covers the OpenCode bridge with a fake plugin:
   identity, binding, activity to a Claude peer and delivery.
 - Opt-in live smoke:
-  `python3 scripts/smoke_opencode.py --live --model <provider/model>`. It runs
+  `python3 scripts/smoke_opencode.py --live --model <provider/model>`. It also
+  forces an instance reload (`opencode reload --server`, disposable server only)
+  and checks restore and delivery without a new prompt. It runs
   real model turns against a standalone `opencode serve` with isolated
   config/state/cache, but uses your real OpenCode data directory for
   credentials. Its temp repository gets an initial commit, and it deletes only

@@ -470,6 +470,16 @@ conflicting history, ambiguous IDs, stale catalogs, and scope corrections.
   PASS ("PASS: OpenCode v2.0.32 live binding, activity to a Claude peer and
   synthetic delivery"); three passing runs. The Claude endpoint is an MCP protocol
   harness, not an interactive Claude model.
+- Instance reload restore (2026-10-20): `opencode reload --server <url>` on the
+  disposable server reloads the location like the service's periodic reloads (fresh
+  plugin `setup`, new Rhizome process; the old one exits about 2 s later). The live
+  smoke now binds, reloads, waits for the session on a new Rhizome node without a
+  prompt, and confirms a `send` reaches the session export: PASS ("... synthetic
+  delivery, and restore after an instance reload"), two runs. The first attempts
+  exposed that the exiting process unlinked the successor's socket (same path),
+  fixed in the same change. Earlier smoke runs inherited the caller's `PWD`, so
+  their sessions lived in the caller's directory location; the smoke now sets
+  `PWD` to the temp repository.
 - Known CLI caveat: run `opencode run` with stdin closed from non-interactive
   parents (confirmed cause of hangs); hangs were also seen with message text
   containing `ses_...`, cause unconfirmed.
