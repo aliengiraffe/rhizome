@@ -228,11 +228,7 @@ func TestBridgeReplacementAndClose(t *testing.T) {
 	if _, ok := first.read(t); ok {
 		t.Fatal("replaced connection still open")
 	}
-	select {
-	case <-h.drops:
-		t.Fatal("replacing a connection must not report disconnect")
-	default:
-	}
+	recv(t, h.drops) // replacing a ready connection reports its disconnect once
 	second.c.Close()
 	recv(t, h.drops)
 	b.close()
@@ -264,5 +260,31 @@ func TestListenBridgeStaleAndForeignFiles(t *testing.T) {
 	os.WriteFile(regular, []byte("x"), 0600)
 	if _, err := listenBridge(regular, newFakeBridgeHandler()); err == nil {
 		t.Fatal("regular file replaced")
+	}
+}
+
+func TestBridgeCloseReturnsWithOpenClient(t *testing.T) {
+	b, h, path := startBridge(t)
+	dialPlugin(t, path, true)
+	recv(t, h.conns)
+	done := make(chan struct{})
+	go func() { b.close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("close blocked on an open client")
+	}
+}
+
+func TestBridgeReplacementWithoutHelloReportsOneDisconnect(t *testing.T) {
+	b, h, path := startBridge(t)
+	dialPlugin(t, path, true)
+	recv(t, h.conns)
+	silent := dialPlugin(t, path, false)
+	recv(t, h.drops)
+	silent.c.Close()
+	b.close()
+	if n := len(h.drops); n != 0 {
+		t.Fatalf("%d extra disconnects", n)
 	}
 }

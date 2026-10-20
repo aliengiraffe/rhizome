@@ -50,8 +50,11 @@ type bridgeFrame struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
-// bridgeHandler receives plugin traffic. Calls may come from different
-// connection goroutines; implementations serialize their own state.
+// bridgeHandler receives plugin traffic. Calls run on the connection's read
+// goroutine, which also receives acks, so implementations must return promptly
+// and must never call deliver from a callback. connected and disconnected are
+// serialized with each other in state-change order; frame is not. Different
+// connections may call concurrently, so implementations serialize their state.
 type bridgeHandler interface {
 	frame(bridgeFrame)
 	connected(reconnect bool)
@@ -87,6 +90,8 @@ type bridge struct {
 	handler    bridgeHandler
 	ackTimeout time.Duration
 	wg         sync.WaitGroup
+	cbMu       sync.Mutex // serializes connected/disconnected with the state change deciding them
+	closed     bool       // guarded by mu
 	writeMu    sync.Mutex
 	mu         sync.Mutex
 	conn       net.Conn
@@ -127,11 +132,22 @@ func (b *bridge) start() {
 			if err != nil {
 				return
 			}
+			b.cbMu.Lock()
 			b.mu.Lock()
-			old := b.conn
+			if b.closed {
+				b.mu.Unlock()
+				b.cbMu.Unlock()
+				c.Close()
+				return
+			}
+			old, wasReady := b.conn, b.ready
 			b.conn, b.ready = c, false
 			b.stats.Connections++
 			b.mu.Unlock()
+			if wasReady {
+				b.handler.disconnected()
+			}
+			b.cbMu.Unlock()
 			if old != nil {
 				old.Close()
 			}
@@ -170,10 +186,11 @@ func (b *bridge) read(c net.Conn) {
 		b.count(func(st *bridgeStats) { st.Frames++ })
 		if !hello {
 			if f.Type != "hello" || f.Version != bridgeProtocol {
-				slog.Warn("opencode_bridge_protocol", "type", f.Type, "version", f.Version)
+				slog.Warn("opencode_bridge_protocol", "type", clip(f.Type, 32), "version", f.Version)
 				return
 			}
 			hello = true
+			b.cbMu.Lock()
 			b.mu.Lock()
 			current := b.conn == c
 			reconnect := b.helloSeen
@@ -182,10 +199,12 @@ func (b *bridge) read(c net.Conn) {
 			}
 			b.mu.Unlock()
 			if !current {
+				b.cbMu.Unlock()
 				return
 			}
 			slog.Info("opencode_plugin_connected", "opencode", clip(f.OpenCode, 32), "reconnect", reconnect)
 			b.handler.connected(reconnect)
+			b.cbMu.Unlock()
 			continue
 		}
 		switch f.Type {
@@ -208,17 +227,20 @@ func (b *bridge) read(c net.Conn) {
 	}
 }
 
-// drop closes c. Only the current connection reports a disconnect; a replaced
-// connection already handed over to its successor.
+// drop closes c. Only a current connection that completed hello reports a
+// disconnect; a replaced connection was already reported at replacement time.
 func (b *bridge) drop(c net.Conn) {
 	c.Close()
+	b.cbMu.Lock()
+	defer b.cbMu.Unlock()
 	b.mu.Lock()
 	current := b.conn == c
+	wasReady := current && b.ready
 	if current {
 		b.conn, b.ready = nil, false
 	}
 	b.mu.Unlock()
-	if current {
+	if wasReady {
 		b.handler.disconnected()
 	}
 }
@@ -240,7 +262,8 @@ func (b *bridge) write(c net.Conn, f bridgeFrame) error {
 
 // deliver hands text to the plugin for one session. No plugin connection means
 // errDestinationUnavailable (retained by the caller); a sent but unacknowledged
-// delivery is errAckMissing (never retried).
+// delivery is errAckMissing (never retried). A failed write means nothing
+// reached OpenCode, so it is errDestinationUnavailable (retained).
 func (b *bridge) deliver(ctx context.Context, sessionID, text string) error {
 	msgID := id()
 	ch := make(chan bridgeFrame, 1)
@@ -255,7 +278,7 @@ func (b *bridge) deliver(ctx context.Context, sessionID, text string) error {
 	defer func() { b.mu.Lock(); delete(b.pending, msgID); b.mu.Unlock() }()
 	if err := b.write(c, bridgeFrame{Type: "deliver", ID: msgID, SessionID: sessionID, Text: text}); err != nil {
 		c.Close()
-		return errAckMissing
+		return errDestinationUnavailable
 	}
 	timer := time.NewTimer(b.ackTimeout)
 	defer timer.Stop()
@@ -275,10 +298,11 @@ func (b *bridge) deliver(ctx context.Context, sessionID, text string) error {
 // close stops accepting, closes the connection, waits for goroutines and removes
 // the socket file.
 func (b *bridge) close() {
-	b.ln.Close()
 	b.mu.Lock()
+	b.closed = true
 	c := b.conn
 	b.mu.Unlock()
+	b.ln.Close()
 	if c != nil {
 		c.Close()
 	}
