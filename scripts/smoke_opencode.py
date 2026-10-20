@@ -27,6 +27,25 @@ def free_port():
         s.bind(('127.0.0.1', 0))
         return s.getsockname()[1]
 
+def rhizome_children(root_pid):
+    """PIDs of `rhizome mcp --agent opencode` processes descended from root_pid."""
+    rows = subprocess.run(['ps', '-axo', 'pid=,ppid=,command='], capture_output=True, text=True, timeout=30).stdout
+    parent, command = {}, {}
+    for row in rows.splitlines():
+        fields = row.split(None, 2)
+        if len(fields) == 3:
+            parent[int(fields[0])], command[int(fields[0])] = int(fields[1]), fields[2]
+    def descends(pid):
+        for _ in range(16):
+            pid = parent.get(pid)
+            if pid is None or pid <= 1:
+                return False
+            if pid == root_pid:
+                return True
+        return False
+    target = str(ROOT / 'rhizome') + ' mcp --agent opencode'
+    return {pid for pid, cmd in command.items() if cmd.startswith(target) and descends(pid)}
+
 def wait_for(check, seconds):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -79,7 +98,10 @@ def main():
             'permissions': [{'action': a, 'resource': '*', 'effect': 'deny'} for a in DENY],
         }))
         env = {**os.environ, 'XDG_CONFIG_HOME': str(tmp / 'config'), 'XDG_STATE_HOME': str(tmp / 'state'),
-               'XDG_CACHE_HOME': str(tmp / 'cache'), 'RHIZOME_RUNTIME_DIR': str(run)}
+               'XDG_CACHE_HOME': str(tmp / 'cache'), 'RHIZOME_RUNTIME_DIR': str(run),
+               # OpenCode takes its location from PWD; an inherited PWD would put the
+               # disposable sessions in the caller's directory instead of the temp repo.
+               'PWD': str(project)}
         port = free_port()
         server_log = (tmp / 'serve.log').open('w')
         server = subprocess.Popen([binary, 'serve', '--hostname', '127.0.0.1', '--port', str(port)], cwd=project,
@@ -133,7 +155,27 @@ def main():
             out = opencode('session', 'export', session, timeout=60, check=False).stdout
             return 'live-delivery-marker' in out and '<rhizome-peer-event>' in out
         wait_for(delivered, 120)
-        print('PASS: OpenCode %s live binding, activity to a Claude peer and synthetic delivery' % version)
+
+        # OpenCode reloads location instances (fresh plugin setup, new Rhizome
+        # process). `opencode reload` forces that on this disposable server only.
+        # Without a new prompt the session must reappear and still accept sends.
+        def node_of():
+            return next((s['identity'].get('node_id') for s in peer.tool('list_sessions')['sessions']
+                         if s['identity']['session_id'] == session), None)
+        old_node, old_pids = node_of(), rhizome_children(server.pid)
+        assert old_node and old_pids, 'no Rhizome node/process before reload'
+        opencode('reload', timeout=120)
+        wait_for(lambda: not (rhizome_children(server.pid) & old_pids), 60)
+        wait_for(lambda: rhizome_children(server.pid), 60)
+        wait_for(lambda: node_of() not in (None, old_node), 90)
+        peer.tool('send', {'session_id': session, 'text': 'live-restore-marker: no action needed'})
+
+        def restored_delivered():
+            out = opencode('session', 'export', session, timeout=60, check=False).stdout
+            return 'live-restore-marker' in out
+        wait_for(restored_delivered, 120)
+        print('PASS: OpenCode %s live binding, activity to a Claude peer, synthetic delivery, and restore after '
+              'an instance reload' % version)
     finally:
         try:
             if peer:
