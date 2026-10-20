@@ -30,11 +30,18 @@ var skillFS embed.FS
 
 const skillName = "rhizome-collab"
 
+// openCodePlugin is the OpenCode relay plugin; it must match this binary's
+// bridge protocol, so setup reinstalls it on every upgrade.
+//
+//go:embed plugins/opencode/rhizome.js
+var openCodePlugin []byte
+
 // agent is a coding agent Rhizome knows how to serve and where it loads skills.
 type agent struct {
-	Name     string // CLI/flag identifier: claude, codex
+	Name     string // CLI/flag identifier: claude, codex, opencode
 	Label    string // human-readable name
 	Skills   string // directory that holds <skill>/SKILL.md
+	Plugin   string // OpenCode plugin destination; empty for other agents
 	Detected bool
 	Reason   string // why it was (not) detected
 }
@@ -43,10 +50,11 @@ type agent struct {
 // same configuration directories the MCP integration documents, plus the agent
 // binary on PATH. Undetected agents are still returned so --agents can force them.
 func detectAgents(c config.Config, lookPath func(string) (string, error)) []agent {
-	claudeDir, codexDir := c.Claude.ConfigDir, c.Codex.Home
+	claudeDir, codexDir, openCodeDir := c.Claude.ConfigDir, c.Codex.Home, openCodeConfigDir(os.Getenv, os.UserHomeDir)
 	agents := []agent{
 		{Name: "claude", Label: "Claude Code", Skills: filepath.Join(claudeDir, "skills")},
 		{Name: "codex", Label: "Codex", Skills: filepath.Join(codexDir, "skills")},
+		{Name: "opencode", Label: "OpenCode", Skills: filepath.Join(openCodeDir, "skills"), Plugin: filepath.Join(openCodeDir, "plugins", "rhizome.js")},
 	}
 	for i := range agents {
 		a := &agents[i]
@@ -62,6 +70,21 @@ func detectAgents(c config.Config, lookPath func(string) (string, error)) []agen
 		a.Reason = "no " + dir + " and no " + a.Name + " on PATH"
 	}
 	return agents
+}
+
+// openCodeConfigDir is OpenCode's global configuration directory:
+// $XDG_CONFIG_HOME/opencode, or ~/.config/opencode. Rhizome only adds its skill
+// and plugin there and never edits OpenCode's own configuration files.
+func openCodeConfigDir(getenv func(string) string, home func() (string, error)) string {
+	base := getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		h, err := home()
+		if err != nil {
+			h = "."
+		}
+		base = filepath.Join(h, ".config")
+	}
+	return filepath.Join(base, "opencode")
 }
 
 // installSkill writes the embedded skill into <skillsDir>/<skillName>. It returns
@@ -106,6 +129,33 @@ func installSkill(skillsDir string) (string, error) {
 		return os.WriteFile(out, want, 0o644)
 	})
 	if err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
+// installPlugin writes the embedded OpenCode plugin to dest and returns
+// "installed", "updated", "unchanged" or "skipped (symlink to …)".
+func installPlugin(dest string) (string, error) {
+	if st, err := os.Lstat(dest); err == nil && st.Mode()&os.ModeSymlink != 0 {
+		target, _ := os.Readlink(dest)
+		return "skipped (symlink to " + target + ")", nil
+	}
+	have, err := os.ReadFile(dest)
+	switch {
+	case err == nil && bytes.Equal(have, openCodePlugin):
+		return "unchanged", nil
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return "", err
+	}
+	status := "updated"
+	if err != nil {
+		status = "installed"
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(dest, openCodePlugin, 0o644); err != nil {
 		return "", err
 	}
 	return status, nil
@@ -238,7 +288,7 @@ func parseAgentFlag(value string, agents []agent) ([]bool, error) {
 
 func setup(args []string) error {
 	opts := flag.NewFlagSet("setup", flag.ContinueOnError)
-	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex) or \"all\"; omit for an interactive picker")
+	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex, opencode) or \"all\"; omit for an interactive picker")
 	config.Bind(opts)
 	list := opts.Bool("list", false, "print detected agents and exit")
 	hostname := opts.String("hostname", "", "with --network: device label override; blank uses the OS hostname")
@@ -278,7 +328,7 @@ func setup(args []string) error {
 			if a.Detected {
 				state = "detected"
 			}
-			fmt.Printf("%-7s %-12s %s (%s)\n", a.Name, state, a.Skills, a.Reason)
+			fmt.Printf("%-8s %-12s %s (%s)\n", a.Name, state, a.Skills, a.Reason)
 		}
 		return nil
 	}
@@ -317,7 +367,7 @@ func setup(args []string) error {
 			return err
 		}
 	default:
-		return fmt.Errorf("stdin is not a terminal; pass --agents claude,codex or --agents all")
+		return fmt.Errorf("stdin is not a terminal; pass --agents claude,codex,opencode or --agents all")
 	}
 	any := false
 	for i, a := range agents {
@@ -330,6 +380,13 @@ func setup(args []string) error {
 			return fmt.Errorf("%s: %w", a.Label, err)
 		}
 		fmt.Printf("%s: %s %s\n", a.Label, status, filepath.Join(a.Skills, skillName))
+		if a.Plugin != "" {
+			status, err := installPlugin(a.Plugin)
+			if err != nil {
+				return fmt.Errorf("%s plugin: %w", a.Label, err)
+			}
+			fmt.Printf("%s: %s %s\n", a.Label, status, a.Plugin)
+		}
 	}
 	if !any && !configOnly {
 		fmt.Println("nothing selected; no skills installed")

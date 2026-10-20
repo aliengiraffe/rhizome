@@ -16,13 +16,14 @@ func TestDetectAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
 	c, err := config.Resolve(nil, func(string) string { return "" })
 	if err != nil {
 		t.Fatal(err)
 	}
 	missing := func(string) (string, error) { return "", errors.New("not found") }
 	agents := detectAgents(c, missing)
-	if len(agents) != 2 || agents[0].Name != "claude" || agents[1].Name != "codex" {
+	if len(agents) != 3 || agents[0].Name != "claude" || agents[1].Name != "codex" || agents[2].Name != "opencode" {
 		t.Fatalf("unexpected agents %+v", agents)
 	}
 	if !agents[0].Detected || agents[0].Skills != filepath.Join(home, ".claude", "skills") {
@@ -167,5 +168,54 @@ func TestPickAgents(t *testing.T) {
 	// Unknown keys are ignored.
 	if got, err := run("zz\r", []bool{false, true}); err != nil || got[0] || !got[1] {
 		t.Fatalf("ignored keys: %v %v", got, err)
+	}
+}
+
+func TestDetectOpenCode(t *testing.T) {
+	home := t.TempDir()
+	missing := func(string) (string, error) { return "", errors.New("missing") }
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	c, err := config.Resolve(nil, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents := detectAgents(c, missing)
+	oc := agents[2]
+	if oc.Name != "opencode" || oc.Detected || oc.Skills != filepath.Join(home, "xdg", "opencode", "skills") || oc.Plugin != filepath.Join(home, "xdg", "opencode", "plugins", "rhizome.js") {
+		t.Fatalf("opencode %+v", oc)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "")
+	agents = detectAgents(c, missing)
+	if !agents[2].Detected || agents[0].Plugin != "" || agents[1].Plugin != "" {
+		t.Fatalf("detection %+v", agents)
+	}
+}
+
+func TestInstallPlugin(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "opencode", "plugins", "rhizome.js")
+	for _, want := range []string{"installed", "unchanged"} {
+		if status, err := installPlugin(dest); err != nil || status != want {
+			t.Fatalf("status %q %v want %q", status, err, want)
+		}
+	}
+	if err := os.WriteFile(dest, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := installPlugin(dest); err != nil || status != "updated" {
+		t.Fatalf("update %q %v", status, err)
+	}
+	if got, _ := os.ReadFile(dest); !bytes.Equal(got, openCodePlugin) {
+		t.Fatal("plugin content mismatch")
+	}
+	link := filepath.Join(t.TempDir(), "rhizome.js")
+	if err := os.Symlink(dest, link); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := installPlugin(link); err != nil || !strings.HasPrefix(status, "skipped (symlink") {
+		t.Fatalf("symlink %q %v", status, err)
 	}
 }
