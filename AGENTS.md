@@ -16,7 +16,8 @@ Start with [README.md](README.md) for behavior and setup,
 | Path | Responsibility |
 | --- | --- |
 | `main.go`, `service.go` | CLI dispatch, MCP, setup, service lifecycle and legacy demo. |
-| `internal/service/`, `internal/localstate/` | Native user-service definitions, configuration, private runtime state and OS locks. |
+| `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
+| `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
 | `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, and session naming (`name.go`). |
 | `proto/` | Protocol definitions and generated Go bindings. |
@@ -33,6 +34,7 @@ lists them. Use `PROTOC=/path/to/protoc task proto` to override the compiler.
 
 ```sh
 task build                         # Build the rhizome executable.
+./rhizome config                   # Inspect effective configuration and sources.
 task check                         # go vet ./... and go test -race ./...
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
 python3 scripts/smoke_service.py    # Separate observer/MCP processes and handoffs.
@@ -78,6 +80,17 @@ lands, implement and verify that option and update this guidance in the same cha
   and standard-library cryptography; use constant-time comparisons for secrets.
 
 ## Rhizome invariants
+
+- **One configuration resolver.** `internal/config` owns settings with explicit
+  flag > env > TOML > default precedence and strict unknown-key rejection.
+  MCP and service share `runtime_dir` through `~/.rhizome/config.toml`; tokens
+  never enter configuration. Keys are grouped per agent (`[claude]`, `[codex]`);
+  which agent a process serves is the per-launch `rhizome mcp --agent` flag and
+  must never become a configuration key. `RHIZOME_CONFIG`/`--config` select an
+  existing file.
+  Services pin that absolute path, never snapshot settings; installation requires
+  the file and rejects overrides that would be lost when the service starts.
+  CLI usage: `rhizome mcp | setup | service | config | demo [flags]`.
 
 - **Stdout is MCP only; diagnostics go to stderr.** Any stray output breaks framing
   (`internal/channel/mcp.go`, stdio smoke).

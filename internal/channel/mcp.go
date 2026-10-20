@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"rhizome/internal/config"
 	"sort"
 	"syscall"
 
@@ -184,13 +185,13 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), claude bool, 
 	})
 	return s
 }
-func Run() error {
+func Run(c config.Config) error {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	n := newNode(ctx)
 	defer n.close()
-	if err := n.start(os.Getenv("RHIZOME_RUNTIME_DIR")); err != nil {
+	if err := n.start(c.RuntimeDir); err != nil {
 		return err
 	}
 	transport := &channelTransport{base: &mcp.StdioTransport{}}

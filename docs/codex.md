@@ -1,7 +1,9 @@
 # Local Codex integration
 
 Rhizome supports local Codex CLI sessions with `rhizome mcp --agent codex`.
-Claude remains the default for `rhizome mcp`. Both modes share discovery,
+Claude is the default for `rhizome mcp`; the agent is always chosen per launch
+with `--agent`, never from the [Rhizome configuration](../README.md#configuration),
+whose `[codex]` table holds the Codex binary and home. Both modes share discovery,
 authenticated gRPC, subscriptions, announcements, direct messages, replay limits,
 and feedback controls. Codex mode does not advertise `claude/channel` or impose
 Claude's MCP protocol pin.
@@ -74,7 +76,8 @@ The same exact-ID conflict checks apply across agents.
 ## Collection and delivery
 
 The collector connects by WebSocket over the **existing** local socket at
-`$CODEX_HOME/app-server-control/app-server-control.sock`. It sends only the
+`<effective codex_home>/app-server-control/app-server-control.sock` (`CODEX_HOME`
+overrides `[codex].home`, default `~/.codex`). It sends only the
 initialization handshake and `thread/read`, `thread/turns/list`, and
 `thread/items/list`. It never starts/restarts a daemon, resumes/loads a thread,
 starts a turn, steers work, or answers approvals. No transcript file is opened by this direct collector. The optional

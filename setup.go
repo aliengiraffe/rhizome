@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"rhizome/internal/config"
 	"sort"
 	"strings"
 
@@ -39,15 +40,8 @@ type agent struct {
 // detectAgents reports the agents Rhizome can integrate with. Detection uses the
 // same configuration directories the MCP integration documents, plus the agent
 // binary on PATH. Undetected agents are still returned so --agents can force them.
-func detectAgents(getenv func(string) string, home string, lookPath func(string) (string, error)) []agent {
-	claudeDir := getenv("CLAUDE_CONFIG_DIR")
-	if claudeDir == "" {
-		claudeDir = filepath.Join(home, ".claude")
-	}
-	codexDir := getenv("CODEX_HOME")
-	if codexDir == "" {
-		codexDir = filepath.Join(home, ".codex")
-	}
+func detectAgents(c config.Config, lookPath func(string) (string, error)) []agent {
+	claudeDir, codexDir := c.Claude.ConfigDir, c.Codex.Home
 	agents := []agent{
 		{Name: "claude", Label: "Claude Code", Skills: filepath.Join(claudeDir, "skills")},
 		{Name: "codex", Label: "Codex", Skills: filepath.Join(codexDir, "skills")},
@@ -243,6 +237,7 @@ func parseAgentFlag(value string, agents []agent) ([]bool, error) {
 func setup(args []string) error {
 	opts := flag.NewFlagSet("setup", flag.ContinueOnError)
 	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex) or \"all\"; omit for an interactive picker")
+	config.Bind(opts)
 	list := opts.Bool("list", false, "print detected agents and exit")
 	if err := opts.Parse(args); err != nil {
 		return err
@@ -250,11 +245,11 @@ func setup(args []string) error {
 	if opts.NArg() != 0 {
 		return fmt.Errorf("unexpected setup arguments")
 	}
-	home, err := os.UserHomeDir()
+	c, err := config.FromFlags(opts)
 	if err != nil {
 		return err
 	}
-	agents := detectAgents(os.Getenv, home, exec.LookPath)
+	agents := detectAgents(c, exec.LookPath)
 	if *list {
 		for _, a := range agents {
 			state := "not detected"

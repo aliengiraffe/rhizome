@@ -90,12 +90,10 @@ func (n *Node) probe(ctx context.Context, i *pb.Identity) (*pb.Identity, error) 
 }
 func secureDir(dir string) error { return localstate.SecureDir(dir) }
 func (n *Node) start(runtime string) error {
-	if runtime == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		runtime = filepath.Join(home, ".rhizome", "run")
+	var err error
+	runtime, err = localstate.Runtime(runtime)
+	if err != nil {
+		return err
 	}
 	if err := secureDir(runtime); err != nil {
 		return err

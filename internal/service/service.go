@@ -3,11 +3,10 @@ package service
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/base64"
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,46 +15,31 @@ import (
 	"time"
 
 	"rhizome/internal/channel"
+	"rhizome/internal/config"
 	"rhizome/internal/localstate"
 )
 
-// Config captures absolute paths at installation; no shell environment is needed.
+// Config contains the resolved observer settings and selected TOML path.
 type Config struct {
-	Binary   string
-	Observer channel.ObserverOptions
+	ConfigPath string
+	Observer   channel.ObserverOptions
 }
+
+// FromConfig adapts resolved configuration for the observer.
+func FromConfig(c config.Config) Config {
+	return Config{ConfigPath: c.Path, Observer: channel.ObserverOptions{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir}}
+}
+
 type command struct {
 	name string
 	args []string
 }
 type manager struct {
-	platform, home, configPath, definition string
-	run                                    func(context.Context, string, ...string) error
+	platform, home, configPath, definition, binary string
+	run                                            func(context.Context, string, ...string) error
 }
 
-// Defaults resolves the current user's data directories without changing them.
-func Defaults() (Config, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return Config{}, err
-	}
-	binary, err := os.Executable()
-	if err != nil {
-		return Config{}, err
-	}
-	agentRoot := func(env, fallback string) string {
-		if v := os.Getenv(env); v != "" {
-			return v
-		}
-		return filepath.Join(home, fallback)
-	}
-	rt, err := localstate.Runtime(os.Getenv("RHIZOME_RUNTIME_DIR"))
-	if err != nil {
-		return Config{}, err
-	}
-	return Config{Binary: binary, Observer: channel.ObserverOptions{Runtime: rt, ClaudeRoot: filepath.Join(agentRoot("CLAUDE_CONFIG_DIR", ".claude"), "projects"), CodexRoot: filepath.Join(agentRoot("CODEX_HOME", ".codex"), "sessions")}}, nil
-}
-func newManager() (*manager, error) {
+func newManager(configPath string) (*manager, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -65,7 +49,11 @@ func newManager() (*manager, error) {
 		return nil, err
 	}
 	dir := filepath.Join(configDir, "rhizome")
-	m := &manager{platform: runtime.GOOS, home: home, configPath: filepath.Join(dir, "service.json")}
+	binary, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	m := &manager{platform: runtime.GOOS, home: home, configPath: configPath, binary: binary}
 	switch m.platform {
 	case "darwin":
 		m.definition = filepath.Join(home, "Library", "LaunchAgents", "com.rhizome.observer.plist")
@@ -143,32 +131,57 @@ func unitArg(s string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`, `$`, `$$`, "\n", `\n`, "\r", `\r`, "\t", `\t`).Replace(s) + `"`
 }
 func (m *manager) render(c Config) string {
+	definition := m.renderDefinition(c)
+	marker := "rhizome-runtime: " + base64.StdEncoding.EncodeToString([]byte(c.Observer.Runtime))
+	if m.platform == "linux" {
+		return definition + "# " + marker + "\n"
+	}
+	return definition + "\n<!-- " + marker + " -->\n"
+}
+
+func installedRuntime(definition string) (string, error) {
+	const marker = "rhizome-runtime: "
+	_, tail, ok := strings.Cut(definition, marker)
+	if !ok {
+		return "", errors.New("installed definition lacks runtime metadata; stop and uninstall it before reinstalling")
+	}
+	fields := strings.Fields(tail)
+	if len(fields) == 0 {
+		return "", errors.New("invalid installed runtime metadata")
+	}
+	b, err := base64.StdEncoding.DecodeString(fields[0])
+	if err != nil || !filepath.IsAbs(string(b)) {
+		return "", errors.New("invalid installed runtime metadata")
+	}
+	return string(b), nil
+}
+
+func (m *manager) renderDefinition(c Config) string {
 	switch m.platform {
 	case "linux":
-		return "[Unit]\nDescription=Rhizome session observer\n[Service]\nExecStart=" + unitArg(c.Binary) + " service run --config " + unitArg(m.configPath) + "\nRestart=on-failure\nRestartSec=5\nUMask=0077\n[Install]\nWantedBy=default.target\n"
+		return "[Unit]\nDescription=Rhizome session observer\n[Service]\nExecStart=" + unitArg(m.binary) + " service run --config " + unitArg(m.configPath) + "\nRestart=on-failure\nRestartSec=5\nUMask=0077\n[Install]\nWantedBy=default.target\n"
 	case "darwin":
 		args := ""
-		for _, a := range []string{c.Binary, "service", "run", "--config", m.configPath} {
+		for _, a := range []string{m.binary, "service", "run", "--config", m.configPath} {
 			args += "<string>" + escaped(a) + "</string>"
 		}
 		return `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>com.rhizome.observer</string><key>ProgramArguments</key><array>` + args + `</array><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ThrottleInterval</key><integer>5</integer><key>StandardErrorPath</key><string>` + escaped(filepath.Join(c.Observer.Runtime, "service-errors.log")) + `</string></dict></plist>`
 	case "windows":
 		// InteractiveToken is intentionally per-user: no password or SYSTEM account.
-		return `<?xml version="1.0" encoding="UTF-8"?><Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><Triggers><LogonTrigger><UserId>` + escaped(currentUserID()) + `</UserId><Enabled>true</Enabled></LogonTrigger></Triggers><Principals><Principal id="Author"><UserId>` + escaped(currentUserID()) + `</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings><Actions Context="Author"><Exec><Command>` + escaped(c.Binary) + `</Command><Arguments>service run --config ` + escaped(windowsQuote(m.configPath)) + `</Arguments></Exec></Actions></Task>`
+		return `<?xml version="1.0" encoding="UTF-8"?><Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><Triggers><LogonTrigger><UserId>` + escaped(currentUserID()) + `</UserId><Enabled>true</Enabled></LogonTrigger></Triggers><Principals><Principal id="Author"><UserId>` + escaped(currentUserID()) + `</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings><Actions Context="Author"><Exec><Command>` + escaped(m.binary) + `</Command><Arguments>service run --config ` + escaped(windowsQuote(m.configPath)) + `</Arguments></Exec></Actions></Task>`
 	}
 	return ""
 }
 func validate(c *Config) error {
-	paths := []*string{&c.Binary, &c.Observer.Runtime, &c.Observer.ClaudeRoot, &c.Observer.CodexRoot}
+	paths := []*string{&c.Observer.Runtime, &c.Observer.ClaudeRoot, &c.Observer.CodexRoot}
 	for _, p := range paths {
 		if *p == "" {
-			return errors.New("binary, runtime and log roots must be configured")
+			return errors.New("runtime and log roots must be configured")
 		}
-		a, err := filepath.Abs(*p)
-		if err != nil {
-			return err
+		if !filepath.IsAbs(*p) {
+			return errors.New("runtime and log roots must be absolute")
 		}
-		*p = filepath.Clean(a)
+		*p = filepath.Clean(*p)
 	}
 	if c.Observer.ClaudeRoot == c.Observer.CodexRoot {
 		return errors.New("Claude and Codex log roots must differ")
@@ -176,27 +189,16 @@ func validate(c *Config) error {
 	return nil
 }
 
-// Load reads a bounded service configuration file.
-func Load(path string) (Config, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return Config{}, err
-	}
-	defer f.Close()
-	var c Config
-	err = json.NewDecoder(io.LimitReader(f, 64*1024)).Decode(&c)
-	if err != nil {
-		return c, err
-	}
-	return c, validate(&c)
-}
-
 // Manage installs or controls this user's service. Installation never changes agent data.
 func Manage(ctx context.Context, action string, c Config) error {
-	m, err := newManager()
+	m, err := newManager(c.ConfigPath)
 	if err != nil {
 		return err
 	}
+	return m.manage(ctx, action, c)
+}
+
+func (m *manager) manage(ctx context.Context, action string, c Config) error {
 	switch action {
 	case "install", "start", "stop", "status", "uninstall":
 	default:
@@ -206,25 +208,38 @@ func Manage(ctx context.Context, action string, c Config) error {
 		if err := validate(&c); err != nil {
 			return err
 		}
-		if err := localstate.SecureDir(filepath.Dir(m.configPath)); err != nil {
-			return err
+		// Definitions refer only to the live file, never a snapshot of this shell.
+		disk, err := config.Resolve(map[string]string{"config": c.ConfigPath}, func(string) string { return "" })
+		if err != nil {
+			return fmt.Errorf("service install requires an existing TOML configuration: %w", err)
+		}
+		if FromConfig(disk) != c {
+			return errors.New("service install overrides differ from the file; put persistent paths in config.toml")
 		}
 		if err := localstate.SecureDir(c.Observer.Runtime); err != nil {
 			return err
 		}
-		// Reinstallation with identical paths is idempotent. Require stop/uninstall
-		// before changing a running service's configuration.
-		if old, err := Load(m.configPath); err == nil {
-			if old != c {
+		old, err := os.ReadFile(m.definition)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err == nil {
+			previous, err := installedRuntime(string(old))
+			if err != nil {
+				return err
+			}
+			if running(previous) {
+				if previous == c.Observer.Runtime && string(old) == m.render(c) {
+					return nil
+				}
+				return errors.New("observer is running; stop it before changing its runtime directory")
+			}
+			if string(old) != m.render(c) {
 				return errors.New("service already configured differently; uninstall before reinstalling")
 			}
-			if running(c.Observer.Runtime) {
-				return nil
-			}
 		}
-		b, _ := json.MarshalIndent(c, "", "  ")
-		if err := os.WriteFile(m.configPath, b, 0600); err != nil {
-			return err
+		if running(c.Observer.Runtime) {
+			return errors.New("observer is running; stop it before reinstalling")
 		}
 		if err := os.MkdirAll(filepath.Dir(m.definition), 0700); err != nil {
 			return err
@@ -232,15 +247,8 @@ func Manage(ctx context.Context, action string, c Config) error {
 		if err := os.WriteFile(m.definition, []byte(m.render(c)), 0600); err != nil {
 			return err
 		}
-	} else {
-		c, err = Load(m.configPath)
-		if err != nil {
-			if action == "uninstall" && os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
 	}
+
 	if action == "status" {
 		b, readErr := os.ReadFile(filepath.Join(c.Observer.Runtime, "observer-health.json"))
 		if readErr == nil {
@@ -300,7 +308,7 @@ func Manage(ctx context.Context, action string, c Config) error {
 		}
 	}
 	if action == "uninstall" {
-		for _, path := range []string{m.definition, m.configPath} {
+		for _, path := range []string{m.definition} {
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				return err
 			}

@@ -7,16 +7,12 @@ import (
 	"path/filepath"
 )
 
-// Runtime returns the configured absolute runtime directory.
+// Runtime normalizes a resolved absolute runtime path without reading configuration.
 func Runtime(path string) (string, error) {
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		path = filepath.Join(home, ".rhizome", "run")
+	if !filepath.IsAbs(path) {
+		return "", errors.New("runtime directory must be absolute")
 	}
-	return filepath.Abs(path)
+	return filepath.Clean(path), nil
 }
 
 // Lock opens a process lock. Close releases it, including after process death.
