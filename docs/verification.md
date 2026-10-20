@@ -449,3 +449,33 @@ agent's answers against [collab-skill-evals.md](collab-skill-evals.md): local
 worktrees on one device, label mismatches and collisions, gateway proxies,
 paired-host history errors, direct LAN/Tailscale peers, missing metadata,
 conflicting history, ambiguous IDs, stale catalogs, and scope corrections.
+
+## OpenCode 2.0.32 (2026-10-19)
+
+- Spike findings (full detail in
+  [the design spec](superpowers/specs/2026-10-19-opencode-support-design.md)):
+  MCP `tools/call` carries `_meta["ai.opencode/sessionID"]` set by OpenCode, and
+  forged arguments do not change it; subagent calls carry the child session ID, and
+  `ctx.session.get` on a child returns `parentID`; `session.deleted` has
+  `data.sessionID`, fires for children first and reached subscribers twice with two
+  locations loaded (so `forget` is idempotent); OpenCode runs one MCP process and
+  one plugin instance per project directory, and a `git init` directory without
+  commits has project id `global`, so pairing uses the directory; models reach
+  MCP tools through `execute`, which fires tool hooks for the inner tool by its
+  real name; `ctx.session.synthetic` with `delivery: "queue"` wakes an idle session.
+- `task build`, `task check`, `task test-plugin` and `git diff --check` pass.
+- `python3 scripts/smoke_stdio.py` PASS, including OpenCode bridge identity,
+  activity and delivery with a fake plugin.
+- `python3 scripts/smoke_opencode.py --live --model opencode-go/deepseek-v4.1-flash`
+  PASS ("PASS: OpenCode v2.0.32 live binding, activity to a Claude peer and
+  synthetic delivery"); three passing runs. The Claude endpoint is an MCP protocol
+  harness, not an interactive Claude model.
+- Known CLI caveat: run `opencode run` with stdin closed from non-interactive
+  parents (confirmed cause of hangs); hangs were also seen with message text
+  containing `ses_...`, cause unconfirmed.
+
+Manual checklist (not yet run): in an interactive OpenCode TUI session, submit a
+prompt, run `list_sessions` and confirm `BOUND`, `collection_state: watching` and
+the session title; then subscribe from a Claude session and confirm activity and
+delivery in both directions. Interactive TUI parity with `run`/`serve` is
+otherwise unverified.

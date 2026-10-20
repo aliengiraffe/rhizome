@@ -117,6 +117,18 @@ comes from read-only App Server polling. Each caller thread has an independent
 node even when Codex shares an MCP connection. See [Codex setup and tested
 limitations](docs/codex.md) and the samples in `examples/codex/`.
 
+## OpenCode
+
+Local OpenCode 2.x sessions use `rhizome mcp --agent opencode` (six tools; no
+`observe_session`) plus an embedded relay plugin installed by
+`rhizome setup --agents opencode`. A session binds on its first human prompt; its
+identity is `_meta["ai.opencode/sessionID"]`, child sessions are refused. The
+plugin talks to Rhizome over a private Unix socket, relays allowlisted activity
+(assistant text, tool names, turn completion, titles) and delivers peer events
+with `ctx.session.synthetic` (queued, waking idle sessions). Add the MCP entry
+by hand from `examples/opencode/`; tested with OpenCode **2.0.32**. See
+[OpenCode setup and limits](docs/opencode.md).
+
 ## Claude setup
 
 Requires Go 1.25+, [Task v3](https://taskfile.dev/docs/installation), and macOS or Linux.
@@ -195,7 +207,7 @@ project-directory label. The effective name is resolved in this order:
 1. An explicit override set with `set_session_name(name)` by that session.
 2. The agent's native title: Claude's `/rename` title (`custom-title` transcript
    record), then Claude's automatic title (`ai-title`); for Codex the thread name
-   reported by the App Server.
+   reported by the App Server; for OpenCode the session title.
 3. A stable fallback `<display_name> · <agent_type> · <first 8 characters of
    session_id>`, identical across process restarts for the same session and project.
 
@@ -477,7 +489,7 @@ or leave feeds paused when you do not want peer-triggered work.
 
 ## Collaboration skill
 
-`skills/rhizome-collab/` is a user-invoked skill (Claude Code or Codex) that guides
+`skills/rhizome-collab/` is a user-invoked skill (Claude Code, Codex or OpenCode) that guides
 an agent through listing peers, naming its own session after a concise task
 description, telling which device each session runs on, reviewing recorded
 status read-only, judging relevance, subscribing deliberately, treating peer
@@ -496,12 +508,15 @@ The skill is embedded in the binary; install it with:
 ```sh
 ./rhizome setup                     # interactive: pick agents with a checkbox list
 ./rhizome setup --agents all        # non-interactive: every known agent
-./rhizome setup --agents claude     # or codex, or claude,codex
+./rhizome setup --agents claude     # or codex, opencode, or claude,codex,opencode
 ./rhizome setup --list              # show what was detected and where skills go
 ```
 
 Setup detects Claude Code (`$CLAUDE_CONFIG_DIR` or `~/.claude`, or `claude` on
-PATH) and Codex (`$CODEX_HOME` or `~/.codex`, or `codex` on PATH). The picker
+PATH), Codex (`$CODEX_HOME` or `~/.codex`, or `codex` on PATH) and OpenCode
+(`$XDG_CONFIG_HOME/opencode`, `~/.config/opencode`, or `opencode` on PATH). For
+OpenCode, setup also installs the relay plugin to
+`<config>/opencode/plugins/rhizome.js`. The picker
 pre-selects detected agents; space toggles one, `a` toggles all, enter confirms.
 Without a terminal, `--agents` is required (unless only writing configuration with
 `--network`, below). The skill is written to
@@ -556,6 +571,7 @@ says so on stderr.
 ```sh
 task check                         # go vet ./... and go test -race ./...
 task build
+task test-plugin                    # OpenCode plugin tests (Node 20+)
 python3 scripts/smoke_stdio.py      # real processes, valid stdout, EOF, restart
 python3 scripts/smoke_service.py    # observer/direct coexistence, restart, history catalog
 python3 scripts/smoke_stdio.py --lan  # same, LAN mode: separate registries, pinned TLS
