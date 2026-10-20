@@ -85,6 +85,7 @@ type Node struct {
 	gate                         sync.Mutex
 	mu                           sync.Mutex
 	identity                     *pb.Identity
+	names                        nameState
 	retired                      map[string]bool
 	stream                       string
 	sequence                     uint64
@@ -194,6 +195,7 @@ func (n *Node) observe(h Hook) error {
 		n.notifications = nil
 		n.identity.SessionId = h.SessionID
 		n.identity.Generation++
+		n.names = nameState{explicit: loadOverride(n.runtime, h.SessionID)}
 		n.stream = id()
 		n.sequence = 0
 		n.directSequence = 0
@@ -208,6 +210,7 @@ func (n *Node) observe(h Hook) error {
 	}
 	n.identity.Project = clip(h.Cwd, 180)
 	n.identity.DisplayName = clip(filepath.Base(h.Cwd), 40)
+	n.resolveNameLocked()
 	if n.collector != nil {
 		select {
 		case n.collector.wake <- struct{}{}:

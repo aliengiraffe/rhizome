@@ -94,6 +94,14 @@ def main():
             a.bind('alpha', directory)
             b.bind('beta', directory)
             until(lambda: len(b.tool('list_sessions')['sessions']) == 2)
+            fallback = directory.name + ' \u00b7 claude \u00b7 beta'
+            assert b.tool('list_sessions')['identity']['session_name'] == fallback
+            assert a.tool('set_session_name', {'name': '  alpha-task-name  '})['session_name'] == 'alpha-task-name'
+            assert a.call('tools/call', {'name': 'set_session_name', 'arguments': {'name': 'x' * 97}})['isError']
+            def named(client, session, name):
+                return any(s['identity']['session_id'] == session and s['identity'].get('session_name') == name
+                           for s in client.tool('list_sessions')['sessions'])
+            until(lambda: named(b, 'alpha', 'alpha-task-name'))
             b.tool('subscribe', {'session_id': 'alpha'})
             until(lambda: b.tool('list_sessions')['subscriptions']['alpha']['state'] == 'following')
             a.tool('publish', {'text': 'announcement-marker'})
@@ -109,7 +117,11 @@ def main():
             a = Client(directory)
             clients.append(a)
             a.bind('alpha', directory)
+            # Explicit names survive a publisher process restart.
+            assert a.tool('list_sessions')['identity']['session_name'] == 'alpha-task-name'
             assert b.event('publisher restarted')['meta']['kind'] == 'gap'
+            assert a.tool('set_session_name', {'name': ''})['session_name'] == directory.name + ' \u00b7 claude \u00b7 alpha'
+            until(lambda: named(b, 'alpha', directory.name + ' \u00b7 claude \u00b7 alpha'))
             b.tool('unsubscribe', {'session_id': 'alpha'})
             b.bind('gamma', directory)
             assert b.tool('list_sessions')['identity']['generation'] == 2
@@ -122,7 +134,7 @@ def main():
             for client in clients:
                 client.close()
         assert not list((directory / 'run').glob('*.json')), 'EOF left registrations'
-    print('PASS: MCP stdout, unbound startup, two-session routing, transcript, restart gap, rebind and EOF')
+    print('PASS: MCP stdout, unbound startup, two-session routing, session names, transcript, restart gap, rebind and EOF')
 
 if __name__ == '__main__':
     main()

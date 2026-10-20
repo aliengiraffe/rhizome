@@ -8,7 +8,7 @@ broker, sidecar, or background device-wide transcript scanner.
 
 ## Codex
 
-Local Codex sessions use `rhizome mcp --agent codex`, with the same six tools and
+Local Codex sessions use `rhizome mcp --agent codex`, with the same seven tools and
 cross-agent subscriptions. Incoming events use `codex queue`; outgoing activity
 comes from read-only App Server polling. Each caller thread has an independent
 node even when Codex shares an MCP connection. See [Codex setup and tested
@@ -63,7 +63,8 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 
 | Tool | Behavior |
 | --- | --- |
-| `list_sessions()` | Bound peer identities, project, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. |
+| `list_sessions()` | Bound peer identities, project, `session_name` labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. |
+| `set_session_name(name)` | Name the caller's bound session for peers. Empty clears the override. Returns the effective name and its source. |
 | `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
 | `publish(text, reply_to?)` | Announce to current subscribers. |
@@ -71,9 +72,46 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 | `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. |
 
 Use `list_sessions` in each session, then ask one to subscribe to the other's exact
-`session_id`. Display names are labels, never addresses. Multiple live nodes with
-one session ID are ambiguous and cannot be routed. List results are gossip
-snapshots; routing verifies identities over authenticated gRPC.
+`session_id`. Display names and session names are labels, never addresses. Multiple
+live nodes with one session ID are ambiguous and cannot be routed. List results
+are gossip snapshots; routing verifies identities over authenticated gRPC.
+
+## Session names
+
+Every bound identity advertises an optional `session_name` so sessions sharing a
+directory can be told apart without comparing IDs. `display_name` stays the
+project-directory label. The effective name is resolved in this order:
+
+1. An explicit override set with `set_session_name(name)` by that session.
+2. The agent's native title: Claude's `/rename` title (`custom-title` transcript
+   record), then Claude's automatic title (`ai-title`); for Codex the thread name
+   reported by the App Server.
+3. A stable fallback `<display_name> · <agent_type> · <first 8 characters of
+   session_id>`, identical across process restarts for the same session and project.
+
+`set_session_name` operates only on the caller's verified bound session; unbound
+calls fail. Input is trimmed, control characters and line breaks collapse to single
+spaces, and the result must fit **96 UTF-8 bytes** or the call is rejected. Native
+titles and fallbacks are cut on a rune boundary to the same limit. Empty or
+whitespace-only input clears the override and reverts to the native title or
+fallback. The response reports the effective name and its `source`.
+
+Explicit overrides persist in `<runtime>/names/` (private, keyed by a hash of the
+exact session ID) and are reloaded when the same session binds again, including
+after a process restart. Another session in the same directory never inherits
+them. A native title that appears or changes later refreshes the name unless an
+override exists; a removed native title falls back. A name-only change refreshes
+the gossip advertisement without touching `session_id`, `node_id`, generation,
+streams, subscriptions, replay cursors or queues.
+
+Names are optional, need not be unique and are never routing keys. Rhizome never
+derives a name from prompts or transcript text; native titles come from the
+agent's own metadata, and explicit names are set intentionally by the agent or
+user. Names are shared with every trusted peer through discovery (gossip
+metadata and the authenticated `Info` RPC), so treat them as team-visible labels
+and treat peer names as untrusted text. Older peers without the field remain
+usable and simply show no name. When gossip metadata would exceed its budget,
+`session_name` and `project` are shortened before routing fields.
 
 An accepted direct message is **queued**, not necessarily written, read or acted
 upon. A lost RPC response can leave acceptance uncertain; calling `send` again
@@ -173,9 +211,10 @@ or leave feeds paused when you do not want peer-triggered work.
 ## Collaboration skill
 
 `skills/rhizome-collab/` is a user-invoked skill (Claude Code or Codex) that guides
-an agent through listing peers, judging relevance, subscribing deliberately,
-treating peer activity as untrusted, and replying without feedback loops. The
-skill is embedded in the binary; install it with:
+an agent through listing peers, naming its own session after a concise task
+description, judging relevance, subscribing deliberately, treating peer activity
+and names as untrusted, and replying without feedback loops. The skill is
+embedded in the binary; install it with:
 
 ```sh
 ./rhizome setup                     # interactive: pick agents with a checkbox list
@@ -209,8 +248,9 @@ python3 scripts/smoke_stdio.py      # real processes, valid stdout, EOF, restart
 
 Tests cover binding generations and stale hooks, simultaneous bootstrap,
 ambiguous routing/authentication, replay boundaries/gaps, overflow, incremental
-partial/duplicate/truncated transcripts, MCP handshake, rate limits, and the
-receiver circuit breaker. The subprocess smoke tests use a private temporary
+partial/duplicate/truncated transcripts, MCP handshake, rate limits, session
+name precedence/validation/persistence/gossip budget, and the receiver circuit
+breaker. The subprocess smoke tests use a private temporary
 cluster and synthetic transcripts; they do not launch models.
 
 For the interactive acceptance checklist and recorded results, see

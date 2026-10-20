@@ -21,6 +21,7 @@ const threadB = "22222222-2222-7222-8222-222222222222"
 type fakeCodex struct {
 	mu             sync.Mutex
 	thread, status string
+	name           *string
 	turns          []codexTurn
 	items          map[string][]codexItem
 	fail           bool
@@ -39,7 +40,7 @@ func (f *fakeCodex) call(_ context.Context, method string, params, out any) erro
 	var result any
 	switch method {
 	case "thread/read":
-		result = map[string]any{"thread": map[string]any{"id": f.thread, "status": map[string]string{"type": f.status}}}
+		result = map[string]any{"thread": map[string]any{"id": f.thread, "name": f.name, "status": map[string]string{"type": f.status}}}
 	case "thread/turns/list":
 		result = turnPage{Data: f.turns}
 	case "thread/items/list":

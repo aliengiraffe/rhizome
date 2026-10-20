@@ -52,6 +52,9 @@ type sendInput struct {
 	Text      string `json:"text"`
 	ReplyTo   string `json:"reply_to,omitempty"`
 }
+type nameInput struct {
+	Name string `json:"name"`
+}
 
 func result(value any, err error) (*mcp.CallToolResult, any, error) {
 	if err != nil {
@@ -104,7 +107,7 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), claude bool, 
 		})
 	}
 
-	mcp.AddTool(s, &mcp.Tool{Name: "list_sessions", Description: "List bound local sessions, exact IDs, conflicts, subscriptions and operational status."}, func(ctx context.Context, r *mcp.CallToolRequest, in empty) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "list_sessions", Description: "List bound local sessions, exact IDs, untrusted session_name labels, conflicts, subscriptions and operational status."}, func(ctx context.Context, r *mcp.CallToolRequest, in empty) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)
 		if resolveErr != nil {
 			return result(nil, resolveErr)
@@ -160,6 +163,13 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), claude bool, 
 			return result(nil, resolveErr)
 		}
 		return result(map[string]string{"status": "published"}, n.announce(in.Text, in.ReplyTo))
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "set_session_name", Description: "Name this bound session for peers (label only, never an address; at most 96 UTF-8 bytes, single line). Overrides the agent's native title, persists across restarts, and is shared with trusted peers through discovery. Empty clears the override and reverts to the native title or the stable fallback. Returns the effective name."}, func(ctx context.Context, r *mcp.CallToolRequest, in nameInput) (*mcp.CallToolResult, any, error) {
+		n, resolveErr := resolve(r)
+		if resolveErr != nil {
+			return result(nil, resolveErr)
+		}
+		return result(n.setSessionName(in.Name))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "send", Description: "Send text to an exact live session_id; success means accepted in receiver's bounded queue, not read."}, func(ctx context.Context, r *mcp.CallToolRequest, in sendInput) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)

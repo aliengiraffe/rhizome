@@ -17,6 +17,7 @@ message Identity {
  string endpoint = 7;
  string gossip_endpoint = 8;
  string agent_type = 9; // Empty means Claude for backward compatibility.
+ string session_name = 10; // Optional label: explicit override, native title, or fallback. Never an address.
 }
 message FollowRequest {
  Identity target = 1;
