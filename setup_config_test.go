@@ -163,23 +163,23 @@ func TestAskConfig(t *testing.T) {
 		check       func(configAnswers) bool
 		wantOut     string
 	}{
-		{"defaults are local", "\n\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" && a.RuntimeDir == "" }, ""},
-		{"numeric local", "1\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" }, ""},
-		{"lan", "lan\n192.168.1.5\n\na:7946, b:7946\nn\nn\n", ok, func(a configAnswers) bool {
+		{"defaults are local", "\n\n\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" && a.RuntimeDir == "" }, ""},
+		{"numeric local", "1\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" }, ""},
+		{"lan", "lan\n192.168.1.5\n\na:7946, b:7946\nn\n\nn\n", ok, func(a configAnswers) bool {
 			n := a.Network
 			return n.Mode == "lan" && n.BindAddr == "192.168.1.5" && n.AdvertiseAddr == "" && len(n.Join) == 2 && n.MDNS != nil && !*n.MDNS
 		}, "never written"},
-		{"lan keeps default mdns unset", "2\n\n\n\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "lan" && a.Network.MDNS == nil }, ""},
-		{"tailscale defaults", "3\n\n\n\nn\n", ok, func(a configAnswers) bool {
+		{"lan keeps default mdns unset", "2\n\n\n\n\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "lan" && a.Network.MDNS == nil }, ""},
+		{"tailscale defaults", "3\n\n\n\n\nn\n", ok, func(a configAnswers) bool {
 			n := a.Network
 			return n.Mode == "tailscale" && n.GossipPort == 0 && n.DiscoveryInterval == ""
 		}, ""},
-		{"tailscale custom and warning", "tailscale\n7950\n45s\nhost.ts.net:7946\nn\n", func() error { return errors.New("tailscale is not running") }, func(a configAnswers) bool {
+		{"tailscale custom and warning", "tailscale\n7950\n45s\nhost.ts.net:7946\n\nn\n", func() error { return errors.New("tailscale is not running") }, func(a configAnswers) bool {
 			n := a.Network
 			return n.GossipPort == 7950 && n.DiscoveryInterval == "45s" && len(n.Join) == 1
 		}, "Warning: tailscale is not running"},
-		{"retry bad choice", "wan\n1\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" }, "Choose 1, 2 or 3"},
-		{"paths only when non-default", "1\ny\n\n/c\n\n\n", ok, func(a configAnswers) bool {
+		{"retry bad choice", "wan\n1\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" }, "Choose 1, 2 or 3"},
+		{"paths only when non-default", "1\n\ny\n\n/c\n\n\n", ok, func(a configAnswers) bool {
 			return a.ClaudeDir == "/c" && a.RuntimeDir == "" && a.CodexHome == "" && a.CodexBin == ""
 		}, ""},
 	}
@@ -267,7 +267,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
 		// local, no custom paths, no service install.
-		if err := setupConfig(resolved(t), p, nil, false, true, strings.NewReader("1\nn\nn\n"), &out, &errOut); err != nil {
+		if err := setupConfig(resolved(t), p, nil, false, true, strings.NewReader("1\n\nn\nn\n"), &out, &errOut); err != nil {
 			t.Fatal(err)
 		}
 		if b, _ := os.ReadFile(p); !strings.Contains(string(b), `mode = "local"`) {
@@ -277,3 +277,73 @@ func TestSetupConfig(t *testing.T) {
 }
 
 func bufioReader(s string) *bufio.Reader { return bufio.NewReader(strings.NewReader(s)) }
+
+func TestSetupHostname(t *testing.T) {
+	for _, hostname := range []string{"  My workstation  ", "   "} {
+		t.Run(hostname, func(t *testing.T) {
+			c := resolved(t)
+			c.Hostname = "previous"
+			var out bytes.Buffer
+			a, err := askConfig(prompter{in: bufioReader("local\n" + hostname + "\nn\n"), out: &out}, c, func() error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a.Hostname != strings.TrimSpace(hostname) || !strings.Contains(out.String(), "clears any previous override") {
+				t.Fatalf("%+v %s", a, &out)
+			}
+			path := filepath.Join(t.TempDir(), "config.toml")
+			old := "hostname = 'previous'\n"
+			if err := os.WriteFile(path, []byte(old), 0600); err != nil {
+				t.Fatal(err)
+			}
+			body, err := a.render()
+			if err != nil {
+				t.Fatal(err)
+			}
+			backup, err := writeConfig(path, body, true, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if b, err := os.ReadFile(backup); err != nil || string(b) != old {
+				t.Fatalf("backup %q %v", b, err)
+			}
+			loaded, err := config.Resolve(map[string]string{"config": path}, func(string) string { return "" })
+			if err != nil || loaded.Hostname != a.Hostname {
+				t.Fatalf("%+v %v", loaded, err)
+			}
+			if a.Hostname == "" && strings.Contains(body, "hostname") {
+				t.Fatal("persisted fallback")
+			}
+		})
+	}
+	var out bytes.Buffer
+	a, err := askConfig(prompter{in: bufioReader("local\nbad\x00label\ngood\nn\n"), out: &out}, resolved(t), func() error { return nil })
+	if err != nil || a.Hostname != "good" || !strings.Contains(out.String(), "control characters") {
+		t.Fatalf("%+v %v %s", a, err, &out)
+	}
+	if _, err := (configAnswers{Hostname: strings.Repeat("x", 65)}).render(); err == nil {
+		t.Fatal("invalid hostname rendered")
+	}
+}
+
+func TestSetupHostnameFlags(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RHIZOME_CONFIG", "")
+	path := filepath.Join(t.TempDir(), "config.toml")
+	for _, value := range []string{"  Laptop  ", ""} {
+		args := []string{"--config", path, "--network", "local", "--hostname", value}
+		if value == "" {
+			args = append(args, "--replace-config")
+		}
+		if err := setup(args); err != nil {
+			t.Fatal(err)
+		}
+		c, err := config.Resolve(map[string]string{"config": path}, func(string) string { return "" })
+		if err != nil || c.Hostname != strings.TrimSpace(value) {
+			t.Fatalf("%q %v", c.Hostname, err)
+		}
+	}
+	if err := setup([]string{"--hostname", "Laptop"}); err == nil || !strings.Contains(err.Error(), "requires --network") {
+		t.Fatalf("got %v", err)
+	}
+}

@@ -20,6 +20,7 @@ import (
 // configAnswers is what the setup wizard (or --network flags) decided. Only
 // answered settings are written; everything else keeps its default.
 type configAnswers struct {
+	Hostname   string
 	Network    config.Network
 	RuntimeDir string
 	ClaudeDir  string
@@ -30,6 +31,7 @@ type configAnswers struct {
 // fileDoc mirrors the TOML schema with omitempty so only answered keys appear.
 // It deliberately has no token field: tokens never enter configuration.
 type fileDoc struct {
+	Hostname   string `toml:"hostname,omitempty"`
 	RuntimeDir string `toml:"runtime_dir,omitempty"`
 	Claude     *struct {
 		ConfigDir string `toml:"config_dir,omitempty"`
@@ -52,6 +54,11 @@ type fileDoc struct {
 // render returns the config file body.
 func (a configAnswers) render() (string, error) {
 	var d fileDoc
+	var err error
+	d.Hostname, err = config.NormalizeHostname(a.Hostname)
+	if err != nil {
+		return "", err
+	}
 	d.RuntimeDir = a.RuntimeDir
 	if a.ClaudeDir != "" {
 		d.Claude = &struct {
@@ -261,6 +268,17 @@ How will Rhizome be used on this device?
 		if n.Join, err = p.list("Extra gossip host:port seeds to join (MagicDNS names allowed)"); err != nil {
 			return a, err
 		}
+	}
+	for {
+		value, err := p.ask("Hostname override (blank uses OS hostname and clears any previous override)", "")
+		if err != nil {
+			return a, err
+		}
+		a.Hostname, err = config.NormalizeHostname(value)
+		if err == nil {
+			break
+		}
+		fmt.Fprintln(p.out, err)
 	}
 	custom, err := p.yesNo("\nCustomize directories or the Codex binary", false)
 	if err != nil || !custom {

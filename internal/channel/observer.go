@@ -18,7 +18,7 @@ import (
 
 // ObserverOptions configures read-only discovery. Roots contain agent logs, not
 // arbitrary user files. Runtime must match integrated Rhizome processes.
-type ObserverOptions struct{ Runtime, ClaudeRoot, CodexRoot string }
+type ObserverOptions struct{ Runtime, ClaudeRoot, CodexRoot, Hostname string }
 type observedFile struct {
 	startupBaseline            bool
 	c                          *collector
@@ -456,7 +456,7 @@ func (o *observer) scan(path string, f *observedFile) {
 		n.identity.Project = clip(f.cwd, 180)
 		n.identity.DisplayName = clip(filepath.Base(f.cwd), 40)
 		n.identity.ObservationOnly = true
-		if err := n.start(Options{Runtime: o.opts.Runtime}); err != nil {
+		if err := n.start(Options{Runtime: o.opts.Runtime, Hostname: o.opts.Hostname}); err != nil {
 			n.close()
 			o.problem("observer publisher startup failed")
 			return

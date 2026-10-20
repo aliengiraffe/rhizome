@@ -241,6 +241,7 @@ func setup(args []string) error {
 	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex) or \"all\"; omit for an interactive picker")
 	config.Bind(opts)
 	list := opts.Bool("list", false, "print detected agents and exit")
+	hostname := opts.String("hostname", "", "with --network: device label override; blank uses the OS hostname")
 	network := opts.String("network", "", "write the configuration non-interactively: local, lan or tailscale; omit for the interactive questions")
 	var join listFlag
 	opts.Var(&join, "join", "with --network lan|tailscale: gossip host:port seed to join; repeatable")
@@ -259,7 +260,7 @@ func setup(args []string) error {
 	visited := map[string]bool{}
 	opts.Visit(func(f *flag.Flag) { visited[f.Name] = true })
 	if *network == "" {
-		for _, name := range []string{"join", "bind-addr", "advertise-addr", "mdns", "gossip-port", "discovery-interval", "replace-config"} {
+		for _, name := range []string{"hostname", "join", "bind-addr", "advertise-addr", "mdns", "gossip-port", "discovery-interval", "replace-config"} {
 			if visited[name] {
 				return fmt.Errorf("--%s requires --network", name)
 			}
@@ -283,7 +284,7 @@ func setup(args []string) error {
 	}
 	var answers *configAnswers
 	if *network != "" {
-		a := configAnswers{Network: config.Network{Mode: *network, BindAddr: *bindAddr, AdvertiseAddr: *advertiseAddr, Join: join, GossipPort: *gossipPort, DiscoveryInterval: *discovery}}
+		a := configAnswers{Hostname: *hostname, Network: config.Network{Mode: *network, BindAddr: *bindAddr, AdvertiseAddr: *advertiseAddr, Join: join, GossipPort: *gossipPort, DiscoveryInterval: *discovery}}
 		if visited["mdns"] {
 			a.Network.MDNS = mdns
 		}

@@ -109,6 +109,12 @@ a real tailnet; the two-device Tailscale checklist in
   backup, writes only answered keys at 0600, and never writes a token
   (`setup.go`, `setup_config.go`).
 
+- **Hostnames are display labels.** Shared top-level `hostname` is written by
+  the setup prompt or `setup --network ... --hostname ...`. Blank clears an
+  override and uses the OS short hostname in every mode, including Tailscale.
+  Explicit labels are trimmed, valid UTF-8, control-free, and at most 64 bytes;
+  gossip trims whole runes. MCP and observer nodes read it on restart. Never use
+  this label for routing, DNS, or identity (`internal/config`, `discovery.go`).
 - **Stdout is MCP only; diagnostics go to stderr.** Any stray output breaks framing
   (`internal/channel/mcp.go`, stdio smoke).
 - **Route only by exact `session_id`, never display name, session name, cwd, or

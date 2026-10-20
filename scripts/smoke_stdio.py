@@ -30,9 +30,11 @@ class Client:
         self.run = run
         args = [str(ROOT / 'rhizome'), 'mcp']
         # Isolate every process from the developer's ~/.rhizome/config.toml: an
-        # empty file selects built-in defaults, and the runtime stays private.
+        # explicit hostname also verifies shared labels never affect session routing.
         isolated = directory / 'smoke-config.toml'
-        isolated.touch(mode=0o600)
+        if not isolated.exists():
+            isolated.touch(mode=0o600)
+            isolated.write_text('hostname = "Smoke device"\n')
         env = {**os.environ, 'RHIZOME_CONFIG': str(isolated), 'RHIZOME_RUNTIME_DIR': str(run), **(env or {})}
         token = directory / 'token'
         if LAN:
@@ -138,6 +140,8 @@ def main():
             a.bind('alpha', directory)
             b.bind('beta', directory)
             until(lambda: len(b.tool('list_sessions')['sessions']) == 2)
+            assert all(s['identity']['host'] == 'Smoke device'
+                       for s in b.tool('list_sessions')['sessions'])
             fallback = directory.name + ' \u00b7 claude \u00b7 beta'
             assert b.tool('list_sessions')['identity']['session_name'] == fallback
             assert a.tool('set_session_name', {'name': '  alpha-task-name  '})['session_name'] == 'alpha-task-name'

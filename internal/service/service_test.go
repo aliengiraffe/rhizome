@@ -172,3 +172,10 @@ func TestInstallWritesOnlyDefinition(t *testing.T) {
 		t.Fatalf("unexpected install files: %v", entries)
 	}
 }
+
+func TestHostnameFromConfig(t *testing.T) {
+	c := config.Config{Hostname: "Work laptop"}
+	if got := FromConfig(c).Observer.Hostname; got != c.Hostname {
+		t.Fatalf("hostname %q", got)
+	}
+}

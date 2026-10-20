@@ -159,7 +159,7 @@ func TestParseTailscaleStatus(t *testing.T) {
 	if st.BackendState != "Running" || !st.MagicDNSEnabled || st.MagicDNSSuffix != "tail2fdf06.ts.net" {
 		t.Fatalf("tailnet fields: %+v", st)
 	}
-	if st.Self.ipv4().String() != "100.93.74.31" || st.Self.label(true) != "delta" || st.Self.dialHost(true) != "delta.tail2fdf06.ts.net" {
+	if st.Self.ipv4().String() != "100.93.74.31" || st.Self.dialHost(true) != "delta.tail2fdf06.ts.net" {
 		t.Fatalf("self: %+v", st.Self)
 	}
 	if len(st.Peers) != 2 || st.Peers[0].DNSName != "nicos-macbook-pro.tail2fdf06.ts.net." || st.Peers[1].HostName != "server" {
@@ -168,8 +168,8 @@ func TestParseTailscaleStatus(t *testing.T) {
 	if !st.Peers[0].Online || st.Peers[1].Online || st.Peers[0].ipv4().String() != "100.114.80.29" || len(st.Peers[0].IPs) != 2 {
 		t.Fatalf("peer fields: %+v", st.Peers)
 	}
-	if st.Peers[0].label(false) != "Nico’s MacBook Pro" || st.Peers[0].dialHost(false) != "100.114.80.29" {
-		t.Fatalf("MagicDNS-off labels: %+v", st.Peers[0])
+	if st.Peers[0].dialHost(false) != "100.114.80.29" {
+		t.Fatalf("MagicDNS-off dial host: %+v", st.Peers[0])
 	}
 	if _, err := tailscaleSelf(context.Background(), &fakeTailscale{st: st}); err != nil {
 		t.Fatal(err)
@@ -192,11 +192,6 @@ func TestParseTailscaleStatus(t *testing.T) {
 	}
 	if _, err := parseTailscaleStatus([]byte("not json")); err == nil {
 		t.Fatal("parsed garbage")
-	}
-	for _, c := range []struct{ in, want string }{{"delta.tail2fdf06.ts.net.", "delta"}, {"delta.tail2fdf06.ts.net", "delta"}, {"delta", "delta"}, {"", ""}} {
-		if got := magicDNSShort(c.in); got != c.want {
-			t.Errorf("magicDNSShort(%q) = %q", c.in, got)
-		}
 	}
 }
 func TestTailscaleStartFailsLoudly(t *testing.T) {
@@ -250,7 +245,7 @@ func TestTailnetTargets(t *testing.T) {
 func TestTailscaleBeaconDiscoveryAndReacquire(t *testing.T) {
 	beaconPort := freePort(t)
 	alpha, stopAlpha := tsNode(t, "", beaconPort, &fakeTailscale{st: loopbackStatus("alpha", nil, nil)})
-	if !beacon(alpha) || port(t, alpha.local().GossipEndpoint) == beaconPort || alpha.local().Host != "alpha" || !validFingerprint(alpha.local().CertFingerprint) {
+	if !beacon(alpha) || port(t, alpha.local().GossipEndpoint) == beaconPort || alpha.local().Host != shortHost() || !validFingerprint(alpha.local().CertFingerprint) {
 		t.Fatalf("beacon holder identity: %v", alpha.local())
 	}
 	// Same device, port busy: no beacon; another device (beta) finds alpha
@@ -265,7 +260,7 @@ func TestTailscaleBeaconDiscoveryAndReacquire(t *testing.T) {
 	eventually(t, func() bool { _, err := beta.resolve(context.Background(), "session-alpha"); return err == nil })
 	eventually(t, func() bool { _, err := alpha.resolve(context.Background(), "session-beta"); return err == nil })
 	for _, p := range alpha.peers() {
-		if p.SessionId == "session-beta" && p.Host != "beta" {
+		if p.SessionId == "session-beta" && p.Host != shortHost() {
 			t.Fatalf("peer host label: %v", p)
 		}
 	}

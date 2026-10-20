@@ -192,10 +192,10 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), claude bool, 
 	return s
 }
 
-// Run serves the Claude channel. c supplies the runtime directory; o carries the
-// LAN options, which are not yet part of the configuration file.
+// Run serves the Claude channel with resolved configuration and network options.
 func Run(c config.Config, o Options) error {
 	o.Runtime = c.RuntimeDir
+	o.Hostname = c.Hostname
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

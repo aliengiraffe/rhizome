@@ -240,8 +240,8 @@ Automated, all on one macOS host:
   mode rejecting a private advertise address and refusing to fall back to an
   interface address; Tailscale-only options rejected in other modes; parsing of
   a `tailscale status --json` fixture (self IP, sorted online/offline peers,
-  MagicDNS suffix and flag, MagicDNS-off labels and dial hosts, `NeedsLogin`,
-  empty `TailscaleIPs`, malformed JSON); MagicDNS short-name derivation; startup
+  MagicDNS suffix and flag, MagicDNS-off dial hosts, `NeedsLogin`,
+  empty `TailscaleIPs`, malformed JSON); startup
   failing without listeners when the CLI is missing, the backend is `Stopped` or
   no IPv4 exists; target selection skipping self, offline devices, devices
   already in the cluster and peers with nothing to dial, by MagicDNS name or by
@@ -300,8 +300,8 @@ macOS plus one Linux or macOS device and record the result in the PR.
    MagicDNS name and `beacon_port=7946`.
 3. Within one discovery interval (20 s), call `list_sessions` on each after the
    first prompt. Verify the other device's session appears with `host` equal to
-   its MagicDNS short name, a `100.x` `endpoint` and a 64-character
-   `cert_fingerprint`. The joining side's stderr shows
+   its configured hostname override (or OS short hostname), a `100.x` `endpoint`
+   and a 64-character `cert_fingerprint`. The joining side's stderr shows
    `seed_joined source=tailscale addr=100.x.y.z:7946`.
 4. Subscribe from A to B's exact session ID, publish a marker from B and verify
    it arrives in A with B's metadata. Send a direct marker from B to A without a
@@ -374,3 +374,13 @@ Automated on macOS:
 Not exercised here: real coding agent clients calling the new tools, native
 service installation on Linux/Windows with a large pre-existing log tree, and
 any cross-device scenario (history is local by design).
+
+## Hostname override (#29)
+
+Automated coverage includes setup prompting and retry, clearing an existing
+value with backup, noninteractive `--hostname`, resolver source reporting,
+64-byte UTF-8 and control-character validation, rune-safe gossip trimming,
+authenticated identity probes in local/LAN/Tailscale modes for both agent types,
+and observer propagation. The stdio smokes list peers with the same custom host
+label and exercise exact-session routing. Live two-device checks and real
+terminal prompts remain manual; the checks above describe how to exercise them.
