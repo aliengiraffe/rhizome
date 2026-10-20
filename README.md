@@ -21,11 +21,12 @@ file must exist. Reading configuration never creates directories or files.
 
 Precedence is **explicit flag > nonempty environment variable > file > default**.
 Run `rhizome config` to print every effective key, its source, and the selected
-file path (including “not found”). It also accepts the override flags in the table
-for diagnostics. All startup diagnostics and errors go to stderr.
+file path (including “not found”). It also accepts the runtime override flags in
+the table for diagnostics; `setup --hostname` only writes the file. All startup diagnostics and errors go to stderr.
 
 | TOML key | Environment | Flag | Default |
 | --- | --- | --- | --- |
+| `hostname` | — | setup `--hostname` (writes file) | empty: OS hostname |
 | `runtime_dir` | `RHIZOME_RUNTIME_DIR` | service `--runtime-dir` | `~/.rhizome/run` |
 | `claude.config_dir` | `CLAUDE_CONFIG_DIR` | — | `~/.claude` |
 | `claude.projects_dir` | — | service `--claude-root` | effective `claude.config_dir` + `/projects` |
@@ -42,6 +43,7 @@ for diagnostics. All startup diagnostics and errors go to stderr.
 
 ```toml
 runtime_dir = "~/.rhizome/run"
+hostname = "" # optional device display label; blank uses the OS hostname
 
 [claude]
 config_dir = "~/.claude"
@@ -58,6 +60,15 @@ sessions_dir = ""
 [network]
 mode = "local"   # or "lan", or "tailscale"
 ```
+
+`hostname` controls the `host` label in session listings for both supported agents
+and observer sessions. A missing, empty, or whitespace-only value uses the OS
+hostname at startup (the portion before the first dot, bounded to 64 bytes).
+Custom labels are trimmed, must be valid UTF-8, contain no control characters,
+and fit in 64 bytes. Labels need not be unique and never affect routing or DNS.
+Restart MCP processes and the observer after changing this setting. This applies
+in every network mode; Tailscale users who want their previous MagicDNS or
+Tailscale display label can set it explicitly.
 
 The `[network]` table selects how `rhizome mcp` peers; see [LAN mode](#lan-mode)
 and [Tailscale mode](#tailscale-mode) for what each option means. Options that
@@ -335,8 +346,8 @@ RHIZOME_TOKEN=<token> RHIZOME_TAILSCALE=1 ./rhizome mcp     # or env, for .mcp.j
 At startup Rhizome runs `tailscale status --json` (the CLI is looked up on `PATH`,
 then at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`; verified with the
 standalone macOS build 1.104) and binds gRPC and gossip to this device's Tailscale
-IPv4, so nothing is exposed on the physical LAN. The `host` label becomes the
-MagicDNS short name (`delta` for `delta.tail2fdf06.ts.net`). Every discovery
+IPv4, so nothing is exposed on the physical LAN. The `host` label uses the
+configured `hostname` or OS hostname, independently of MagicDNS. Every discovery
 interval it enumerates online peers and, for each device not yet in the cluster,
 attempts a gossip join against `<magicdns name>:<beacon port>` (the Tailscale IP
 when MagicDNS is disabled). As with mDNS and `--join`, memberlist's token-keyed
@@ -379,8 +390,9 @@ anything when the CLI is missing (`tailscale CLI not found on PATH`), the daemon
 is stopped or logged out (`tailscale is not running (state "NeedsLogin")`), or the
 device has no Tailscale IPv4 (`this device has no Tailscale IPv4 address`). It
 never falls back to loopback or `0.0.0.0`. When MagicDNS is disabled on the
-tailnet it logs `magicdns_disabled` once, dials peers by Tailscale IP and labels
-`host` with the Tailscale hostname. The `ready` line reports `mode=tailscale`,
+tailnet it logs `magicdns_disabled` once and dials peers by Tailscale IP. The
+`host` display label remains independent of this choice. The `ready` line reports
+`mode=tailscale`,
 `tailscale_ip`, `magicdns`, `beacon_port` (or `ephemeral` when another process
 holds it) and `discovery_interval`.
 
@@ -483,9 +495,11 @@ which setup may create):
 2. **Mode options**: LAN asks for listen/advertise addresses, `join` seeds and
    mDNS; Tailscale checks that the daemon is running (a warning, never a
    failure), then asks for the gossip port, discovery interval and `join` seeds.
-3. **Directories**: optionally `runtime_dir`, the Claude config directory, Codex
+3. **Hostname override**: an optional device label. Blank uses the OS hostname
+   and clears any previous override when replacing configuration.
+4. **Directories**: optionally `runtime_dir`, the Claude config directory, Codex
    home and the Codex executable. Only values that differ from the defaults are written.
-4. **Service**: optionally runs `rhizome service install` afterwards.
+5. **Service**: optionally runs `rhizome service install` afterwards.
 
 Enter always takes the safe default. Only answered keys are written, the file is
 created 0600 under a 0700 directory, and the token is never written. An existing
@@ -493,7 +507,8 @@ file is shown and kept unless you choose to replace it, in which case it is
 backed up first (`config.toml.bak-<timestamp>`). Without a terminal, pass the type:
 
 ```sh
-./rhizome setup --network local
+./rhizome setup --network local --hostname "Work laptop"
+./rhizome setup --network local --hostname "" --replace-config # restore OS hostname
 ./rhizome setup --network lan --join 192.168.1.20:7946 [--bind-addr IP] [--advertise-addr IP] [--mdns=false]
 ./rhizome setup --network tailscale [--join host:7946] [--gossip-port 7950] [--discovery-interval 45s]
 ./rhizome setup --network lan --replace-config   # back up and replace an existing file

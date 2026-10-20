@@ -32,6 +32,7 @@ import (
 // boundary from "this user on this machine" to "any holder of the token on
 // the local network".
 type Options struct {
+	Hostname      string        // display label; empty uses the OS hostname
 	Runtime       string        // registry directory; default ~/.rhizome/run
 	LAN           bool          // bind and advertise on the local network
 	Tailscale     bool          // bind the Tailscale IP and discover tailnet peers via the local daemon; implies the LAN transport

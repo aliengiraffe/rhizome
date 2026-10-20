@@ -158,17 +158,6 @@ func (p tailscalePeer) ipv4() net.IP {
 	return nil
 }
 
-// label is the host label list_sessions shows: the MagicDNS short name, or
-// the Tailscale hostname when MagicDNS is off.
-func (p tailscalePeer) label(magicDNS bool) string {
-	if magicDNS {
-		if short := magicDNSShort(p.DNSName); short != "" {
-			return short
-		}
-	}
-	return p.HostName
-}
-
 // dialHost is where a peer's beacon is tried: its MagicDNS name, or its
 // Tailscale IPv4 when MagicDNS is off. Empty when neither is available.
 func (p tailscalePeer) dialHost(magicDNS bool) string {
@@ -179,10 +168,6 @@ func (p tailscalePeer) dialHost(magicDNS bool) string {
 		return ip.String()
 	}
 	return ""
-}
-func magicDNSShort(dnsName string) string {
-	short, _, _ := strings.Cut(strings.TrimSuffix(dnsName, "."), ".")
-	return short
 }
 
 // tailscaleSelf queries the daemon at startup and fails loudly when Tailscale
@@ -200,7 +185,7 @@ func tailscaleSelf(ctx context.Context, client tailscaleClient) (*tailscaleStatu
 		return nil, errors.New("tailscale mode: this device has no Tailscale IPv4 address")
 	}
 	if !st.MagicDNSEnabled {
-		slog.Info("magicdns_disabled", "message", "dialing tailnet peers by Tailscale IP and labelling hosts by Tailscale hostname")
+		slog.Info("magicdns_disabled", "message", "dialing tailnet peers by Tailscale IP")
 	}
 	return st, nil
 }

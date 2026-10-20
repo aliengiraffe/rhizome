@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 	"rhizome/internal/localstate"
@@ -21,6 +23,7 @@ import (
 // is a per-launch choice (`rhizome mcp --agent`) and is never configured here.
 type Config struct {
 	RuntimeDir string `toml:"runtime_dir"`
+	Hostname   string `toml:"hostname"`
 	Claude     struct {
 		ConfigDir   string `toml:"config_dir"`   // CLAUDE_CONFIG_DIR; skills and transcripts live under it.
 		ProjectsDir string `toml:"projects_dir"` // Transcript root the observer watches; default <config_dir>/projects.
@@ -93,6 +96,7 @@ type setting struct {
 
 func (c *Config) settings() []setting {
 	return []setting{
+		{"hostname", "", "", &c.Hostname, false},
 		{"runtime_dir", "RHIZOME_RUNTIME_DIR", "runtime-dir", &c.RuntimeDir, true},
 		{"claude.config_dir", "CLAUDE_CONFIG_DIR", "", &c.Claude.ConfigDir, true},
 		{"claude.projects_dir", "", "claude-root", &c.Claude.ProjectsDir, true},
@@ -215,7 +219,7 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	rawSettings := raw.settings()
 	for i, s := range c.settings() {
 		source := "default"
-		if md.IsDefined(strings.Split(s.key, ".")...) && (*rawSettings[i].value != "" || s.key == "runtime_dir" || s.key == "codex.bin") {
+		if md.IsDefined(strings.Split(s.key, ".")...) && (*rawSettings[i].value != "" || s.key == "runtime_dir" || s.key == "codex.bin" || s.key == "hostname") {
 			*s.value, source = *rawSettings[i].value, "file"
 		}
 		if s.env != "" {
@@ -234,7 +238,13 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 				*s.value = filepath.Join(c.Codex.Home, "sessions")
 			}
 		}
-		if *s.value == "" {
+		if s.key == "hostname" {
+			*s.value, err = NormalizeHostname(*s.value)
+			if err != nil {
+				return c, fmt.Errorf("config %s: %w", path, err)
+			}
+		}
+		if *s.value == "" && s.key != "hostname" {
 			return c, fmt.Errorf("config %s: %s must not be empty (%s)", path, s.key, source)
 		}
 		if s.path || s.key == "codex.bin" && binaryPath(*s.value) {
@@ -343,4 +353,22 @@ func (c Config) Write(w io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// NormalizeHostname validates a display label; empty means the OS hostname.
+// Labels are bounded by the existing 64-byte host metadata budget.
+func NormalizeHostname(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if !utf8.ValidString(value) {
+		return "", errors.New("hostname must be valid UTF-8")
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return "", errors.New("hostname must not contain control characters")
+		}
+	}
+	if len(value) > 64 {
+		return "", errors.New("hostname must be at most 64 UTF-8 bytes")
+	}
+	return value, nil
 }

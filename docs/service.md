@@ -51,8 +51,9 @@ The default roots derive from the effective agent directories: Claude's
 `projects` and Codex's `sessions`. MCP and the observer must share the same
 runtime directory to coordinate collection. Use the same `--config` path for
 management commands when installing with a custom file. Configuration is read
-once per process; edits take effect on the next start. Reinstalling the same
-running definition is idempotent. Stop/uninstall before replacing a definition;
+once per process; edits take effect on the next start. The shared `hostname`
+setting also labels observer sessions; blank uses the OS short hostname.
+Reinstalling the same running definition is idempotent. Stop/uninstall before replacing a definition;
 installation refuses to switch away from a running observer's runtime. The
 definition includes runtime metadata solely for this check, not for resolution.
 

@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"rhizome/internal/config"
 	"rhizome/internal/localstate"
 	pb "rhizome/proto"
 )
@@ -42,7 +43,7 @@ func (n *Node) NodeMeta(limit int) []byte {
 		b, _ = json.Marshal(identity)
 	}
 	for len(b) > limit && len(identity.Host) > 0 {
-		identity.Host = identity.Host[:len(identity.Host)-1]
+		identity.Host = trimRune(identity.Host)
 		b, _ = json.Marshal(identity)
 	}
 	if len(b) > limit {
@@ -168,6 +169,14 @@ func Token(runtime string) (string, error) {
 	return loadToken(runtime, Options{})
 }
 func (n *Node) start(o Options) error {
+	hostname, err := config.NormalizeHostname(o.Hostname)
+	if err != nil {
+		return err
+	}
+	if hostname == "" {
+		hostname = shortHost()
+	}
+	n.identity.Host = hostname
 	if err := o.validate(); err != nil {
 		return err
 	}
@@ -213,9 +222,6 @@ func (n *Node) start(o Options) error {
 			o.Discovery = defaultDiscoveryInterval
 		}
 		n.beaconPort = o.GossipPort
-		if label := ts.Self.label(ts.MagicDNSEnabled); label != "" {
-			n.identity.Host = clip(label, 64)
-		}
 	}
 	n.opts = o
 	serverOptions := []grpc.ServerOption{grpc.MaxRecvMsgSize(64 * 1024), grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {

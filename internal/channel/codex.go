@@ -242,6 +242,7 @@ func queueCodex(ctx context.Context, binary, socket, thread, text string, meta m
 // runtime directory; o carries the LAN options.
 func RunCodex(c config.Config, o Options) error {
 	o.Runtime = c.RuntimeDir
+	o.Hostname = c.Hostname
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	resolved, err := exec.LookPath(c.Codex.Bin)
 	if err != nil {
