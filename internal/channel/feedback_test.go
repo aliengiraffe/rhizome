@@ -73,3 +73,26 @@ func TestTurnMarkersCannotWakeSubscribers(t *testing.T) {
 		t.Fatal("explicit publish rejected")
 	}
 }
+
+// A followed turn marker is consumed, not replayed: activity after it still arrives
+// on the same stream.
+func TestTurnMarkerDoesNotStallSubscription(t *testing.T) {
+	a, b := pair(t)
+	if err := b.subscribe("session-a"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool { b.mu.Lock(); defer b.mu.Unlock(); return b.feeds["session-a"].status == "following" })
+	gen := a.local().Generation
+	a.activity(gen, "turn", "Turn completed")
+	a.activity(gen, "activity", "after turn")
+	eventually(t, func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return len(b.incoming) == 1 && b.incoming[0].event.Text == "after turn"
+	})
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if f := b.feeds["session-a"]; f.reconnects != 0 || f.status != "following" {
+		t.Fatalf("turn marker broke the stream: reconnects=%d status=%s", f.reconnects, f.status)
+	}
+}
