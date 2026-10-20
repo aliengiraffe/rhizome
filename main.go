@@ -61,9 +61,14 @@ func entry() error {
 		if err != nil {
 			return err
 		}
+		// Precedence is flag > env > file > default; the file only fills what
+		// neither a flag nor an environment variable set.
+		visited := map[string]bool{}
+		opts.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+		applyNetwork(&o, c.Network, visited, os.LookupEnv)
 		// mDNS cannot cross the tunnel; in Tailscale mode it is opt-in.
 		_, mdnsSet := os.LookupEnv("RHIZOME_MDNS")
-		opts.Visit(func(f *flag.Flag) { mdnsSet = mdnsSet || f.Name == "mdns" })
+		mdnsSet = mdnsSet || visited["mdns"] || c.Network.MDNS != nil
 		if o.Tailscale && !mdnsSet {
 			o.MDNS = false
 		}
@@ -154,6 +159,39 @@ func optionsFromEnv() (channel.Options, error) {
 		}
 	}
 	return o, nil
+}
+
+// applyNetwork fills o from the configuration file's [network] table for every
+// setting that no flag and no environment variable already chose.
+func applyNetwork(o *channel.Options, n config.Network, visited map[string]bool, lookup func(string) (string, bool)) {
+	set := func(env, flagName string) bool {
+		if visited[flagName] {
+			return true
+		}
+		v, ok := lookup(env)
+		return ok && strings.TrimSpace(v) != ""
+	}
+	if !set("RHIZOME_LAN", "lan") && !set("RHIZOME_TAILSCALE", "tailscale") {
+		o.LAN, o.Tailscale = n.Mode == config.ModeLAN, n.Mode == config.ModeTailscale
+	}
+	if !set("RHIZOME_BIND_ADDR", "bind-addr") {
+		o.BindAddr = n.BindAddr
+	}
+	if !set("RHIZOME_ADVERTISE_ADDR", "advertise-addr") {
+		o.AdvertiseAddr = n.AdvertiseAddr
+	}
+	if !set("RHIZOME_JOIN", "join") {
+		o.Join = append([]string(nil), n.Join...)
+	}
+	if !set("RHIZOME_MDNS", "mdns") && n.MDNS != nil {
+		o.MDNS = *n.MDNS
+	}
+	if !set("RHIZOME_GOSSIP_PORT", "gossip-port") {
+		o.GossipPort = n.GossipPort
+	}
+	if !set("RHIZOME_DISCOVERY_INTERVAL", "discovery-interval") && n.DiscoveryInterval != "" {
+		o.Discovery, _ = time.ParseDuration(n.DiscoveryInterval) // validated by config
+	}
 }
 
 type listFlag []string

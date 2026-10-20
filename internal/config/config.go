@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"rhizome/internal/localstate"
@@ -29,9 +30,59 @@ type Config struct {
 		Home        string `toml:"home"`         // CODEX_HOME; App Server socket and skills live under it.
 		SessionsDir string `toml:"sessions_dir"` // Session log root the observer watches; default <home>/sessions.
 	} `toml:"codex"`
+	Network Network           `toml:"network"`
 	Path    string            `toml:"-"`
 	Found   bool              `toml:"-"`
 	Sources map[string]string `toml:"-"`
+}
+
+// Network selects how `rhizome mcp` peers. Mode "local" (the default) is
+// loopback only; "lan" and "tailscale" are the two opt-in wider modes. Unset
+// fields keep their built-in defaults. Flags and RHIZOME_* variables override
+// every key, and none of them ever holds the cluster token.
+type Network struct {
+	Mode              string   `toml:"mode"`
+	BindAddr          string   `toml:"bind_addr"`
+	AdvertiseAddr     string   `toml:"advertise_addr"`
+	Join              []string `toml:"join"`
+	MDNS              *bool    `toml:"mdns"`
+	GossipPort        int      `toml:"gossip_port"`
+	DiscoveryInterval string   `toml:"discovery_interval"`
+}
+
+// Network modes accepted by network.mode.
+const (
+	ModeLocal     = "local"
+	ModeLAN       = "lan"
+	ModeTailscale = "tailscale"
+)
+
+var networkKeys = []string{"mode", "bind_addr", "advertise_addr", "join", "mdns", "gossip_port", "discovery_interval"}
+
+// Validate rejects unknown modes and options that the selected mode refuses at
+// startup, so a bad file fails before any listener is opened.
+func (n Network) Validate() error {
+	switch n.Mode {
+	case "", ModeLocal:
+		if n.BindAddr != "" || n.AdvertiseAddr != "" || len(n.Join) > 0 || n.MDNS != nil {
+			return errors.New("network: bind_addr, advertise_addr, join and mdns require mode \"lan\" or \"tailscale\"")
+		}
+	case ModeLAN, ModeTailscale:
+	default:
+		return fmt.Errorf("network.mode %q must be local, lan or tailscale", n.Mode)
+	}
+	if n.Mode != ModeTailscale && (n.GossipPort != 0 || n.DiscoveryInterval != "") {
+		return errors.New("network: gossip_port and discovery_interval require mode \"tailscale\"")
+	}
+	if n.GossipPort < 0 || n.GossipPort > 65535 {
+		return errors.New("network.gossip_port must be 1-65535")
+	}
+	if n.DiscoveryInterval != "" {
+		if d, err := time.ParseDuration(n.DiscoveryInterval); err != nil || d <= 0 {
+			return fmt.Errorf("network.discovery_interval %q must be a positive duration such as 20s", n.DiscoveryInterval)
+		}
+	}
+	return nil
 }
 
 type setting struct {
@@ -75,15 +126,14 @@ func FromFlags(fs *flag.FlagSet) (Config, error) {
 	return c, err
 }
 
-// Resolve reads settings once. getenv may be replaced to resolve without an environment.
-func Resolve(flags map[string]string, getenv func(string) string) (Config, error) {
-	var c Config
+// Target returns the configuration file a process would read and whether it was
+// selected explicitly (--config or RHIZOME_CONFIG) rather than defaulted.
+func Target(flags map[string]string, getenv func(string) string) (string, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return c, err
+		return "", false, err
 	}
-	path := filepath.Join(home, ".rhizome", "config.toml")
-	explicit := false
+	path, explicit := filepath.Join(home, ".rhizome", "config.toml"), false
 	if p := getenv("RHIZOME_CONFIG"); p != "" {
 		path, explicit = p, true
 	}
@@ -92,7 +142,21 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	}
 	path, err = expand(path, home)
 	if err != nil {
-		return c, fmt.Errorf("config path %q: %w", path, err)
+		return path, explicit, fmt.Errorf("config path %q: %w", path, err)
+	}
+	return path, explicit, nil
+}
+
+// Resolve reads settings once. getenv may be replaced to resolve without an environment.
+func Resolve(flags map[string]string, getenv func(string) string) (Config, error) {
+	var c Config
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return c, err
+	}
+	path, explicit, err := Target(flags, getenv)
+	if err != nil {
+		return c, err
 	}
 	c.Path = path
 	c.Sources = map[string]string{}
@@ -114,7 +178,10 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	}
 	// TOML keys are case-sensitive even though the decoder can match Go fields
 	// case-insensitively. Reject alternate spellings instead of losing their source.
-	known := map[string]bool{"claude": true, "codex": true}
+	known := map[string]bool{"claude": true, "codex": true, "network": true}
+	for _, k := range networkKeys {
+		known["network."+k] = true
+	}
 	for _, s := range raw.settings() {
 		known[s.key] = true
 	}
@@ -130,6 +197,17 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 				return c, fmt.Errorf("config %s: %s: %w", path, s.key, err)
 			}
 		}
+	}
+	if err := raw.Network.Validate(); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	c.Network = raw.Network
+	for _, k := range networkKeys {
+		source := "default"
+		if md.IsDefined("network", k) {
+			source = "file"
+		}
+		c.Sources["network."+k] = source
 	}
 	c.RuntimeDir = filepath.Join(home, ".rhizome", "run")
 	c.Codex.Bin = "codex"
@@ -238,6 +316,29 @@ func (c Config) Write(w io.Writer) error {
 	}
 	for _, s := range c.settings() {
 		if _, err := fmt.Fprintf(w, "%s = %q # source: %s\n", s.key, *s.value, c.Sources[s.key]); err != nil {
+			return err
+		}
+	}
+	n := c.Network
+	mode := n.Mode
+	if mode == "" {
+		mode = ModeLocal
+	}
+	mdns := "unset"
+	if n.MDNS != nil {
+		mdns = fmt.Sprint(*n.MDNS)
+	}
+	lines := []struct{ key, value string }{
+		{"network.mode", fmt.Sprintf("%q", mode)},
+		{"network.bind_addr", fmt.Sprintf("%q", n.BindAddr)},
+		{"network.advertise_addr", fmt.Sprintf("%q", n.AdvertiseAddr)},
+		{"network.join", fmt.Sprintf("%q", n.Join)},
+		{"network.mdns", mdns},
+		{"network.gossip_port", fmt.Sprint(n.GossipPort)},
+		{"network.discovery_interval", fmt.Sprintf("%q", n.DiscoveryInterval)},
+	}
+	for _, l := range lines {
+		if _, err := fmt.Fprintf(w, "%s = %s # source: %s\n", l.key, l.value, c.Sources[l.key]); err != nil {
 			return err
 		}
 	}

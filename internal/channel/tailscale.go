@@ -360,3 +360,12 @@ func (n *Node) tailnet(interval time.Duration) {
 		}
 	}
 }
+
+// CheckTailscale reports whether Tailscale mode could start now: the CLI is
+// installed, the daemon is running and this device has a Tailscale address. It
+// is advisory (used by `rhizome setup`); startup performs the same check and
+// fails closed.
+func CheckTailscale(ctx context.Context) error {
+	_, err := tailscaleSelf(ctx, tailscaleCLI{})
+	return err
+}

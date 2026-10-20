@@ -99,6 +99,12 @@ a real tailnet; the two-device Tailscale checklist in
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
   CLI usage: `rhizome mcp | setup | service | config | demo [flags]`.
+  The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
+  mdns/gossip_port/discovery_interval) is validated at read time and applies to
+  `mcp` only, with flag > env > file > default. `rhizome setup` is the only
+  writer of the file: it asks or takes `--network`, never overwrites without a
+  backup, writes only answered keys at 0600, and never writes a token
+  (`setup.go`, `setup_config.go`).
 
 - **Stdout is MCP only; diagnostics go to stderr.** Any stray output breaks framing
   (`internal/channel/mcp.go`, stdio smoke).

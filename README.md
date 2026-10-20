@@ -29,6 +29,13 @@ for diagnostics. All startup diagnostics and errors go to stderr.
 | `codex.bin` | — | mcp `--codex-bin` | `codex` |
 | `codex.home` | `CODEX_HOME` | — | `~/.codex` |
 | `codex.sessions_dir` | — | service `--codex-root` | effective `codex.home` + `/sessions` |
+| `network.mode` | `RHIZOME_LAN`, `RHIZOME_TAILSCALE` | mcp `--lan`, `--tailscale` | `local` |
+| `network.bind_addr` | `RHIZOME_BIND_ADDR` | mcp `--bind-addr` | LAN: all interfaces; Tailscale: the Tailscale IP |
+| `network.advertise_addr` | `RHIZOME_ADVERTISE_ADDR` | mcp `--advertise-addr` | first private interface; Tailscale: the Tailscale IP |
+| `network.join` | `RHIZOME_JOIN` | mcp `--join` | none |
+| `network.mdns` | `RHIZOME_MDNS` | mcp `--mdns` | on in LAN mode, off in Tailscale mode |
+| `network.gossip_port` | `RHIZOME_GOSSIP_PORT` | mcp `--gossip-port` | `7946` (Tailscale only) |
+| `network.discovery_interval` | `RHIZOME_DISCOVERY_INTERVAL` | mcp `--discovery-interval` | `20s` (Tailscale only) |
 
 ```toml
 runtime_dir = "~/.rhizome/run"
@@ -43,7 +50,18 @@ bin = "codex"
 home = "~/.codex"
 # Omit, or leave empty, to derive from home.
 sessions_dir = ""
+
+# Optional. Omit the table, or use mode = "local", for loopback only.
+[network]
+mode = "local"   # or "lan", or "tailscale"
 ```
+
+The `[network]` table selects how `rhizome mcp` peers; see [LAN mode](#lan-mode)
+and [Tailscale mode](#tailscale-mode) for what each option means. Options that
+the chosen mode would refuse at startup (`join` in local mode, `gossip_port` outside
+Tailscale mode, an unknown `mode`) are rejected when the file is read. The
+background service does not peer, so it ignores `[network]`. `rhizome setup`
+can write this file for you ([Collaboration skill](#collaboration-skill)).
 
 Settings are grouped by the agent they describe. Which agent a process serves is
 not configuration: each MCP client launches `rhizome mcp --agent claude` or
@@ -433,7 +451,8 @@ embedded in the binary; install it with:
 Setup detects Claude Code (`$CLAUDE_CONFIG_DIR` or `~/.claude`, or `claude` on
 PATH) and Codex (`$CODEX_HOME` or `~/.codex`, or `codex` on PATH). The picker
 pre-selects detected agents; space toggles one, `a` toggles all, enter confirms.
-Without a terminal, `--agents` is required. The skill is written to
+Without a terminal, `--agents` is required (unless only writing configuration with
+`--network`, below). The skill is written to
 `<agent dir>/skills/rhizome-collab/SKILL.md`; re-running setup updates it in
 place after upgrading Rhizome. An existing symlink at that path is left alone, so
 a development checkout can still be linked instead:
@@ -444,6 +463,37 @@ ln -s "$PWD/skills/rhizome-collab" ~/.codex/skills/rhizome-collab    # Codex
 ```
 
 Then run `/rhizome-collab` in the agent with an optional task description.
+
+### Creating the configuration file
+
+In a terminal, setup also asks how Rhizome will be used and writes
+`~/.rhizome/config.toml` (or the file selected with `--config`/`RHIZOME_CONFIG`,
+which setup may create):
+
+1. **Installation type**: `local` (default; loopback only), `lan`, or `tailscale`.
+   LAN and Tailscale make the device reachable by peers holding the cluster token.
+2. **Mode options**: LAN asks for listen/advertise addresses, `join` seeds and
+   mDNS; Tailscale checks that the daemon is running (a warning, never a
+   failure), then asks for the gossip port, discovery interval and `join` seeds.
+3. **Directories**: optionally `runtime_dir`, the Claude config directory, Codex
+   home and the Codex executable. Only values that differ from the defaults are written.
+4. **Service**: optionally runs `rhizome service install` afterwards.
+
+Enter always takes the safe default. Only answered keys are written, the file is
+created 0600 under a 0700 directory, and the token is never written. An existing
+file is shown and kept unless you choose to replace it, in which case it is
+backed up first (`config.toml.bak-<timestamp>`). Without a terminal, pass the type:
+
+```sh
+./rhizome setup --network local
+./rhizome setup --network lan --join 192.168.1.20:7946 [--bind-addr IP] [--advertise-addr IP] [--mdns=false]
+./rhizome setup --network tailscale [--join host:7946] [--gossip-port 7950] [--discovery-interval 45s]
+./rhizome setup --network lan --replace-config   # back up and replace an existing file
+```
+
+Combine with `--agents` to also install the skill. Without a terminal and without
+`--network`, setup installs skills as before, leaves configuration untouched and
+says so on stderr.
 
 ## Verification
 
