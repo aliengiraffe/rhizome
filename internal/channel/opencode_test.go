@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -110,13 +111,13 @@ func TestOpenCodeBinding(t *testing.T) {
 	m, _ := openCodeManager(t)
 	m.limit = 2
 	dir := shortDir(t)
-	m.frame(bindFrame("ses_child", "ses_parent", dir, "child"))
-	m.frame(bindFrame("bad id", "", dir, "x"))
-	m.frame(bindFrame("ses_rel", "", "relative/dir", "x"))
+	m.handle(bindFrame("ses_child", "ses_parent", dir, "child"))
+	m.handle(bindFrame("bad id", "", dir, "x"))
+	m.handle(bindFrame("ses_rel", "", "relative/dir", "x"))
 	if len(m.sessions) != 0 {
 		t.Fatalf("invalid binds accepted: %v", m.sessions)
 	}
-	m.frame(bindFrame("ses_a", "", dir, "Fix login"))
+	m.handle(bindFrame("ses_a", "", dir, "Fix login"))
 	n, err := m.resolve(callerReq(mcp.Meta{openCodeMetaKey: "ses_a"}))
 	if err != nil {
 		t.Fatal(err)
@@ -125,13 +126,13 @@ func TestOpenCodeBinding(t *testing.T) {
 	if id.SessionId != "ses_a" || id.AgentType != "opencode" || id.SessionName != "Fix login" || id.DisplayName != filepath.Base(dir) || !n.external {
 		t.Fatalf("identity %+v", id)
 	}
-	m.frame(bindFrame("ses_a", "", dir, "Renamed"))
-	m.frame(bridgeFrame{Type: "title", SessionID: "ses_a", Title: "Retitled"})
+	m.handle(bindFrame("ses_a", "", dir, "Renamed"))
+	m.handle(bridgeFrame{Type: "title", SessionID: "ses_a", Title: "Retitled"})
 	if again, _ := m.resolve(callerReq(mcp.Meta{openCodeMetaKey: "ses_a"})); again != n || n.local().SessionName != "Retitled" || n.local().Generation != 1 {
 		t.Fatalf("rebind changed node or generation: %+v", n.local())
 	}
-	m.frame(bindFrame("ses_b", "", dir, ""))
-	m.frame(bindFrame("ses_c", "", dir, ""))
+	m.handle(bindFrame("ses_b", "", dir, ""))
+	m.handle(bindFrame("ses_c", "", dir, ""))
 	if len(m.sessions) != 2 {
 		t.Fatalf("limit not enforced: %d", len(m.sessions))
 	}
@@ -145,11 +146,11 @@ func TestOpenCodeRetirement(t *testing.T) {
 	dir := shortDir(t)
 	now := time.Unix(1_000_000, 0)
 	m.now = func() time.Time { return now }
-	m.frame(bindFrame("ses_a", "", dir, ""))
-	m.frame(bindFrame("ses_b", "", dir, ""))
+	m.handle(bindFrame("ses_a", "", dir, ""))
+	m.handle(bindFrame("ses_b", "", dir, ""))
 	a := m.sessions["ses_a"].node
 	reg := a.registration
-	m.frame(bridgeFrame{Type: "forget", SessionID: "ses_a"})
+	m.handle(bridgeFrame{Type: "forget", SessionID: "ses_a"})
 	if _, ok := m.sessions["ses_a"]; ok {
 		t.Fatal("forget kept session")
 	}
@@ -201,8 +202,8 @@ func TestOpenCodeMCPIdentity(t *testing.T) {
 	if r, _ := call(a, "list_sessions", map[string]any{}); !r.IsError || !strings.Contains(r.Content[0].(*mcp.TextContent).Text, "rhizome setup --agents opencode") {
 		t.Fatalf("unbound error lacks setup hint: %+v", r)
 	}
-	m.frame(bindFrame("ses_a", "", dir, ""))
-	m.frame(bindFrame("ses_b", "", dir, ""))
+	m.handle(bindFrame("ses_a", "", dir, ""))
+	m.handle(bindFrame("ses_b", "", dir, ""))
 	_, out := call(a, "list_sessions", map[string]any{})
 	if out["identity"].(map[string]any)["session_id"] != "ses_a" {
 		t.Fatalf("identity %v", out["identity"])
@@ -274,4 +275,140 @@ func TestOpenCodeDeliveryThroughBridge(t *testing.T) {
 		}
 		return false
 	})
+}
+
+func TestOpenCodeShutdownRacingBind(t *testing.T) {
+	m, runtime := openCodeManager(t)
+	dir := shortDir(t)
+	m.handle(bindFrame("ses_first", "", dir, ""))
+	first := m.sessions["ses_first"].node
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 20; i++ {
+			if i == 1 {
+				close(started)
+			}
+			m.handle(bindFrame(fmt.Sprintf("ses_race%d", i), "", dir, ""))
+		}
+	}()
+	<-started
+	m.close()
+	<-done
+	m.mu.Lock()
+	left := len(m.sessions)
+	m.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d sessions survived close", left)
+	}
+	m.handle(bindFrame("ses_late", "", dir, ""))
+	if len(m.sessions) != 0 {
+		t.Fatal("bind accepted after close")
+	}
+	if _, err := os.Stat(first.registration); !os.IsNotExist(err) {
+		t.Fatalf("registration left behind: %v", err)
+	}
+	entries, _ := os.ReadDir(runtime)
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") && strings.Contains(e.Name(), "ses_") {
+			t.Fatalf("leftover runtime file %s", e.Name())
+		}
+	}
+}
+
+func TestOpenCodeBindWhileDisconnectedBecomesReady(t *testing.T) {
+	m, _ := openCodeManager(t)
+	m.handle(bindFrame("ses_a", "", shortDir(t), ""))
+	n := m.sessions["ses_a"].node
+	n.mu.Lock()
+	ready, state := n.deliveryReady, n.collectionState
+	n.mu.Unlock()
+	if ready || state != "plugin disconnected" {
+		t.Fatalf("bound while disconnected: %v %q", ready, state)
+	}
+	m.connected(true)
+	n.mu.Lock()
+	ready, state = n.deliveryReady, n.collectionState
+	n.mu.Unlock()
+	if !ready || state != "watching" {
+		t.Fatalf("not ready after connect: %v %q", ready, state)
+	}
+	m.handle(bindFrame("ses_b", "", shortDir(t), ""))
+	b := m.sessions["ses_b"].node
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.deliveryReady {
+		t.Fatal("node bound while connected is not ready")
+	}
+}
+
+func TestOpenCodeFrameDoesNotBlockOnWorker(t *testing.T) {
+	m, _ := openCodeManager(t)
+	m.handle(bindFrame("ses_a", "", shortDir(t), ""))
+	n := m.sessions["ses_a"].node
+	m.frameMu.Lock() // the worker blocks on its first item
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		for i := 0; i < openCodeQueueSize+100; i++ {
+			m.frame(bridgeFrame{Type: "overflow"})
+		}
+	}()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("frame blocked while the worker was busy")
+	}
+	if m.dropped.Load() == 0 {
+		t.Fatal("overflow not counted")
+	}
+	m.frameMu.Unlock()
+	eventually(t, func() bool {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		for _, e := range n.history {
+			if e.Kind == "gap" && strings.Contains(e.Text, "rhizome dropped") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestOpenCodeAckNotStarvedByBusyWorker(t *testing.T) {
+	m, runtime := openCodeManager(t)
+	path := filepath.Join(runtime, "p.sock")
+	b, err := listenBridge(path, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.ackTimeout = 5 * time.Second
+	m.bridge = b
+	b.start()
+	t.Cleanup(b.close)
+	p := dialPlugin(t, path, true)
+	m.handle(bindFrame("ses_a", "", shortDir(t), ""))
+	n := m.sessions["ses_a"].node
+	eventually(t, func() bool { n.mu.Lock(); defer n.mu.Unlock(); return n.deliveryReady })
+	m.frameMu.Lock() // simulate a slow bind/forget occupying the worker
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			m.frameMu.Unlock()
+		}
+	}
+	defer release()
+	p.send(t, bindFrame("ses_b", "", shortDir(t), ""))
+	n.mu.Lock()
+	n.enqueueLocked(&pb.Event{SessionId: "peer", NodeId: "peer-node", Generation: 1, StreamId: "s/direct", Sequence: 1, Kind: "direct", Text: "x", MessageId: id()}, "", "", n.identity.Generation)
+	n.mu.Unlock()
+	f, ok := p.read(t)
+	if !ok || f.Type != "deliver" {
+		t.Fatalf("deliver %+v", f)
+	}
+	p.send(t, bridgeFrame{Type: "ack", ID: f.ID})
+	eventually(t, func() bool { n.mu.Lock(); defer n.mu.Unlock(); return n.stats.Written == 1 })
+	release()
 }

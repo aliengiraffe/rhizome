@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"rhizome/internal/config"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -57,15 +58,70 @@ type openCodeNodes struct {
 	bridge   *bridge
 	limit    int
 	now      func() time.Time
-	frameMu  sync.Mutex // serializes plugin frames across connection goroutines
-	mu       sync.Mutex
+	frameMu  sync.Mutex // serializes frame processing; guards closed with mu
+	mu       sync.Mutex // lock order: frameMu, then mu, then Node.mu
 	sessions map[string]*openCodeSessionState
 	pluginUp bool
+	closed   bool // set under frameMu and mu; bind refuses afterwards
+	queue    chan workItem
+	dropped  atomic.Uint64
+	stop     chan struct{}
+	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
 
+// workItem is one unit of ordered work for the manager's worker: a plugin
+// frame, or (gap != "") a gap marker ordered after earlier frames.
+type workItem struct {
+	frame bridgeFrame
+	gap   string
+}
+
+const openCodeQueueSize = 512
+
 func newOpenCodeNodes(ctx context.Context, runtime string) *openCodeNodes {
-	return &openCodeNodes{ctx: ctx, runtime: runtime, limit: maxOpenCodeNodes, now: time.Now, sessions: map[string]*openCodeSessionState{}}
+	m := &openCodeNodes{ctx: ctx, runtime: runtime, limit: maxOpenCodeNodes, now: time.Now,
+		sessions: map[string]*openCodeSessionState{}, queue: make(chan workItem, openCodeQueueSize), stop: make(chan struct{})}
+	m.wg.Add(1)
+	go func() { defer m.wg.Done(); m.worker() }()
+	return m
+}
+
+// enqueue never blocks: it runs on the bridge read goroutine, which must keep
+// receiving acks. A full queue drops the item and the worker reports a gap.
+func (m *openCodeNodes) enqueue(w workItem) {
+	select {
+	case m.queue <- w:
+	default:
+		m.dropped.Add(1)
+	}
+}
+
+// worker owns all session lifecycle work, in order. It stops on close or ctx.
+func (m *openCodeNodes) worker() {
+	for {
+		select {
+		case <-m.stop:
+			return
+		case <-m.ctx.Done():
+			return
+		case w := <-m.queue:
+			m.process(w)
+		}
+	}
+}
+
+func (m *openCodeNodes) process(w workItem) {
+	m.frameMu.Lock()
+	defer m.frameMu.Unlock()
+	if n := m.dropped.Swap(0); n > 0 {
+		m.gapAll(fmt.Sprintf("rhizome dropped %d plugin events", n))
+	}
+	if w.gap != "" {
+		m.gapAll(w.gap)
+		return
+	}
+	m.handleLocked(w.frame)
 }
 
 func (m *openCodeNodes) resolve(r *mcp.CallToolRequest) (*Node, error) {
@@ -83,9 +139,17 @@ func (m *openCodeNodes) resolve(r *mcp.CallToolRequest) (*Node, error) {
 	return s.node, nil
 }
 
-func (m *openCodeNodes) frame(f bridgeFrame) {
+// frame implements bridgeHandler. It only enqueues; see worker.
+func (m *openCodeNodes) frame(f bridgeFrame) { m.enqueue(workItem{frame: f}) }
+
+// handle processes a frame synchronously (used by tests).
+func (m *openCodeNodes) handle(f bridgeFrame) {
 	m.frameMu.Lock()
 	defer m.frameMu.Unlock()
+	m.handleLocked(f)
+}
+
+func (m *openCodeNodes) handleLocked(f bridgeFrame) {
 	switch f.Type {
 	case "bind":
 		if err := m.bind(f); err != nil {
@@ -129,7 +193,11 @@ func (m *openCodeNodes) bind(f bridgeFrame) error {
 	m.mu.Lock()
 	s := m.sessions[f.SessionID]
 	full := s == nil && len(m.sessions) >= m.limit
+	closed := m.closed
 	m.mu.Unlock()
+	if closed {
+		return errors.New("OpenCode manager closed")
+	}
 	if full {
 		return fmt.Errorf("OpenCode session limit reached (%d)", m.limit)
 	}
@@ -139,10 +207,24 @@ func (m *openCodeNodes) bind(f bridgeFrame) error {
 		if err != nil {
 			return err
 		}
-		s, created = &openCodeSessionState{node: n, collector: newOpenCodeCollector()}, true
+		// Insert and read pluginUp in one critical section so a concurrent
+		// connected()/disconnected() cannot leave this node's state stale.
 		m.mu.Lock()
-		m.sessions[f.SessionID] = s
-		m.mu.Unlock()
+		if existing := m.sessions[f.SessionID]; existing != nil || m.closed || len(m.sessions) >= m.limit {
+			m.mu.Unlock()
+			n.close()
+			if existing == nil {
+				return errors.New("OpenCode session rejected during bind")
+			}
+			s = existing
+		} else {
+			s, created = &openCodeSessionState{node: n, collector: newOpenCodeCollector()}, true
+			n.mu.Lock()
+			n.deliveryReady, n.collectionState = m.pluginUp, readyState(m.pluginUp)
+			n.mu.Unlock()
+			m.sessions[f.SessionID] = s
+			m.mu.Unlock()
+		}
 	}
 	m.mu.Lock()
 	s.last = m.now()
@@ -167,13 +249,6 @@ func (m *openCodeNodes) newSessionNode(sid string) (*Node, error) {
 	n.identity.AgentType = "opencode"
 	n.ready = true
 	n.external = true
-	m.mu.Lock()
-	n.deliveryReady = m.pluginUp
-	m.mu.Unlock()
-	n.collectionState = "watching"
-	if !n.deliveryReady {
-		n.collectionState = "plugin disconnected"
-	}
 	n.notify = func(ctx context.Context, text string, meta map[string]string) error {
 		if m.bridge == nil {
 			return errDestinationUnavailable
@@ -207,27 +282,34 @@ func (m *openCodeNodes) nodes() []*Node {
 	return out
 }
 
-func (m *openCodeNodes) setReady(ready bool, state string) {
+func readyState(up bool) string {
+	if up {
+		return "watching"
+	}
+	return "plugin disconnected"
+}
+
+// setReady updates every node while holding m.mu so a bind inserting a node
+// concurrently sees either the old state before insertion or this one after.
+func (m *openCodeNodes) setReady(ready bool) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.pluginUp = ready
-	m.mu.Unlock()
-	for _, n := range m.nodes() {
-		n.mu.Lock()
-		n.deliveryReady, n.collectionState = ready, state
-		n.mu.Unlock()
+	for _, s := range m.sessions {
+		s.node.mu.Lock()
+		s.node.deliveryReady, s.node.collectionState = ready, readyState(ready)
+		s.node.mu.Unlock()
 	}
 }
 
 func (m *openCodeNodes) connected(reconnect bool) {
-	m.setReady(true, "watching")
+	m.setReady(true)
 	if reconnect {
-		m.frameMu.Lock()
-		m.gapAll("plugin reconnected")
-		m.frameMu.Unlock()
+		m.enqueue(workItem{gap: "plugin reconnected"})
 	}
 }
 
-func (m *openCodeNodes) disconnected() { m.setReady(false, "plugin disconnected") }
+func (m *openCodeNodes) disconnected() { m.setReady(false) }
 
 // gapAll requires frameMu so gaps order correctly with collected activity.
 func (m *openCodeNodes) gapAll(reason string) {
@@ -261,7 +343,13 @@ func (m *openCodeNodes) sweep() {
 	m.mu.Unlock()
 	for _, sid := range idle {
 		m.frameMu.Lock()
-		m.retire(sid, "idle")
+		m.mu.Lock()
+		s := m.sessions[sid]
+		stale := s != nil && s.last.Before(cutoff) // re-check: a call may have touched it
+		m.mu.Unlock()
+		if stale {
+			m.retire(sid, "idle")
+		}
 		m.frameMu.Unlock()
 	}
 }
@@ -273,15 +361,23 @@ func (m *openCodeNodes) sweepLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-m.stop:
+			return
 		case <-ticker.C:
 			m.sweep()
 		}
 	}
 }
 
+// close stops the worker and sweeper, then retires every session. Callers
+// should close the bridge first so no further frames arrive.
 func (m *openCodeNodes) close() {
+	m.stopOnce.Do(func() { close(m.stop) })
 	m.wg.Wait()
+	m.frameMu.Lock()
+	defer m.frameMu.Unlock()
 	m.mu.Lock()
+	m.closed = true
 	var ids []string
 	for sid := range m.sessions {
 		ids = append(ids, sid)
@@ -321,8 +417,8 @@ func RunOpenCode(c config.Config, o Options) error {
 	}
 	manager.bridge = b
 	b.start()
+	defer manager.close() // runs after b.close: no frames can arrive during teardown
 	defer b.close()
-	defer manager.close()
 	manager.wg.Add(1)
 	go func() { defer manager.wg.Done(); manager.sweepLoop(ctx) }()
 	slog.Info("ready", "agent", "opencode", "binding", "plugin")
