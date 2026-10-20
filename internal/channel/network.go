@@ -143,7 +143,7 @@ func (n *Node) send(ctx context.Context, session, text, reply string) (*pb.Accep
 	if err != nil {
 		return nil, err
 	}
-	conn, err := dial(target.Endpoint)
+	conn, err := n.dial(target)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func (n *Node) follow(ctx context.Context, session string, f *feed, generation u
 			if sender.Generation != generation {
 				return context.Canceled
 			}
-			conn, err := dial(target.Endpoint)
+			conn, err := n.dial(target)
 			if err != nil {
 				return err
 			}

@@ -73,7 +73,7 @@ func TestObservedOwnershipHandoff(t *testing.T) {
 			appendLog(t, path, claudeRecord("session", "old", "historical"))
 			o.inventory(true)
 			direct := newNode(context.Background())
-			if err := direct.start(o.opts.Runtime); err != nil {
+			if err := direct.start(Options{Runtime: o.opts.Runtime}); err != nil {
 				t.Fatal(err)
 			}
 			closed := false
@@ -172,7 +172,7 @@ func TestObserverNativeNotificationsAndMissingRoots(t *testing.T) {
 		t.Fatalf("singleton: %v", err)
 	}
 	peer := newNode(context.Background())
-	if err := peer.start(rt); err != nil {
+	if err := peer.start(Options{Runtime: rt}); err != nil {
 		t.Fatal(err)
 	}
 	defer peer.close()
@@ -253,7 +253,7 @@ func TestObserverRestartWithRetainedEpoch(t *testing.T) {
 	path := filepath.Join(o.opts.ClaudeRoot, "restart.jsonl")
 	appendLog(t, path, claudeRecord("restart", "old", "old"))
 	direct := newNode(context.Background())
-	if err := direct.start(o.opts.Runtime); err != nil {
+	if err := direct.start(Options{Runtime: o.opts.Runtime}); err != nil {
 		t.Fatal(err)
 	}
 	if err := direct.observe(Hook{SessionID: "restart", TranscriptPath: path, Cwd: o.opts.ClaudeRoot, Event: "UserPromptSubmit"}); err != nil {
