@@ -42,7 +42,7 @@ lists them. Use `PROTOC=/path/to/protoc task proto` to override the compiler.
 task build                         # Build the rhizome executable.
 ./rhizome config                   # Inspect effective configuration and sources.
 task check                         # go vet ./... and go test -race ./...
-task test-plugin                   # OpenCode plugin tests (Node 20+; skipped without node).
+task test-plugin                   # OpenCode plugin tests (Node 20+; skips without node).
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
 python3 scripts/smoke_service.py    # Separate observer/MCP processes, handoffs, history catalog.
 python3 scripts/smoke_stdio.py --lan # Same scenario in LAN mode: pinned TLS, separate registries.
@@ -198,11 +198,15 @@ a real tailnet; the two-device Tailscale checklist in
   `internal/channel/delivery.go`, `internal/channel/transcript.go`).
 - **No transcript content or session names in logs.** Diagnose with counters and
   metadata to avoid leaking session content (`internal/channel/transcript.go`,
-  `internal/channel/codex_collect.go`, `internal/channel/name.go`).
+  `internal/channel/codex_collect.go`, `internal/channel/opencode_collect.go`,
+  `internal/channel/opencode.go`, `internal/channel/name.go`,
+  `plugins/opencode/rhizome.js`).
 - **Peer-only turns must not trigger feedback loops.** Preserve filtering,
-  suppression, rate limits, and circuit breakers; never republish received envelopes
-  (`internal/channel/transcript.go`, `internal/channel/codex_collect.go`,
-  `internal/channel/delivery.go`).
+  suppression, rate limits, and circuit breakers; never republish received
+  envelopes (`internal/channel/transcript.go`, `internal/channel/codex_collect.go`,
+  `internal/channel/opencode_collect.go`, `internal/channel/delivery.go`,
+  `plugins/opencode/rhizome.js`). OpenCode inputs count when delivered into the
+  agent loop (`session.inbox.delivered`), not when queued.
 - **Codex and OpenCode collection stay read-only and local.** Do not start/restart
   the Codex daemon or mutate threads/sessions through collection; preserve
   per-thread isolation and bounded polling (`internal/channel/codex_rpc.go`,
@@ -210,8 +214,9 @@ a real tailnet; the two-device Tailscale checklist in
 - **OpenCode identity comes only from `_meta["ai.opencode/sessionID"]`, and binding
   only from the plugin bridge.** Never add `observe_session` to OpenCode mode. The
   plugin relays allowlisted events and executes deliveries; all filtering stays in
-  Go, and it relays only sessions of its own directory. Bridge limits: 64 KiB
-  frames, 256-frame plugin buffer, 512-frame manager queue, 16 KiB text, 5 s
+  Go, and it relays only sessions of its own directory (re-binding them after
+  each reconnect). Bridge limits: 64 KiB frames, 256-frame plugin buffer, 256
+  pending plugin inputs, 512-frame manager queue, 16 KiB text, 5 s
   acknowledgement, 64 sessions, 24 h idle (`internal/channel/opencode*.go`,
   `plugins/opencode/rhizome.js`, [docs/opencode.md](docs/opencode.md)).
 - **Coordinate collection across processes.** Direct integrations acquire the
