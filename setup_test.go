@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"rhizome/internal/config"
 	"strings"
 	"testing"
 )
@@ -14,9 +15,13 @@ func TestDetectAgents(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	none := func(string) string { return "" }
+	t.Setenv("HOME", home)
+	c, err := config.Resolve(nil, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
 	missing := func(string) (string, error) { return "", errors.New("not found") }
-	agents := detectAgents(none, home, missing)
+	agents := detectAgents(c, missing)
 	if len(agents) != 2 || agents[0].Name != "claude" || agents[1].Name != "codex" {
 		t.Fatalf("unexpected agents %+v", agents)
 	}
@@ -34,14 +39,18 @@ func TestDetectAgents(t *testing.T) {
 		}
 		return "", errors.New("not found")
 	}
-	agents = detectAgents(none, home, onPath)
+	agents = detectAgents(c, onPath)
 	if !agents[1].Detected || !strings.Contains(agents[1].Reason, "PATH") {
 		t.Fatalf("codex should be detected from PATH: %+v", agents[1])
 	}
 
 	// Environment overrides relocate the skills directory.
 	env := map[string]string{"CLAUDE_CONFIG_DIR": "/cfg/claude", "CODEX_HOME": "/cfg/codex"}
-	agents = detectAgents(func(k string) string { return env[k] }, home, missing)
+	c, err = config.Resolve(nil, func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents = detectAgents(c, missing)
 	if agents[0].Skills != filepath.Join("/cfg/claude", "skills") || agents[1].Skills != filepath.Join("/cfg/codex", "skills") {
 		t.Fatalf("env overrides ignored: %+v", agents)
 	}

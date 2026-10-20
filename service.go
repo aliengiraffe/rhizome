@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"rhizome/internal/channel"
+	"rhizome/internal/config"
 	"rhizome/internal/service"
 	"syscall"
 )
@@ -19,19 +20,11 @@ func serviceCommand(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: rhizome service install|start|stop|status|uninstall|run [flags]")
 	}
-	c, err := service.Defaults()
-	if err != nil {
-		return err
-	}
 	fs := flag.NewFlagSet("service "+args[0], flag.ContinueOnError)
-	config := ""
 	if args[0] == "install" || args[0] == "run" {
-		fs.StringVar(&c.Observer.Runtime, "runtime-dir", c.Observer.Runtime, "private Rhizome runtime directory")
-		fs.StringVar(&c.Observer.ClaudeRoot, "claude-root", c.Observer.ClaudeRoot, "Claude projects log directory")
-		fs.StringVar(&c.Observer.CodexRoot, "codex-root", c.Observer.CodexRoot, "Codex sessions log directory")
-	}
-	if args[0] == "run" {
-		fs.StringVar(&config, "config", "", "installed service configuration file")
+		config.Bind(fs, "runtime-dir", "claude-root", "codex-root")
+	} else {
+		config.Bind(fs)
 	}
 	if err := fs.Parse(args[1:]); err != nil {
 		if err == flag.ErrHelp {
@@ -42,21 +35,21 @@ func serviceCommand(args []string) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected service arguments")
 	}
+	resolved, err := config.FromFlags(fs)
+	if err != nil {
+		return err
+	}
+	c := service.FromConfig(resolved)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if args[0] == "run" {
-		if config != "" {
-			c, err = service.Load(config)
-			if err != nil {
-				return err
+		installed := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "config" {
+				installed = true
 			}
-		}
-		for _, p := range []string{c.Observer.ClaudeRoot, c.Observer.CodexRoot} {
-			if p == "" {
-				return fmt.Errorf("log roots must be configured")
-			}
-		}
-		if config != "" {
+		})
+		if installed {
 			return service.Run(ctx, c)
 		}
 		return channel.RunObserver(ctx, c.Observer)

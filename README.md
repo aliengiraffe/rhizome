@@ -7,6 +7,61 @@ Two sessions in the same directory remain separate. An optional background
 observer discovers local headless sessions from their logs. Install it with
 `rhizome service install`; see [service setup and platform behavior](docs/service.md).
 
+## Configuration
+
+MCP, setup, and every service action read `~/.rhizome/config.toml` once at
+startup. A missing default file keeps the built-in defaults. Select another file
+with `RHIZOME_CONFIG` or the subcommand's `--config /absolute/path.toml` flag
+(`service run --config ...` for service definitions). An explicitly selected
+file must exist. Reading configuration never creates directories or files.
+
+Precedence is **explicit flag > nonempty environment variable > file > default**.
+Run `rhizome config` to print every effective key, its source, and the selected
+file path (including “not found”). It also accepts the override flags in the table
+for diagnostics. All startup diagnostics and errors go to stderr.
+
+| TOML key | Environment | Flag | Default |
+| --- | --- | --- | --- |
+| `runtime_dir` | `RHIZOME_RUNTIME_DIR` | service `--runtime-dir` | `~/.rhizome/run` |
+| `mcp.agent` | — | mcp `--agent` | `claude` |
+| `mcp.codex_bin` | — | mcp `--codex-bin` | `codex` |
+| `agents.claude_config_dir` | `CLAUDE_CONFIG_DIR` | — | `~/.claude` |
+| `agents.codex_home` | `CODEX_HOME` | — | `~/.codex` |
+| `service.claude_root` | — | service `--claude-root` | effective Claude config directory + `/projects` |
+| `service.codex_root` | — | service `--codex-root` | effective Codex home + `/sessions` |
+
+```toml
+runtime_dir = "~/.rhizome/run"
+
+[mcp]
+agent = "claude"
+codex_bin = "codex"
+
+[agents]
+claude_config_dir = "~/.claude"
+codex_home = "~/.codex"
+
+[service]
+# Omit roots, or leave them empty, to derive them from [agents].
+claude_root = ""
+codex_root = ""
+```
+
+Path settings expand `~`, `$HOME`, and `${HOME}` and must resolve to absolute
+paths. `codex_bin` may be an executable name on PATH. Empty agent directories
+also use their defaults. Unknown keys/tables, wrong types, invalid TOML, relative
+paths, unsupported agents, and identical service roots fail before startup.
+The file is limited to 64 KiB and must be a regular, user-owned file, not a
+symlink or group/world-writable file; 0644 is accepted on Unix. Windows checks
+ownership and rejects write grants to other accounts except SYSTEM and
+Administrators. Create `~/.rhizome` with 0700 when creating the file manually.
+
+The cluster token is **never configuration**: it remains at `<runtime_dir>/token`
+with 0600 permissions. MCP and the observer should share `runtime_dir` through
+this file; per-process overrides can intentionally isolate them. Installed
+services pin the absolute TOML path and reread it on restart; see
+[service configuration](docs/service.md) for installation requirements.
+
 ## Codex
 
 Local Codex sessions use `rhizome mcp --agent codex`, with the same seven tools and
@@ -142,7 +197,8 @@ collectors and streams and remove the registration.
 
 Listeners allocate their actual loopback ports automatically. `~/.rhizome/run`
 contains a private cluster token, a registry lock and one endpoint registration
-per live process. Override `RHIZOME_RUNTIME_DIR` for an isolated cluster; its
+per live process. Set `runtime_dir` in the [configuration file](#configuration),
+or override it with `RHIZOME_RUNTIME_DIR` for an isolated cluster; its
 directory must be owned by you and private (0700). Token and registration files
 are 0600. Concurrent launches serialize bootstrap with `flock`, probe candidates
 with authentication before joining, and prune stale registrations. Registry files

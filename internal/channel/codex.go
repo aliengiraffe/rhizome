@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"rhizome/internal/config"
 	"strings"
 	"sync"
 	"syscall"
@@ -236,9 +237,9 @@ func queueCodex(ctx context.Context, binary, socket, thread, text string, meta m
 	return nil
 }
 
-func RunCodex(binary string) error {
+func RunCodex(c config.Config) error {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	resolved, err := exec.LookPath(binary)
+	resolved, err := exec.LookPath(c.MCP.CodexBin)
 	if err != nil {
 		return err
 	}
@@ -246,20 +247,10 @@ func RunCodex(binary string) error {
 	if err != nil {
 		return err
 	}
-	home := os.Getenv("CODEX_HOME")
-	if home == "" {
-		h, e := os.UserHomeDir()
-		if e != nil {
-			return e
-		}
-		home = filepath.Join(h, ".codex")
-	}
-	if !filepath.IsAbs(home) {
-		return errors.New("CODEX_HOME must be absolute")
-	}
+	home := c.Agents.CodexHome
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, binary: resolved, socket: filepath.Join(home, "app-server-control", "app-server-control.sock"), runtime: os.Getenv("RHIZOME_RUNTIME_DIR")}
+	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, binary: resolved, socket: filepath.Join(home, "app-server-control", "app-server-control.sock"), runtime: c.RuntimeDir}
 	defer manager.close()
 	server := makeServer(manager.resolve, false, func() {})
 	session, err := server.Connect(ctx, &mcp.StdioTransport{}, nil)

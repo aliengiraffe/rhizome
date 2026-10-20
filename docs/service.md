@@ -14,29 +14,47 @@ rhizome service start
 rhizome service uninstall
 ```
 
-Installation captures the absolute binary, runtime, and log paths in
-`<user config dir>/rhizome/service.json`. Keep that binary installed at its recorded
-path. Reinstalling identical configuration is idempotent; uninstall before
-changing paths. Uninstall removes the service definition and configuration,
-leaving agent logs, tokens, coordination files, and diagnostic logs intact.
-It does not edit agent configuration or start an agent.
+Installation writes only the native service definition, containing the absolute
+binary path and `service run --config <absolute TOML path>`. Keep that binary
+installed at its recorded path. There is no separate service JSON snapshot.
+Uninstall removes only the definition, preserving `config.toml`, agent logs,
+tokens, coordination files, and diagnostic logs. It does not edit agent
+configuration or start an agent.
 
-The default log roots are `$CLAUDE_CONFIG_DIR/projects` (otherwise
-`~/.claude/projects`) and `$CODEX_HOME/sessions` (otherwise `~/.codex/sessions`).
-`RHIZOME_RUNTIME_DIR` defaults to `~/.rhizome/run`. Integrated MCP processes and
-the observer must use the same runtime directory to coordinate collection.
-Override paths at installation:
+Create `~/.rhizome/config.toml` before installing (an empty file selects defaults),
+or select an existing file with `--config`. See the README's
+[configuration table](../README.md#configuration) for keys and precedence.
+Installation rejects path overrides that differ from the file: put persistent
+paths in TOML so a service launched without the installing shell's environment
+uses the same values. Foreground `service run` still accepts temporary flags and
+environment overrides. For example:
 
-```sh
-rhizome service install --claude-root /absolute/claude/projects \
-  --codex-root /absolute/codex/sessions --runtime-dir /absolute/private/run
+```toml
+runtime_dir = "/absolute/private/run"
+[service]
+claude_root = "/absolute/claude/projects"
+codex_root = "/absolute/codex/sessions"
 ```
 
+```sh
+rhizome service install --config /absolute/config.toml
+rhizome service run --config /absolute/config.toml
+```
+
+The default roots derive from the effective agent directories: Claude's
+`projects` and Codex's `sessions`. MCP and the observer must share the same
+runtime directory to coordinate collection. Use the same `--config` path for
+management commands when installing with a custom file. Configuration is read
+once per process; edits take effect on the next start. Reinstalling the same
+running definition is idempotent. Stop/uninstall before replacing a definition;
+installation refuses to switch away from a running observer's runtime. The
+definition includes runtime metadata solely for this check, not for resolution.
+
 For foreground diagnostics or a custom service manager, use
-`rhizome service run` with the same flags. `run --config /absolute/service.json`
-uses captured installation settings. Configuration/root paths are local inputs;
-peer messages cannot change them. Roots must not overlap. Symlink entries and
-Claude `subagents` directories are not followed.
+`rhizome service run --runtime-dir ... --claude-root ... --codex-root ...`.
+Configuration/root paths are local inputs; peer messages cannot change them.
+Roots must not overlap. Symlink entries and Claude `subagents` directories are
+not followed.
 
 ## Platform lifecycle
 
@@ -124,8 +142,8 @@ not coordinate. LAN service hosting is outside this feature.
 ## Verification
 
 ```sh
-make build
-make check
+task build
+task check
 python3 scripts/smoke_stdio.py
 python3 scripts/smoke_service.py
 ```

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"rhizome/internal/channel"
+	"rhizome/internal/config"
 	"syscall"
 	"time"
 
@@ -26,29 +27,46 @@ func main() {
 
 func entry() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: rhizome mcp | setup | service | demo [flags]")
+		return fmt.Errorf("usage: rhizome mcp | setup | service | config | demo [flags]")
 	}
 	mode := os.Args[1]
 	os.Args = append(os.Args[:1], os.Args[2:]...)
 	switch mode {
 	case "mcp":
 		opts := flag.NewFlagSet("mcp", flag.ContinueOnError)
-		agent := opts.String("agent", "claude", "delivery agent: claude or codex")
-		codex := opts.String("codex-bin", "codex", "Codex CLI executable")
+		config.Bind(opts, "agent", "codex-bin")
 		if err := opts.Parse(os.Args[1:]); err != nil {
 			return err
 		}
 		if opts.NArg() != 0 {
 			return fmt.Errorf("unexpected mcp arguments")
 		}
-		switch *agent {
-		case "claude":
-			return channel.Run()
-		case "codex":
-			return channel.RunCodex(*codex)
-		default:
-			return fmt.Errorf("unsupported agent %q", *agent)
+		c, err := config.FromFlags(opts)
+		if err != nil {
+			return err
 		}
+		switch c.MCP.Agent {
+		case "claude":
+			return channel.Run(c)
+		case "codex":
+			return channel.RunCodex(c)
+		default:
+			return fmt.Errorf("unsupported agent %q", c.MCP.Agent)
+		}
+	case "config":
+		fs := flag.NewFlagSet("config", flag.ContinueOnError)
+		config.Bind(fs, "runtime-dir", "agent", "codex-bin", "claude-root", "codex-root")
+		if err := fs.Parse(os.Args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return fmt.Errorf("unexpected config arguments")
+		}
+		c, err := config.FromFlags(fs)
+		if err != nil {
+			return err
+		}
+		return c.Write(os.Stdout)
 	case "service":
 		return serviceCommand(os.Args[1:])
 	case "setup":
