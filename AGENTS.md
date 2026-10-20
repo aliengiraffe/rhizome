@@ -18,7 +18,7 @@ Start with [README.md](README.md) for behavior and setup,
 
 | Path | Responsibility |
 | --- | --- |
-| `main.go`, `service.go` | CLI dispatch, MCP, setup, service lifecycle and legacy demo. |
+| `main.go`, `service.go`, `gateway.go` | CLI dispatch, MCP, setup, service lifecycle and legacy demo. |
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
@@ -101,13 +101,29 @@ a real tailnet; the two-device Tailscale checklist in
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
-  CLI usage: `rhizome mcp | setup | service | config | demo [flags]`.
+  CLI usage: `rhizome mcp | setup | service | config | token | invite | join | peers | demo [flags]`.
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
   `mcp` only, with flag > env > file > default. `rhizome setup` is the only
   writer of the file: it asks or takes `--network`, never overwrites without a
   backup, writes only answered keys at 0600, and never writes a token
   (`setup.go`, `setup_config.go`).
+
+- **Host pairing is service-owned and non-transitive.** `invite` / `join` pair
+  persistent host keys over TLS without exporting or replacing local tokens.
+  `[gateway]` (`mode`, `listen`, `advertise`) and matching `RHIZOME_GATEWAY_*` /
+  service flags are opt-in and separate from MCP networking, which stays local
+  when pairing is enabled. The service bridges remote sessions through protocol-2
+  proxies (`gateway_host`); only local identities with `gateway_version = 1`
+  are exported. Never forward proxy advertisements, trust peer-supplied endpoints,
+  or expose local history/admin remotely. Cross-host ID collisions fail closed.
+  Revocation closes connections and invalidates queued events via local trust
+  grants; old invitations cannot restore revoked trust. State is private under
+  `<runtime>/gateway/`. Session privacy (#37) is not yet implemented; the shared
+  export/access predicate must enforce it when added. See [docs/gateway.md](docs/gateway.md)
+  for enrollment recovery, bounds, configuration, compatibility, and manual checks.
+  Run `python3 scripts/smoke_gateway.py` for gateway changes in addition to the
+  required existing checks. Gateway protocol code is in `internal/channel/gateway*.go`.
 
 - **Hostnames are display labels.** Shared top-level `hostname` is written by
   the setup prompt or `setup --network ... --hostname ...`. Blank clears an

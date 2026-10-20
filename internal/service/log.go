@@ -45,5 +45,24 @@ func Run(ctx context.Context, c Config) error {
 	previous := slog.Default()
 	defer slog.SetDefault(previous)
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&rotatingLog{path: filepath.Join(c.Observer.Runtime, "observer.log")}, nil)))
-	return channel.RunObserver(ctx, c.Observer)
+	return RunForeground(ctx, c)
+}
+
+// RunForeground owns observer and gateway lifecycles under one cancellation scope.
+func RunForeground(ctx context.Context, c Config) error {
+	if c.Gateway.Mode == "" || c.Gateway.Mode == "off" {
+		return channel.RunObserver(ctx, c.Observer)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan error, 2)
+	go func() { results <- channel.RunObserver(ctx, c.Observer) }()
+	go func() { results <- channel.RunGateway(ctx, c.Observer.Runtime, c.Gateway) }()
+	err := <-results
+	cancel()
+	other := <-results
+	if err != nil {
+		return err
+	}
+	return other
 }

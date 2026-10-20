@@ -151,3 +151,12 @@ real hook binding and trust separately. See `verification.md` for recorded scope
 References: [Codex hooks](https://learn.chatgpt.com/docs/hooks),
 [queue CLI](https://learn.chatgpt.com/docs/developer-commands),
 [App Server](https://learn.chatgpt.com/docs/app-server).
+
+## Paired hosts
+
+[Service-owned gateway pairing](gateway.md) exposes upgraded local-mode Codex
+MCP sessions to explicitly paired hosts without changing the Codex daemon or
+local token. Restart MCP processes after upgrading to advertise gateway support.
+Remote activity uses the existing local delivery queue and suppression rules;
+history and daemon access remain local. Gateway synthetic smokes do not validate
+live Codex delivery; retain the opt-in live smoke and manual checks above.

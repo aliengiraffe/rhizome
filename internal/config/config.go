@@ -33,6 +33,7 @@ type Config struct {
 		Home        string `toml:"home"`         // CODEX_HOME; App Server socket and skills live under it.
 		SessionsDir string `toml:"sessions_dir"` // Session log root the observer watches; default <home>/sessions.
 	} `toml:"codex"`
+	Gateway Gateway           `toml:"gateway"`
 	Network Network           `toml:"network"`
 	Path    string            `toml:"-"`
 	Found   bool              `toml:"-"`
@@ -97,6 +98,9 @@ type setting struct {
 func (c *Config) settings() []setting {
 	return []setting{
 		{"hostname", "", "", &c.Hostname, false},
+		{"gateway.mode", "RHIZOME_GATEWAY_MODE", "gateway-mode", &c.Gateway.Mode, false},
+		{"gateway.listen", "RHIZOME_GATEWAY_LISTEN", "gateway-listen", &c.Gateway.Listen, false},
+		{"gateway.advertise", "RHIZOME_GATEWAY_ADVERTISE", "gateway-advertise", &c.Gateway.Advertise, false},
 		{"runtime_dir", "RHIZOME_RUNTIME_DIR", "runtime-dir", &c.RuntimeDir, true},
 		{"claude.config_dir", "CLAUDE_CONFIG_DIR", "", &c.Claude.ConfigDir, true},
 		{"claude.projects_dir", "", "claude-root", &c.Claude.ProjectsDir, true},
@@ -182,7 +186,7 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	}
 	// TOML keys are case-sensitive even though the decoder can match Go fields
 	// case-insensitively. Reject alternate spellings instead of losing their source.
-	known := map[string]bool{"claude": true, "codex": true, "network": true}
+	known := map[string]bool{"claude": true, "codex": true, "network": true, "gateway": true}
 	for _, k := range networkKeys {
 		known["network."+k] = true
 	}
@@ -205,6 +209,9 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	if err := raw.Network.Validate(); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
+	if err := raw.Gateway.Validate(); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
 	c.Network = raw.Network
 	for _, k := range networkKeys {
 		source := "default"
@@ -213,6 +220,7 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 		}
 		c.Sources["network."+k] = source
 	}
+	c.Gateway.Mode = "off"
 	c.RuntimeDir = filepath.Join(home, ".rhizome", "run")
 	c.Codex.Bin = "codex"
 	c.Claude.ConfigDir, c.Codex.Home = filepath.Join(home, ".claude"), filepath.Join(home, ".codex")
@@ -244,7 +252,7 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 				return c, fmt.Errorf("config %s: %w", path, err)
 			}
 		}
-		if *s.value == "" && s.key != "hostname" {
+		if *s.value == "" && s.key != "hostname" && !strings.HasPrefix(s.key, "gateway.") {
 			return c, fmt.Errorf("config %s: %s must not be empty (%s)", path, s.key, source)
 		}
 		if s.path || s.key == "codex.bin" && binaryPath(*s.value) {
@@ -254,6 +262,12 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 			}
 		}
 		c.Sources[s.key] = source
+	}
+	if err := c.Gateway.Validate(); err != nil {
+		return c, err
+	}
+	if c.Gateway.Mode != "off" && c.Gateway.Mode != "" && c.Network.Mode != "" && c.Network.Mode != ModeLocal {
+		return c, errors.New("gateway pairing requires network.mode=local for MCP; use gateway.mode for host networking")
 	}
 	c.RuntimeDir, err = localstate.Runtime(c.RuntimeDir)
 	if err != nil {

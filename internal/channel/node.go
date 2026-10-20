@@ -76,6 +76,8 @@ type pending struct {
 }
 type counters struct{ Suppressed, Received, Queued, Written, Dropped, Pauses, ParserSkips, QueueHandoffs, QueueFailures, CollectionGaps uint64 }
 type Node struct {
+	bridge *gatewayProxy // immutable; only service-owned remote proxies
+
 	collectionLease  *os.File
 	archive          *historyService // read-only history catalog client; nil in parser tests
 	suppressActivity bool
@@ -132,7 +134,7 @@ type Node struct {
 
 func newNode(parent context.Context) *Node {
 	ctx, cancel := context.WithCancel(parent)
-	return &Node{discovered: map[string]*pb.Identity{}, ctx: ctx, cancel: cancel, identity: &pb.Identity{Protocol: 1, NodeId: id(), AgentType: "claude", Host: shortHost()}, retired: map[string]bool{}, stream: id(), listeners: map[*listener]bool{}, feeds: map[string]*feed{}, seen: map[string]bool{}, rearmed: map[string]bool{}, warned: map[string]bool{}}
+	return &Node{discovered: map[string]*pb.Identity{}, ctx: ctx, cancel: cancel, identity: &pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), AgentType: "claude", Host: shortHost()}, retired: map[string]bool{}, stream: id(), listeners: map[*listener]bool{}, feeds: map[string]*feed{}, seen: map[string]bool{}, rearmed: map[string]bool{}, warned: map[string]bool{}}
 }
 func cloneIdentity(i *pb.Identity) *pb.Identity { return proto.Clone(i).(*pb.Identity) }
 

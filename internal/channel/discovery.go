@@ -101,7 +101,7 @@ func (n *Node) probe(ctx context.Context, i *pb.Identity) (*pb.Identity, error) 
 	if err != nil {
 		return nil, err
 	}
-	if actual.NodeId != i.NodeId || actual.Protocol != 1 || !n.allowed(actual.Endpoint) || !n.allowed(actual.GossipEndpoint) {
+	if actual.NodeId != i.NodeId || !validChannelProtocol(actual) || !n.allowed(actual.Endpoint) || !n.allowed(actual.GossipEndpoint) {
 		return nil, errors.New("registration identity mismatch")
 	}
 	return actual, nil
@@ -409,7 +409,7 @@ func (n *Node) updatePeer(member *memberlist.Node) {
 		return
 	}
 	var i pb.Identity
-	if json.Unmarshal(member.Meta, &i) != nil || i.Protocol != 1 || i.NodeId != member.Name || !n.allowed(i.Endpoint) {
+	if json.Unmarshal(member.Meta, &i) != nil || !validChannelProtocol(&i) || i.NodeId != member.Name || !n.allowed(i.Endpoint) {
 		return
 	}
 	// Peers from the other discovery mode cannot be dialed; keep them invisible.
@@ -433,6 +433,7 @@ func (n *Node) peers() []*pb.Identity {
 }
 func (n *Node) resolve(ctx context.Context, session string) (*pb.Identity, error) {
 	var found, observed *pb.Identity
+	owners := map[string]bool{}
 	for _, i := range n.peers() {
 		if i.SessionId != session {
 			continue
@@ -440,6 +441,10 @@ func (n *Node) resolve(ctx context.Context, session string) (*pb.Identity, error
 		actual, err := n.probe(ctx, i)
 		if err != nil || actual.SessionId != session {
 			continue
+		}
+		owners[actual.GatewayHost] = true
+		if len(owners) > 1 {
+			return nil, fmt.Errorf("ambiguous session %q: multiple hosts", session)
 		}
 		if actual.ObservationOnly {
 			if observed != nil {
@@ -468,4 +473,10 @@ type gossipLog struct{ source string }
 func (g gossipLog) Write(p []byte) (int, error) {
 	slog.Info(g.source, "message", strings.TrimSpace(string(p)))
 	return len(p), nil
+}
+
+// Protocol 2 is reserved for gateway proxies. Older processes ignore these
+// advertisements instead of dropping the ownership and queue-revocation fields.
+func validChannelProtocol(i *pb.Identity) bool {
+	return i.Protocol == 1 && i.GatewayHost == "" || i.Protocol == 2 && validFingerprint(i.GatewayHost) && i.GatewayVersion == 1
 }

@@ -1,0 +1,538 @@
+package channel
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
+	pb "rhizome/proto"
+)
+
+type gatewayFrame struct {
+	Type       string            `json:"type"`
+	ID         string            `json:"id,omitempty"`
+	Sessions   []*pb.Identity    `json:"sessions,omitempty"`
+	Send       *pb.SendRequest   `json:"send,omitempty"`
+	Follow     *pb.FollowRequest `json:"follow,omitempty"`
+	Event      *pb.Event         `json:"event,omitempty"`
+	Acceptance *pb.Acceptance    `json:"acceptance,omitempty"`
+	Error      string            `json:"error,omitempty"`
+}
+type gatewayLink struct {
+	lastSnapshot time.Time
+	g            *gateway
+	host         string
+	grant        string
+	outgoing     bool
+	conn         *websocket.Conn
+	ctx          context.Context
+	cancel       context.CancelFunc
+	done         chan struct{}
+	writes       chan gatewayFrame
+	snapshots    chan []*pb.Identity
+	mu           sync.Mutex
+	proxies      map[string]*gatewayProxy // remote node ID -> local proxy
+	pending      map[string]chan gatewayFrame
+	active       map[string]context.CancelFunc
+	wg           sync.WaitGroup
+}
+type gatewayProxy struct {
+	closed sync.Once
+	link   *gatewayLink
+	remote *pb.Identity
+	node   *Node
+}
+
+func (g *gateway) attach(host string, c *websocket.Conn, outgoing bool) {
+	g.attachMu.Lock()
+	defer g.attachMu.Unlock()
+	g.mu.Lock()
+	p, ok := g.state.Peers[host]
+	old := g.links[host]
+	if !ok || p.Pending || g.ctx.Err() != nil || (old != nil && (old.outgoing == (g.host < host) || outgoing != (g.host < host))) {
+		g.mu.Unlock()
+		c.Close()
+		return
+	}
+	if old != nil {
+		old.stop()
+	}
+	g.mu.Unlock()
+	if old != nil {
+		<-old.done
+	}
+	ctx, cancel := context.WithCancel(g.ctx)
+	l := &gatewayLink{lastSnapshot: time.Now(), g: g, host: host, grant: p.Grant, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
+	g.mu.Lock()
+	p, ok = g.state.Peers[host]
+	if !ok || p.Pending || g.ctx.Err() != nil {
+		g.mu.Unlock()
+		cancel()
+		c.Close()
+		return
+	}
+	g.links[host] = l
+	g.wg.Add(1)
+	g.mu.Unlock()
+	go func() { defer g.wg.Done(); l.run() }()
+}
+func (l *gatewayLink) stop() { l.cancel(); _ = l.conn.Close() }
+func (l *gatewayLink) write(f gatewayFrame) error {
+	select {
+	case <-l.ctx.Done():
+		return errors.New("gateway disconnected")
+	default:
+	}
+	select {
+	case l.writes <- f:
+		return nil
+	default:
+		l.stop()
+		return errors.New("gateway queue overflow")
+	}
+}
+func (l *gatewayLink) run() {
+	defer close(l.done)
+	defer func() {
+		l.g.mu.Lock()
+		if l.g.links[l.host] == l {
+			delete(l.g.links, l.host)
+		}
+		l.g.mu.Unlock()
+	}()
+	l.conn.SetReadLimit(gatewayMaxFrame)
+	l.wg.Add(3)
+	go func() { defer l.wg.Done(); l.writer() }()
+	go func() { defer l.wg.Done(); l.advertise() }()
+	go func() { defer l.wg.Done(); l.reconcile() }()
+	for l.ctx.Err() == nil {
+		_ = l.conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+		var f gatewayFrame
+		if err := l.conn.ReadJSON(&f); err != nil {
+			break
+		}
+		switch f.Type {
+		case "snapshot":
+			l.mu.Lock()
+			l.lastSnapshot = time.Now()
+			l.mu.Unlock()
+			if len(f.Sessions) > gatewayMaxSessions {
+				l.stop()
+				break
+			}
+			select {
+			case l.snapshots <- f.Sessions:
+			default:
+				select {
+				case <-l.snapshots:
+				default:
+				}
+				select {
+				case l.snapshots <- f.Sessions:
+				default:
+				}
+			}
+		case "send", "follow":
+			if len(f.ID) != 32 {
+				l.stop()
+				break
+			}
+			l.mu.Lock()
+			_, duplicate := l.active[f.ID]
+			if duplicate || len(l.active) >= 64 {
+				l.mu.Unlock()
+				l.stop()
+				break
+			}
+			ctx, cancel := context.WithCancel(l.ctx)
+			l.active[f.ID] = cancel
+			l.wg.Add(1)
+			l.mu.Unlock()
+			go func() {
+				defer l.wg.Done()
+				defer cancel()
+				defer func() { l.mu.Lock(); delete(l.active, f.ID); l.mu.Unlock() }()
+				l.serve(ctx, f)
+			}()
+		case "cancel":
+			l.mu.Lock()
+			if cancel := l.active[f.ID]; cancel != nil {
+				cancel()
+			}
+			l.mu.Unlock()
+		case "event", "done":
+			l.mu.Lock()
+			ch := l.pending[f.ID]
+			if ch != nil {
+				select {
+				case ch <- f:
+				default:
+					l.stop()
+				}
+			}
+			l.mu.Unlock()
+		default:
+			l.stop()
+		}
+	}
+	l.stop()
+	l.wg.Wait()
+	l.mu.Lock()
+	proxies := l.proxies
+	l.proxies = map[string]*gatewayProxy{}
+	l.mu.Unlock()
+	for _, p := range proxies {
+		p.close()
+	}
+}
+func (l *gatewayLink) writer() {
+	for {
+		select {
+		case <-l.ctx.Done():
+			return
+		case f := <-l.writes:
+			_ = l.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			encoded, err := json.Marshal(f)
+			if err != nil || len(encoded) > gatewayMaxFrame {
+				l.stop()
+				return
+			}
+			if err := l.conn.WriteMessage(websocket.TextMessage, encoded); err != nil {
+				l.stop()
+				return
+			}
+		}
+	}
+}
+func (l *gatewayLink) advertise() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		l.mu.Lock()
+		stale := time.Since(l.lastSnapshot) > 10*time.Second
+		l.mu.Unlock()
+		if stale {
+			l.stop()
+			return
+		}
+		sessions := []*pb.Identity{}
+		scanCtx, stopScan := context.WithTimeout(l.ctx, 3*time.Second)
+		for _, p := range logicalPeers(l.g.base.peers()) {
+			if !gatewayExportable(p) {
+				continue
+			}
+			// Probe before export: stale gossip never establishes remote authority.
+			ctx, cancel := context.WithTimeout(scanCtx, 700*time.Millisecond)
+			actual, err := l.g.base.probe(ctx, p)
+			cancel()
+			if err != nil || !matches(actual, p) || !gatewayExportable(actual) {
+				continue
+			}
+			actual.Endpoint = ""
+			actual.GossipEndpoint = ""
+			actual.CertFingerprint = ""
+			sessions = append(sessions, actual)
+			if len(sessions) == gatewayMaxSessions {
+				break
+			}
+		}
+		stopScan()
+		if l.write(gatewayFrame{Type: "snapshot", Sessions: sessions}) != nil {
+			return
+		}
+		select {
+		case <-l.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+func validGatewayIdentity(p *pb.Identity) bool {
+	return p != nil && p.Protocol == 1 && p.GatewayVersion == 1 && len(p.NodeId) == 32 && p.SessionId != "" && len(p.SessionId) <= 128 && p.Generation > 0 && p.GatewayHost == "" && p.Endpoint == "" && p.GossipEndpoint == "" && p.CertFingerprint == "" && len(p.Host) <= 64 && len(p.SessionName) <= 96 && len(p.Project) <= 180 && len(p.DisplayName) <= 40 && (p.AgentType == "claude" || p.AgentType == "codex")
+}
+func (l *gatewayLink) reconcile() {
+	for {
+		select {
+		case <-l.ctx.Done():
+			return
+		case list := <-l.snapshots:
+			wanted := map[string]*pb.Identity{}
+			for _, p := range list {
+				if !validGatewayIdentity(p) || wanted[p.NodeId] != nil {
+					l.stop()
+					return
+				}
+				wanted[p.NodeId] = p
+			}
+			l.mu.Lock()
+			remove := []*gatewayProxy{}
+			for k, p := range l.proxies {
+				next := wanted[k]
+				if next == nil || !matches(next, p.remote) || next.ObservationOnly != p.remote.ObservationOnly || next.AgentType != p.remote.AgentType {
+					delete(l.proxies, k)
+					remove = append(remove, p)
+				}
+			}
+			l.mu.Unlock()
+			for _, p := range remove {
+				p.close()
+			}
+			for key, remote := range wanted {
+				if l.ctx.Err() != nil {
+					return
+				}
+				l.mu.Lock()
+				p := l.proxies[key]
+				l.mu.Unlock()
+				if p != nil {
+					p.node.mu.Lock()
+					changed := p.node.identity.SessionName != remote.SessionName || p.node.identity.DisplayName != remote.DisplayName || p.node.identity.Project != remote.Project || p.node.identity.Host != remote.Host
+					p.node.identity.SessionName = remote.SessionName
+					p.node.identity.DisplayName = remote.DisplayName
+					p.node.identity.Project = remote.Project
+					p.node.identity.Host = remote.Host
+					p.node.mu.Unlock()
+					if changed {
+						p.node.advertise()
+					}
+					continue
+				}
+				select {
+				case l.g.proxySlots <- struct{}{}:
+				default:
+					l.stop()
+					return
+				}
+				n := newNode(l.ctx)
+				n.identity.Protocol = 2
+				n.identity.SessionId = remote.SessionId
+				n.identity.Generation = remote.Generation
+				n.identity.AgentType = remote.AgentType
+				n.identity.Project = remote.Project
+				n.identity.DisplayName = remote.DisplayName
+				n.identity.SessionName = remote.SessionName
+				n.identity.ObservationOnly = remote.ObservationOnly
+				n.identity.GatewayHost = l.host
+				p = &gatewayProxy{link: l, remote: cloneIdentity(remote), node: n}
+				n.bridge = p
+				if err := n.start(Options{Runtime: l.g.runtime, Hostname: remote.Host}); err != nil {
+					p.close()
+					l.stop()
+					return
+				}
+				l.mu.Lock()
+				l.proxies[key] = p
+				l.mu.Unlock()
+			}
+		}
+	}
+}
+func (l *gatewayLink) request(ctx context.Context, f gatewayFrame, emit func(*pb.Event) error) (*pb.Acceptance, error) {
+	f.ID = id()
+	ch := make(chan gatewayFrame, 64)
+	l.mu.Lock()
+	if len(l.pending) >= 64 {
+		l.mu.Unlock()
+		return nil, errors.New("gateway request limit reached")
+	}
+	l.pending[f.ID] = ch
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		delete(l.pending, f.ID)
+		l.mu.Unlock()
+		_ = l.write(gatewayFrame{Type: "cancel", ID: f.ID})
+	}()
+	if err := l.write(f); err != nil {
+		return nil, err
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-l.ctx.Done():
+			return nil, errors.New("gateway disconnected")
+		case out := <-ch:
+			if out.Type == "done" {
+				if out.Error != "" {
+					return nil, errors.New("remote gateway request rejected")
+				}
+				return out.Acceptance, nil
+			}
+			if emit == nil || out.Event == nil {
+				return nil, errors.New("unexpected gateway event")
+			}
+			if err := emit(out.Event); err != nil {
+				return nil, err
+			}
+		}
+	}
+}
+
+// localRoute accepts only an exact, locally owned target and a source advertised
+// by this authenticated connection. Endpoints supplied by the peer are never dialed.
+func (l *gatewayLink) localRoute(ctx context.Context, source, target *pb.Identity) (*pb.Identity, *pb.Identity, error) {
+	if source == nil || target == nil {
+		return nil, nil, errors.New("missing identity")
+	}
+	l.mu.Lock()
+	p := l.proxies[source.NodeId]
+	l.mu.Unlock()
+	if p == nil || !matches(p.remote, source) {
+		return nil, nil, errors.New("unadvertised source")
+	}
+	dst, err := l.g.base.resolve(ctx, target.SessionId)
+	if err != nil || !gatewayExportable(dst) || !matches(dst, target) {
+		return nil, nil, errors.New("stale or ambiguous local target")
+	}
+	src, err := l.g.base.resolve(ctx, source.SessionId)
+	if err != nil || !matches(src, p.node.local()) {
+		return nil, nil, errors.New("stale or ambiguous remote source")
+	}
+	return src, dst, nil
+}
+func (l *gatewayLink) serve(ctx context.Context, f gatewayFrame) {
+	var err error
+	var acceptance *pb.Acceptance
+	defer func() {
+		out := gatewayFrame{Type: "done", ID: f.ID, Acceptance: acceptance}
+		if err != nil {
+			out.Error = "request rejected"
+		}
+		_ = l.write(out)
+	}()
+	if f.Type == "send" {
+		if f.Send == nil || f.Send.Event == nil {
+			err = errors.New("invalid send")
+			return
+		}
+		req := proto.Clone(f.Send).(*pb.SendRequest)
+		var src, dst *pb.Identity
+		src, dst, err = l.localRoute(ctx, req.Sender, req.Target)
+		if err != nil {
+			return
+		}
+		if req.Event.SessionId != req.Sender.SessionId || req.Event.NodeId != req.Sender.NodeId || req.Event.Generation != req.Sender.Generation {
+			err = errors.New("invalid event source")
+			return
+		}
+		req.Sender = src
+		req.Target = dst
+		req.Event.NodeId = src.NodeId
+		req.Event.GatewayHost = l.host
+		req.Event.GatewayGrant = l.grant
+		conn, e := l.g.base.dial(dst)
+		if e != nil {
+			err = e
+			return
+		}
+		defer conn.Close()
+		timeout, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		acceptance, err = pb.NewChannelClient(conn).Send(l.g.base.outgoing(timeout), req)
+	} else {
+		if f.Follow == nil {
+			err = errors.New("invalid follow")
+			return
+		}
+		req := proto.Clone(f.Follow).(*pb.FollowRequest)
+		req.Subscriber, req.Target, err = l.localRoute(ctx, req.Subscriber, req.Target)
+		if err != nil {
+			return
+		}
+		conn, e := l.g.base.dial(req.Target)
+		if e != nil {
+			err = e
+			return
+		}
+		defer conn.Close()
+		stream, e := pb.NewChannelClient(conn).Subscribe(l.g.base.outgoing(ctx), req)
+		if e != nil {
+			err = e
+			return
+		}
+		for {
+			event, e := stream.Recv()
+			if e != nil {
+				if e != io.EOF {
+					err = e
+				}
+				return
+			}
+			if err = l.write(gatewayFrame{Type: "event", ID: f.ID, Event: event}); err != nil {
+				return
+			}
+		}
+	}
+}
+func (p *gatewayProxy) source(ctx context.Context, source, target *pb.Identity) (*pb.Identity, error) {
+	if p.link.ctx.Err() != nil {
+		return nil, errors.New("gateway disconnected")
+	}
+	if !matches(p.node.local(), target) {
+		return nil, errors.New("stale gateway target")
+	}
+	actual, err := p.node.resolve(ctx, source.GetSessionId())
+	if err != nil || !gatewayExportable(actual) || !matches(actual, source) {
+		return nil, errors.New("invalid local gateway source")
+	}
+	actual.Endpoint = ""
+	actual.GossipEndpoint = ""
+	actual.CertFingerprint = ""
+	return actual, nil
+}
+func (p *gatewayProxy) send(ctx context.Context, req *pb.SendRequest) (*pb.Acceptance, error) {
+	source, err := p.source(ctx, req.Sender, req.Target)
+	if err != nil {
+		return nil, err
+	}
+	if req.Event == nil || req.Event.Kind != "direct" || len(req.Event.Text) > maxText || len(req.Event.MessageId) > 128 || len(req.Event.ReplyTo) > 128 || len(req.Event.StreamId) > 128 {
+		return nil, errors.New("invalid gateway event")
+	}
+	req = proto.Clone(req).(*pb.SendRequest)
+	req.Sender = source
+	req.Target = cloneIdentity(p.remote)
+	if req.Event != nil {
+		req.Event.GatewayHost = ""
+		req.Event.GatewayGrant = ""
+	}
+	return p.link.request(ctx, gatewayFrame{Type: "send", Send: req}, nil)
+}
+func (p *gatewayProxy) subscribe(req *pb.FollowRequest, ss pb.Channel_SubscribeServer) error {
+	source, err := p.source(ss.Context(), req.Subscriber, req.Target)
+	if err != nil {
+		return err
+	}
+	if len(req.StreamId) > 128 {
+		return errors.New("invalid gateway cursor")
+	}
+	req = proto.Clone(req).(*pb.FollowRequest)
+	req.Subscriber = source
+	req.Target = cloneIdentity(p.remote)
+	_, err = p.link.request(ss.Context(), gatewayFrame{Type: "follow", Follow: req}, func(e *pb.Event) error {
+		if e.NodeId != p.remote.NodeId || e.SessionId != p.remote.SessionId || e.Generation != p.remote.Generation || len(e.Text) > maxText {
+			return errors.New("invalid gateway event origin")
+		}
+		e.NodeId = p.node.local().NodeId
+		e.GatewayHost = p.link.host
+		e.GatewayGrant = p.link.grant
+		return ss.Send(e)
+	})
+	return err
+}
+
+func (p *gatewayProxy) close() {
+	p.closed.Do(func() { p.node.close(); <-p.link.g.proxySlots })
+}
+
+// gatewayExportable is the single export/access policy hook. Session privacy
+// (#37) must extend this predicate; paired peers currently see all bound local
+// sessions from bridge-capable processes, but never forwarded identities.
+func gatewayExportable(p *pb.Identity) bool {
+	return p != nil && p.SessionId != "" && p.GatewayHost == "" && p.GatewayVersion == 1
+}

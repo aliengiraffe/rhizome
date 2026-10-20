@@ -19,6 +19,9 @@ func matches(a, b *pb.Identity) bool {
 	return a != nil && b != nil && a.SessionId != "" && a.SessionId == b.SessionId && a.NodeId == b.NodeId && a.Generation == b.Generation
 }
 func (n *Node) Subscribe(req *pb.FollowRequest, ss pb.Channel_SubscribeServer) error {
+	if n.bridge != nil {
+		return n.bridge.subscribe(req, ss)
+	}
 	if req.Subscriber == nil || req.Subscriber.SessionId == "" || req.Subscriber.NodeId == n.local().NodeId {
 		return status.Error(codes.InvalidArgument, "bound, non-self subscriber required")
 	}
@@ -90,6 +93,9 @@ func (n *Node) Subscribe(req *pb.FollowRequest, ss pb.Channel_SubscribeServer) e
 	}
 }
 func (n *Node) Send(ctx context.Context, req *pb.SendRequest) (*pb.Acceptance, error) {
+	if n.bridge != nil {
+		return n.bridge.send(ctx, req)
+	}
 	if n.local().ObservationOnly {
 		return nil, status.Error(codes.FailedPrecondition, "session is observation-only; configure a Rhizome MCP/channel integration for delivery")
 	}
@@ -203,13 +209,30 @@ func (n *Node) unsubscribe(session string) error {
 func (n *Node) follow(ctx context.Context, session string, f *feed, generation uint64) {
 	var streamID string
 	var previous *pb.Identity
+	var gatewayHost, gatewayGrant string
 	var sequence uint64
 	backoff := 250 * time.Millisecond
 	for ctx.Err() == nil {
+		if gatewayHost != "" && (gatewayGrant == "" || gatewayDeliveryGrants(n.runtime)[gatewayHost] != gatewayGrant) {
+			n.mu.Lock()
+			if n.feeds[session] == f {
+				delete(n.feeds, session)
+				delete(n.rearmed, session)
+			}
+			n.mu.Unlock()
+			return
+		}
 		err := func() error {
 			target, err := n.resolve(ctx, session)
 			if err != nil {
 				return err
+			}
+			if target.GatewayHost != "" && gatewayHost == "" {
+				gatewayHost = target.GatewayHost
+				gatewayGrant = gatewayDeliveryGrants(n.runtime)[gatewayHost]
+				if gatewayGrant == "" {
+					return errors.New("gateway trust revoked")
+				}
 			}
 			if previous != nil && !matches(previous, target) && (previous.ObservationOnly || target.ObservationOnly) {
 				// Independent collectors do not share replay cursors. Starting

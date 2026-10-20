@@ -25,6 +25,9 @@ func TestLayers(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	var schema Config
 	for _, s := range schema.settings() {
+		if strings.HasPrefix(s.key, "gateway.") {
+			continue
+		} // constrained values have dedicated precedence tests
 		t.Run(s.key, func(t *testing.T) {
 			file, env, override := "/file", "/env", "/flag"
 			if s.key == "codex.bin" {

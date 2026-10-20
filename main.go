@@ -29,7 +29,7 @@ func main() {
 
 func entry() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: rhizome mcp | setup | service | config | token | demo [flags]")
+		return fmt.Errorf("usage: rhizome mcp | setup | service | config | token | invite | join | peers | demo [flags]")
 	}
 	mode := os.Args[1]
 	os.Args = append(os.Args[:1], os.Args[2:]...)
@@ -66,6 +66,9 @@ func entry() error {
 		visited := map[string]bool{}
 		opts.Visit(func(f *flag.Flag) { visited[f.Name] = true })
 		applyNetwork(&o, c.Network, visited, os.LookupEnv)
+		if c.Gateway.Mode != "" && c.Gateway.Mode != "off" && (o.LAN || o.Tailscale) {
+			return fmt.Errorf("gateway pairing requires local-mode MCP; configure gateway.mode for host networking")
+		}
 		// mDNS cannot cross the tunnel; in Tailscale mode it is opt-in.
 		_, mdnsSet := os.LookupEnv("RHIZOME_MDNS")
 		mdnsSet = mdnsSet || visited["mdns"] || c.Network.MDNS != nil
@@ -94,6 +97,8 @@ func entry() error {
 			return err
 		}
 		return c.Write(os.Stdout)
+	case "invite", "join", "peers":
+		return gatewayCommand(mode, os.Args[1:])
 	case "service":
 		return serviceCommand(os.Args[1:])
 	case "setup":

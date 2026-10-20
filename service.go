@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"rhizome/internal/channel"
 	"rhizome/internal/config"
 	"rhizome/internal/service"
 	"syscall"
@@ -22,7 +21,7 @@ func serviceCommand(args []string) error {
 	}
 	fs := flag.NewFlagSet("service "+args[0], flag.ContinueOnError)
 	if args[0] == "install" || args[0] == "run" {
-		config.Bind(fs, "runtime-dir", "claude-root", "codex-root")
+		config.Bind(fs, "runtime-dir", "claude-root", "codex-root", "gateway-mode", "gateway-listen", "gateway-advertise")
 	} else {
 		config.Bind(fs)
 	}
@@ -52,7 +51,7 @@ func serviceCommand(args []string) error {
 		if installed {
 			return service.Run(ctx, c)
 		}
-		return channel.RunObserver(ctx, c.Observer)
+		return service.RunForeground(ctx, c)
 	}
 	return service.Manage(ctx, args[0], c)
 }

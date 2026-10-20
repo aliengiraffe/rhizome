@@ -27,7 +27,9 @@ Create `~/.rhizome/config.toml` before installing, with `rhizome setup` (it asks
 for the installation type; see the README's
 [Collaboration skill](../README.md#creating-the-configuration-file)) or by hand
 (an empty file selects defaults), or select an existing file with `--config`.
-The observer does not peer, so the `[network]` table has no effect on the service. See the README's
+The observer does not peer, so the `[network]` table has no effect on the service.
+The service can also run an opt-in [host gateway](gateway.md) via `[gateway]`;
+that gateway bridges local sessions without changing observer collection or history. See the README's
 [configuration table](../README.md#configuration) for keys and precedence.
 Installation rejects path overrides that differ from the file: put persistent
 paths in TOML so a service launched without the installing shell's environment

@@ -109,7 +109,10 @@ def main():
         try:
             claude.bind('claude-protocol-smoke', directory)
             config = {'mcp_servers.rhizome': {'command': str(ROOT / 'rhizome'),
-                      'args': ['mcp', '--agent', 'codex', '--codex-bin', binary],
+                      # Use the same isolated configuration as the Claude protocol client;
+                      # otherwise the user's LAN/Tailscale defaults split the smoke cluster.
+                      'args': ['mcp', '--agent', 'codex', '--codex-bin', binary,
+                               '--config', str(directory / 'smoke-config.toml')],
                       'env': {'CODEX_HOME': str(home), 'RHIZOME_RUNTIME_DIR': str(directory / 'run')}}}
             for _ in range(2):
                 thread = app.call('thread/start', {'cwd': str(directory), 'config': config,
