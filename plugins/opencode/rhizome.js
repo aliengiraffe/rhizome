@@ -16,6 +16,7 @@ const MAX_PENDING_WRITE = 1024 * 1024
 const MAX_FIELD = 1024
 const MAX_FRAME = 60 * 1024
 const MAX_INBOX = 256
+const MAX_SESSIONS = 64
 const PEER_MARKER = "<rhizome-peer-event>"
 
 // Must match bridgeSocketPath in internal/channel/opencode_bridge.go.
@@ -118,6 +119,7 @@ export default {
           let frame
           try { frame = JSON.parse(raw) } catch { continue }
           if (frame?.type === "deliver") void deliver(frame)
+          else if (frame?.type === "restore") void restore(frame)
         }
         if (buffer.length > MAX_LINE) s.destroy()
       })
@@ -150,6 +152,28 @@ export default {
       send(frame)
       if (parentID === "") local.set(sessionID, frame)
       return true
+    }
+
+    // Rhizome sends, after hello, the sessions a human prompt bound in an
+    // earlier instance of this location (OpenCode reloads instances, which
+    // resets this plugin). Each is verified exactly like a prompt bind: it must
+    // exist, be top-level and belong to this location. Others are reported
+    // unrestorable so Rhizome forgets them.
+    const restore = async (frame) => {
+      const ids = Array.isArray(frame?.sessions) ? frame.sessions.slice(0, MAX_SESSIONS) : []
+      for (const raw of ids) {
+        const id = sid(raw)
+        if (id === "" || local.has(id)) continue
+        let info
+        try { info = await ctx.session.get({ sessionID: id }) } catch { info = null }
+        if (info && field(info.parentID) === "" && inThisLocation(info)) {
+          const bound = { type: "bind", sessionID: id, parentID: "", directory, title: field(info.title) }
+          local.set(id, bound)
+          send(bound)
+        } else {
+          send({ type: "unrestorable", sessionID: id })
+        }
+      }
     }
 
     const onEvent = async (event) => {

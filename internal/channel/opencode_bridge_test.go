@@ -288,3 +288,33 @@ func TestBridgeReplacementWithoutHelloReportsOneDisconnect(t *testing.T) {
 		t.Fatalf("%d extra disconnects", n)
 	}
 }
+
+// An OpenCode instance reload starts the successor Rhizome on the same socket
+// path before the old one exits; the old one must not unlink the successor's.
+func TestBridgeCloseKeepsSuccessorSocket(t *testing.T) {
+	path := filepath.Join(shortDir(t), "b.sock")
+	old, err := listenBridge(path, newFakeBridgeHandler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.start()
+	h := newFakeBridgeHandler()
+	next, err := listenBridge(path, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.start()
+	t.Cleanup(next.close)
+	old.close()
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("successor socket removed: %v", err)
+	}
+	dialPlugin(t, path, true)
+	if recv(t, h.conns) {
+		t.Fatal("first connection reported as reconnect")
+	}
+	next.close()
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("own socket kept: %v", err)
+	}
+}

@@ -341,3 +341,34 @@ test("setup with an unresolvable directory is a no-op", () => {
 })
 
 test.after(() => rmSync(root, { recursive: true, force: true }))
+
+test("restore binds only verified top-level sessions of this location", async () => {
+  const other = join(root, "restore-other")
+  mkdirSync(other)
+  const srv = listen(); await srv.start()
+  const { ctx, emit } = fakeCtx({
+    getResult: (id) => {
+      if (id === "ses_ok") return { parentID: "", title: "kept", location: { directory: project } }
+      if (id === "ses_child") return { parentID: "ses_ok", title: "child", location: { directory: project } }
+      if (id === "ses_foreign") return { parentID: "", title: "theirs", location: { directory: other } }
+      throw new Error("not found")
+    },
+  })
+  const cleanup = plugin.setup(ctx)
+  await srv.next((f) => f.type === "hello")
+  srv.write({ type: "restore", sessions: ["ses_child", "ses_foreign", "ses_missing", "ses_ok", 7, ""] })
+  for (const id of ["ses_child", "ses_foreign", "ses_missing"]) {
+    assert.deepEqual(await srv.next((f) => f.sessionID === id), { type: "unrestorable", sessionID: id })
+  }
+  assert.deepEqual(await srv.next((f) => f.sessionID === "ses_ok"), { type: "bind", sessionID: "ses_ok", parentID: "", directory: project, title: "kept" })
+  // The restored session is relayed; the refused ones are not.
+  for (const id of ["ses_child", "ses_foreign", "ses_ok"]) emit({ type: "session.execution.succeeded", data: { sessionID: id } })
+  assert.deepEqual(await srv.next((f) => f.type === "turn"), { type: "turn", sessionID: "ses_ok" })
+  // A repeated restore of an already local session sends nothing new.
+  srv.write({ type: "restore", sessions: ["ses_ok"] })
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_ok" } })
+  await srv.next((f) => f.type === "turn")
+  assert.equal(srv.all.filter((f) => f.type === "bind").length, 1)
+  assert.equal(srv.all.filter((f) => f.type === "turn").length, 2)
+  cleanup(); await srv.stop()
+})

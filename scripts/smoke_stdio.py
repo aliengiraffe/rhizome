@@ -203,6 +203,27 @@ def opencode_scenario(directory, claude):
     finally:
         oc.close()
     assert not path.exists(), 'bridge socket left behind'
+    # OpenCode reloads an instance: a new Rhizome process and a fresh plugin.
+    # The previously human-bound session is offered for restore and rebinds
+    # without a new prompt; the unbound child is not offered.
+    oc = Client(directory, join=claude.gossip(), run=path.parent, agent='opencode', cwd=project)
+    try:
+        plugin = FakePlugin(path)
+        restore = plugin.expect('restore')
+        assert restore['sessions'] == ['ses_smokeAlpha1'], restore
+        assert 'UNBOUND' in oc.tool_error('list_sessions', meta=alpha)
+        plugin.send({'type': 'bind', 'sessionID': 'ses_smokeAlpha1', 'parentID': '', 'directory': str(project), 'title': 'smoke title'})
+        until(lambda: not oc.call('tools/call', {'name': 'list_sessions', 'arguments': {}, '_meta': alpha}).get('isError'))
+        until(lambda: any(s['identity']['session_id'] == 'ses_smokeAlpha1' for s in claude.tool('list_sessions')['sessions']))
+        claude.tool('send', {'session_id': 'ses_smokeAlpha1', 'text': 'restored-marker'})
+        frame = plugin.expect('deliver')
+        assert frame['sessionID'] == 'ses_smokeAlpha1' and 'restored-marker' in frame['text']
+        plugin.send({'type': 'ack', 'id': frame['id']})
+        until(lambda: oc.tool('list_sessions', meta=alpha)['counters']['Written'] == 1)
+        plugin.close()
+    finally:
+        oc.close()
+    assert not path.exists(), 'bridge socket left behind'
 
 def main():
     clients = []
@@ -259,7 +280,7 @@ def main():
             for client in clients:
                 client.close()
         assert not list(directory.glob('run*/*.json')), 'EOF left registrations'
-    print('PASS%s: MCP stdout, unbound startup, two-session routing, session names, transcript, restart gap, rebind, EOF, OpenCode bridge identity, activity and delivery'
+    print('PASS%s: MCP stdout, unbound startup, two-session routing, session names, transcript, restart gap, rebind, EOF, OpenCode bridge identity, activity, delivery and restore after reload'
           % (' (LAN mode, pinned TLS, separate registries)' if LAN else ''))
 
 if __name__ == '__main__':

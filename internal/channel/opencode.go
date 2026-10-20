@@ -47,6 +47,7 @@ type openCodeSessionState struct {
 	node      *Node
 	collector *openCodeCollector
 	last      time.Time
+	saved     time.Time // last value handed to the binding store
 }
 
 // openCodeNodes keeps one Node per bound top-level OpenCode session. Binding
@@ -56,25 +57,32 @@ type openCodeNodes struct {
 	runtime  string
 	opts     Options // network and hostname settings shared by every session node
 	bridge   *bridge
+	store    *openCodeStore // nil disables restoration (tests)
 	limit    int
 	now      func() time.Time
 	frameMu  sync.Mutex // serializes frame processing; guards closed with mu
 	mu       sync.Mutex // lock order: frameMu, then mu, then Node.mu
 	sessions map[string]*openCodeSessionState
-	pluginUp bool
-	closed   bool // set under frameMu and mu; bind refuses afterwards
-	queue    chan workItem
-	dropped  atomic.Uint64
-	stop     chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	// restoring maps IDs of the last restore list to their stored activity
+	// time, so a restored bind keeps it instead of looking fresh. Guarded by
+	// frameMu.
+	restoring map[string]time.Time
+	pluginUp  bool
+	closed    bool // set under frameMu and mu; bind refuses afterwards
+	queue     chan workItem
+	dropped   atomic.Uint64
+	stop      chan struct{}
+	stopOnce  sync.Once
+	wg        sync.WaitGroup
 }
 
 // workItem is one unit of ordered work for the manager's worker: a plugin
-// frame, or (gap != "") a gap marker ordered after earlier frames.
+// frame, a gap marker (gap != "") ordered after earlier frames, or a request to
+// send the plugin its restore list (restore).
 type workItem struct {
-	frame bridgeFrame
-	gap   string
+	frame   bridgeFrame
+	gap     string
+	restore bool
 }
 
 const openCodeQueueSize = 512
@@ -107,6 +115,7 @@ func (m *openCodeNodes) worker() {
 			return
 		case w := <-m.queue:
 			m.process(w)
+			m.flushStore() // after process: frameMu is released
 		}
 	}
 }
@@ -124,7 +133,61 @@ func (m *openCodeNodes) process(w workItem) {
 		m.gapAll(w.gap)
 		return
 	}
+	if w.restore {
+		m.sendRestore()
+		return
+	}
 	m.handleLocked(w.frame)
+}
+
+// sendRestore offers a newly connected plugin every session this location
+// previously bound from a human prompt. The plugin verifies each one exactly as
+// for a prompt bind and answers with ordinary bind frames, or "unrestorable".
+func (m *openCodeNodes) sendRestore() {
+	entries, err := m.store.load()
+	if err != nil {
+		slog.Warn("opencode_restore", "error", err)
+		return
+	}
+	if len(entries) == 0 || m.bridge == nil {
+		return
+	}
+	m.restoring = make(map[string]time.Time, len(entries))
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		m.restoring[e.SessionID] = time.Unix(e.Last, 0)
+		ids = append(ids, e.SessionID)
+	}
+	if err := m.bridge.send(bridgeFrame{Type: "restore", Sessions: ids}); err != nil {
+		slog.Warn("opencode_restore", "error", err, "sessions", len(ids))
+		return
+	}
+	slog.Info("opencode_restore", "sessions", len(ids))
+}
+
+// flushStore writes buffered store changes. It must not run under frameMu or mu.
+func (m *openCodeNodes) flushStore() {
+	if !m.store.dirty() {
+		return
+	}
+	if err := m.store.flush(); err != nil {
+		slog.Warn("opencode_store", "error", err)
+	}
+}
+
+// persistActivity hands each bound session's newer activity time to the store.
+func (m *openCodeNodes) persistActivity() {
+	if m.store == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for sid, s := range m.sessions {
+		if s.last.After(s.saved) {
+			m.store.touch(sid, s.last)
+			s.saved = s.last
+		}
+	}
 }
 
 func (m *openCodeNodes) resolve(r *mcp.CallToolRequest) (*Node, error) {
@@ -160,6 +223,19 @@ func (m *openCodeNodes) handleLocked(f bridgeFrame) {
 		}
 	case "forget":
 		m.retire(f.SessionID, "deleted")
+	case "unrestorable":
+		// The plugin could not verify a restore entry (missing, child or another
+		// location's session). Forget it unless it is bound right now.
+		if !openCodeSession.MatchString(f.SessionID) {
+			return
+		}
+		delete(m.restoring, f.SessionID)
+		m.mu.Lock()
+		bound := m.sessions[f.SessionID] != nil
+		m.mu.Unlock()
+		if !bound {
+			m.store.drop(f.SessionID)
+		}
 	case "overflow":
 		m.gapAll(fmt.Sprintf("plugin dropped %d events", f.Dropped))
 	case "title", "input", "text", "tool", "turn":
@@ -229,8 +305,21 @@ func (m *openCodeNodes) bind(f bridgeFrame) error {
 			m.mu.Unlock()
 		}
 	}
+	last := m.now()
+	if t, ok := m.restoring[f.SessionID]; ok {
+		delete(m.restoring, f.SessionID)
+		if created {
+			last = t // a restore is not activity
+		}
+	}
 	m.mu.Lock()
-	s.last = m.now()
+	if last.After(s.last) {
+		s.last = last
+	}
+	if s.last.After(s.saved) {
+		m.store.touch(f.SessionID, s.last)
+		s.saved = s.last
+	}
 	m.mu.Unlock()
 	n := s.node
 	n.mu.Lock()
@@ -310,6 +399,7 @@ func (m *openCodeNodes) connected(reconnect bool) {
 	if reconnect {
 		m.enqueue(workItem{gap: "plugin reconnected"})
 	}
+	m.enqueue(workItem{restore: true})
 }
 
 func (m *openCodeNodes) disconnected() { m.setReady(false) }
@@ -328,6 +418,9 @@ func (m *openCodeNodes) retire(sid, why string) {
 	m.mu.Unlock()
 	if s == nil {
 		return
+	}
+	if why != "shutdown" {
+		m.store.drop(sid) // a shutdown keeps the entry for the next process
 	}
 	s.node.close()
 	slog.Info("opencode_retire", "session_id", sid, "reason", why)
@@ -368,6 +461,8 @@ func (m *openCodeNodes) sweepLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			m.sweep()
+			m.persistActivity()
+			m.flushStore()
 		}
 	}
 }
@@ -378,7 +473,7 @@ func (m *openCodeNodes) close() {
 	m.stopOnce.Do(func() { close(m.stop) })
 	m.wg.Wait()
 	m.frameMu.Lock()
-	defer m.frameMu.Unlock()
+	m.persistActivity()
 	m.mu.Lock()
 	m.closed = true
 	var ids []string
@@ -389,6 +484,8 @@ func (m *openCodeNodes) close() {
 	for _, sid := range ids {
 		m.retire(sid, "shutdown")
 	}
+	m.frameMu.Unlock()
+	m.flushStore()
 }
 
 // RunOpenCode serves one OpenCode location with resolved configuration and
@@ -412,8 +509,13 @@ func RunOpenCode(c config.Config, o Options) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	store, err := newOpenCodeStore(runtime, cwd)
+	if err != nil {
+		return err
+	}
 	manager := newOpenCodeNodes(ctx, runtime)
 	manager.opts = o
+	manager.store = store
 	b, err := listenBridge(path, manager)
 	if err != nil {
 		return err

@@ -3,8 +3,6 @@ package channel
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +46,8 @@ type bridgeFrame struct {
 	Dropped   int    `json:"dropped,omitempty"`
 	ID        string `json:"id,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	// Sessions is the restore list Rhizome sends after hello (type "restore").
+	Sessions []string `json:"sessions,omitempty"`
 }
 
 // bridgeHandler receives plugin traffic. Calls run on the connection's read
@@ -67,16 +67,11 @@ type bridgeStats struct{ Frames, Malformed, Oversized, Connections uint64 }
 // it spawned: the OpenCode process ID plus a hash of the project directory.
 // These are pairing keys only, never routing keys.
 func bridgeSocketPath(runtime string, pid int, dir string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(dir)
+	_, hash, err := resolveLocation(dir)
 	if err != nil {
 		return "", err
 	}
-	abs, err := filepath.Abs(resolved)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256([]byte(abs))
-	path := filepath.Join(runtime, fmt.Sprintf("opencode-%d-%s.sock", pid, hex.EncodeToString(sum[:])[:12]))
+	path := filepath.Join(runtime, fmt.Sprintf("opencode-%d-%s.sock", pid, hash[:12]))
 	if len(path) > maxSocketPath {
 		return "", fmt.Errorf("bridge socket path exceeds %d bytes; set a shorter RHIZOME_RUNTIME_DIR", maxSocketPath)
 	}
@@ -86,6 +81,7 @@ func bridgeSocketPath(runtime string, pid int, dir string) (string, error) {
 // bridge serves exactly one plugin connection at a time on a private socket.
 type bridge struct {
 	path       string
+	sock       os.FileInfo // the socket file this bridge created
 	ln         net.Listener
 	handler    bridgeHandler
 	ackTimeout time.Duration
@@ -114,11 +110,22 @@ func listenBridge(path string, h bridgeHandler) (*bridge, error) {
 	if err != nil {
 		return nil, err
 	}
+	// During an OpenCode instance reload the successor process listens on the
+	// same path before this one exits; never unlink a path we no longer own.
+	if ul, ok := ln.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
 	if err := os.Chmod(path, 0600); err != nil {
+		ln.Close()
+		_ = os.Remove(path)
+		return nil, err
+	}
+	sock, err := os.Lstat(path)
+	if err != nil {
 		ln.Close()
 		return nil, err
 	}
-	return &bridge{path: path, ln: ln, handler: h, ackTimeout: bridgeAckTimeout, pending: map[string]chan bridgeFrame{}}, nil
+	return &bridge{path: path, sock: sock, ln: ln, handler: h, ackTimeout: bridgeAckTimeout, pending: map[string]chan bridgeFrame{}}, nil
 }
 
 // start accepts connections until close. A new connection replaces the old one,
@@ -260,6 +267,18 @@ func (b *bridge) write(c net.Conn, f bridgeFrame) error {
 	return err
 }
 
+// send writes a control frame to the current ready connection, if any.
+func (b *bridge) send(f bridgeFrame) error {
+	b.mu.Lock()
+	c := b.conn
+	ready := b.ready
+	b.mu.Unlock()
+	if c == nil || !ready {
+		return errDestinationUnavailable
+	}
+	return b.write(c, f)
+}
+
 // deliver hands text to the plugin for one session. No plugin connection means
 // errDestinationUnavailable (retained by the caller); a sent but unacknowledged
 // delivery is errAckMissing (never retried). A failed write means nothing
@@ -296,7 +315,7 @@ func (b *bridge) deliver(ctx context.Context, sessionID, text string) error {
 }
 
 // close stops accepting, closes the connection, waits for goroutines and removes
-// the socket file.
+// the socket file if it is still the one this bridge created.
 func (b *bridge) close() {
 	b.mu.Lock()
 	b.closed = true
@@ -307,6 +326,9 @@ func (b *bridge) close() {
 		c.Close()
 	}
 	b.wg.Wait()
+	if st, err := os.Lstat(b.path); err != nil || !os.SameFile(st, b.sock) {
+		return // gone, or replaced by a successor process
+	}
 	if err := os.Remove(b.path); err != nil && !os.IsNotExist(err) {
 		slog.Warn("opencode_bridge_cleanup", "error", err)
 	}
