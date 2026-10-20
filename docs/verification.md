@@ -322,3 +322,15 @@ macOS plus one Linux or macOS device and record the result in the PR.
    Bring Tailscale back up before step 9.
 9. Exit both; verify each device's runtime directory keeps only `token` and
    `registry.lock`.
+
+## Setup configuration wizard
+
+Automated: `setup_config_test.go` (scripted answers for each mode, flag-driven
+writes, keep/replace/backup, no-terminal behavior, 0600/0700 modes, round trip
+through the real resolver) and the `TestNetwork` table in `internal/config`.
+Not automated: the prompts on a real terminal. Manually, with a throwaway
+`HOME`, run `rhizome setup` and check that each of local/LAN/Tailscale writes
+only the answered keys, that Enter at every prompt yields `mode = "local"`, that a
+second run shows the file and keeps it by default, and that `rhizome config`
+reports the keys with source `file`. In Tailscale mode with the daemon stopped,
+setup must warn and still write the file, and `rhizome mcp` must refuse to start.

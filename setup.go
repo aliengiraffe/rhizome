@@ -12,9 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"rhizome/internal/channel"
 	"rhizome/internal/config"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -239,16 +241,35 @@ func setup(args []string) error {
 	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex) or \"all\"; omit for an interactive picker")
 	config.Bind(opts)
 	list := opts.Bool("list", false, "print detected agents and exit")
+	network := opts.String("network", "", "write the configuration non-interactively: local, lan or tailscale; omit for the interactive questions")
+	var join listFlag
+	opts.Var(&join, "join", "with --network lan|tailscale: gossip host:port seed to join; repeatable")
+	bindAddr := opts.String("bind-addr", "", "with --network lan: listen address")
+	advertiseAddr := opts.String("advertise-addr", "", "with --network lan: address peers dial")
+	mdns := opts.Bool("mdns", true, "with --network lan: set false to disable mDNS")
+	gossipPort := opts.Int("gossip-port", 0, "with --network tailscale: well-known gossip port (default 7946)")
+	discovery := opts.String("discovery-interval", "", "with --network tailscale: peer discovery interval (default 20s)")
+	replaceConfig := opts.Bool("replace-config", false, "with --network: replace an existing configuration file (the old one is backed up)")
 	if err := opts.Parse(args); err != nil {
 		return err
 	}
 	if opts.NArg() != 0 {
 		return fmt.Errorf("unexpected setup arguments")
 	}
-	c, err := config.FromFlags(opts)
+	visited := map[string]bool{}
+	opts.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+	if *network == "" {
+		for _, name := range []string{"join", "bind-addr", "advertise-addr", "mdns", "gossip-port", "discovery-interval", "replace-config"} {
+			if visited[name] {
+				return fmt.Errorf("--%s requires --network", name)
+			}
+		}
+	}
+	c, path, err := resolveForSetup(opts)
 	if err != nil {
 		return err
 	}
+	tty := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 	agents := detectAgents(c, exec.LookPath)
 	if *list {
 		for _, a := range agents {
@@ -260,13 +281,27 @@ func setup(args []string) error {
 		}
 		return nil
 	}
+	var answers *configAnswers
+	if *network != "" {
+		a := configAnswers{Network: config.Network{Mode: *network, BindAddr: *bindAddr, AdvertiseAddr: *advertiseAddr, Join: join, GossipPort: *gossipPort, DiscoveryInterval: *discovery}}
+		if visited["mdns"] {
+			a.Network.MDNS = mdns
+		}
+		if err := a.Network.Validate(); err != nil {
+			return fmt.Errorf("--network %s: %w", *network, err)
+		}
+		answers = &a
+	}
 	var checked []bool
+	configOnly := false
 	switch {
 	case *agentsFlag != "":
 		if checked, err = parseAgentFlag(*agentsFlag, agents); err != nil {
 			return err
 		}
-	case term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())):
+	case *network != "" && !tty:
+		checked, configOnly = make([]bool, len(agents)), true
+	case tty:
 		checked = make([]bool, len(agents))
 		for i, a := range agents {
 			checked[i] = a.Detected
@@ -295,8 +330,86 @@ func setup(args []string) error {
 		}
 		fmt.Printf("%s: %s %s\n", a.Label, status, filepath.Join(a.Skills, skillName))
 	}
-	if !any {
-		fmt.Println("nothing selected; no changes made")
+	if !any && !configOnly {
+		fmt.Println("nothing selected; no skills installed")
 	}
-	return nil
+	return setupConfig(c, path, answers, *replaceConfig, tty, os.Stdin, os.Stdout, os.Stderr)
+}
+
+// resolveForSetup resolves configuration like every other command, except that
+// an explicitly selected file that does not exist yet is allowed: setup is the
+// command that creates it.
+func resolveForSetup(opts *flag.FlagSet) (config.Config, string, error) {
+	flags := map[string]string{}
+	opts.Visit(func(f *flag.Flag) { flags[f.Name] = f.Value.String() })
+	path, explicit, err := config.Target(flags, os.Getenv)
+	if err != nil {
+		return config.Config{}, "", err
+	}
+	if _, statErr := os.Lstat(path); explicit && errors.Is(statErr, fs.ErrNotExist) {
+		delete(flags, "config")
+		c, err := config.Resolve(flags, func(k string) string {
+			if k == "RHIZOME_CONFIG" {
+				return ""
+			}
+			return os.Getenv(k)
+		})
+		return c, path, err
+	}
+	c, err := config.FromFlags(opts)
+	return c, path, err
+}
+
+// setupConfig creates the configuration file. answers is set by --network;
+// otherwise a terminal gets the interactive questions and anything else leaves
+// configuration alone and says so.
+func setupConfig(c config.Config, path string, answers *configAnswers, replace, tty bool, in io.Reader, out, errOut io.Writer) error {
+	var err error
+	wizard := answers == nil
+	p := prompter{in: bufio.NewReader(in), out: out}
+	_, statErr := os.Lstat(path)
+	exists := statErr == nil
+	if answers == nil {
+		if !tty {
+			fmt.Fprintln(errOut, "configuration not written: no terminal for the questions; pass --network local|lan|tailscale")
+			return nil
+		}
+		if exists {
+			if replace, err = confirmExisting(p, path); err != nil {
+				return err
+			}
+			if !replace {
+				fmt.Fprintf(out, "kept existing %s\n", path)
+				return nil
+			}
+		}
+		a, err := askConfig(p, c, tailscaleCheck(channel.CheckTailscale))
+		if err != nil {
+			return err
+		}
+		answers = &a
+	} else if exists && !replace {
+		fmt.Fprintf(errOut, "configuration not written: %s already exists; pass --replace-config to back it up and replace it\n", path)
+		return nil
+	}
+	body, err := answers.render()
+	if err != nil {
+		return err
+	}
+	backup, err := writeConfig(path, body, exists && replace, time.Now())
+	if err != nil {
+		return err
+	}
+	if backup != "" {
+		fmt.Fprintf(out, "backed up previous configuration to %s\n", backup)
+	}
+	fmt.Fprintf(out, "wrote %s (network mode: %s)\n", path, answers.Network.Mode)
+	if !wizard {
+		return nil
+	}
+	install, err := p.yesNo("Install the background service now", false)
+	if err != nil || !install {
+		return err
+	}
+	return serviceCommand([]string{"install", "--config", path})
 }

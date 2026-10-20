@@ -190,3 +190,82 @@ func TestFlagsAndOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestNetwork(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// No file, and an empty one, mean local mode with every key defaulted.
+	for _, body := range []string{"", "# empty"} {
+		c, err := Resolve(map[string]string{"config": fixture(t, body)}, noenv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Network.Mode != "" || c.Sources["network.mode"] != "default" || c.Network.MDNS != nil {
+			t.Fatalf("not defaults: %+v %v", c.Network, c.Sources)
+		}
+	}
+	c, err := Resolve(nil, noenv)
+	if err != nil || c.Found || c.Network.Mode != "" {
+		t.Fatalf("missing file: %+v %v", c.Network, err)
+	}
+
+	ok := []struct {
+		name, body string
+		check      func(Network) bool
+	}{
+		{"lan", "[network]\nmode='lan'\nbind_addr='192.168.1.5'\nadvertise_addr='192.168.1.5'\njoin=['a:7946','b:7946']\nmdns=false", func(n Network) bool {
+			return n.Mode == ModeLAN && n.BindAddr == "192.168.1.5" && len(n.Join) == 2 && n.MDNS != nil && !*n.MDNS
+		}},
+		{"tailscale", "[network]\nmode='tailscale'\ngossip_port=7950\ndiscovery_interval='45s'\njoin=['host.ts.net:7946']", func(n Network) bool {
+			return n.Mode == ModeTailscale && n.GossipPort == 7950 && n.DiscoveryInterval == "45s"
+		}},
+		{"explicit local", "[network]\nmode='local'", func(n Network) bool { return n.Mode == ModeLocal }},
+	}
+	for _, tc := range ok {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := Resolve(map[string]string{"config": fixture(t, tc.body)}, noenv)
+			if err != nil || !tc.check(c.Network) || c.Sources["network.mode"] != "file" {
+				t.Fatalf("%+v %v %v", c.Network, c.Sources, err)
+			}
+			var out bytes.Buffer
+			if err := c.Write(&out); err != nil || !strings.Contains(out.String(), "network.mode = ") || strings.Contains(out.String(), "token") {
+				t.Fatalf("%v\n%s", err, out.String())
+			}
+		})
+	}
+
+	bad := []struct{ body, want string }{
+		{"[network]\nmode='wan'", "network.mode"},
+		{"[network]\nmode='local'\njoin=['a:1']", "require mode"},
+		{"[network]\nbind_addr='10.0.0.1'", "require mode"},
+		{"[network]\nmode='lan'\ngossip_port=7946", "tailscale"},
+		{"[network]\nmode='tailscale'\ngossip_port=70000", "gossip_port"},
+		{"[network]\nmode='tailscale'\ndiscovery_interval='soon'", "discovery_interval"},
+		{"[network]\nmode='tailscale'\ndiscovery_interval='-5s'", "discovery_interval"},
+		{"[network]\nmode='lan'\ntoken='secret'", "token"},
+		{"[network]\nMode='lan'", "Mode"},
+		{"[network]\nmode=1", "mode"},
+		{"[NETWORK]\nmode='lan'", "NETWORK"},
+	}
+	for _, tc := range bad {
+		t.Run(tc.body, func(t *testing.T) {
+			p := fixture(t, tc.body)
+			_, err := Resolve(map[string]string{"config": p}, noenv)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
+func TestTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	p, explicit, err := Target(nil, noenv)
+	if err != nil || explicit || p != filepath.Join(home, ".rhizome", "config.toml") {
+		t.Fatal(p, explicit, err)
+	}
+	p, explicit, err = Target(map[string]string{"config": "/flag.toml"}, func(string) string { return "/env.toml" })
+	if err != nil || !explicit || p != "/flag.toml" {
+		t.Fatal(p, explicit, err)
+	}
+}
