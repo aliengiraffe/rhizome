@@ -1,7 +1,7 @@
 # Background session observer
 
 `rhizome service install` installs and starts a per-user observer. It discovers
-Claude Code and Codex logs without requiring Rhizome in those agents, including
+coding agent logs without requiring Rhizome in those agents, including
 headless sessions. Existing MCP/channel peers can list and subscribe to their
 exact session IDs. A passive session cannot receive messages: `send` returns an
 observation-only error until an integrated endpoint is available. The same

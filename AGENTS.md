@@ -2,11 +2,11 @@
 
 ## Orientation
 
-Rhizome is a Go MCP bridge for local Claude Code and Codex sessions. It binds
+Rhizome is a Go MCP bridge for local coding agent sessions. It binds
 verified session identities, collects selected activity, discovers peers through
 memberlist, and delivers events over authenticated loopback gRPC. Claude uses
 channel notifications; Codex uses per-thread nodes and local queue delivery.
-An optional per-user service observes Claude/Codex logs independently of MCP
+An optional per-user service observes coding agent logs independently of MCP
 and maintains the local session-history catalog behind `search_sessions` and
 `read_session_history`; see [docs/service.md](docs/service.md) for lifecycle,
 boundaries, and validation and [docs/history.md](docs/history.md) for the
@@ -190,6 +190,13 @@ Never commit to `main`; use a feature branch. Keep changes scoped and describe
 validation and limitations in the PR. Do not add `Co-Authored-By` or other agent
 attribution lines to commits or PR descriptions. Preserve the user's author,
 committer, and signing configuration.
+
+## Documentation language
+
+Describe shared capabilities in terms of agents or coding agents. Use product
+names where they identify supported integrations, configuration keys, native
+formats, version-specific behavior, or tested scope. Generic language must not
+imply support for unimplemented integrations.
 
 ## Maintaining this file
 

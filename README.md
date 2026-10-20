@@ -1,8 +1,9 @@
 # Rhizome
 
-One Go MCP process per Claude Code session. Rhizome binds through that session's
-hooks, watches its transcript, discovers local peers with memberlist, and streams
-selected peer activity over authenticated loopback gRPC into its own MCP channel.
+Rhizome connects coding agent sessions through MCP. It binds verified session
+identities, collects selected activity, discovers local peers with memberlist,
+and delivers peer activity over authenticated loopback gRPC through each
+agent's integration.
 Two sessions in the same directory remain separate. An optional background
 observer discovers local headless sessions from their logs and maintains a
 searchable catalog of past sessions. Install it with

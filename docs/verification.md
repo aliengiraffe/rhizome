@@ -339,7 +339,7 @@ setup must warn and still write the file, and `rhizome mcp` must refuse to start
 
 Automated on macOS:
 
-- `internal/channel/history_test.go`: pre-existing Claude and Codex fixtures
+- `internal/channel/history_test.go`: pre-existing agent log fixtures
   indexed without creating publishers; child transcripts, identity-less files
   and foreign-session records excluded; native titles, explicit overrides and
   fallbacks; timestamps from supported records only; AND filters, exact IDs,
@@ -364,12 +364,13 @@ Automated on macOS:
   limits and path-free health output.
 - `task build`, `task check` (`go vet ./...`, `go test -race ./...`),
   `git diff --check`, `python3 scripts/smoke_stdio.py` with and without
-  `--lan`, and `python3 scripts/smoke_service.py`, which now writes Claude and
-  Codex logs before the observer starts, checks `CATALOG_UNAVAILABLE` first,
-  then searches and reads them from a separate MCP process, pages with cursors,
+  `--lan`, and `python3 scripts/smoke_service.py`, which now writes logs for
+  each supported agent type before the observer starts, checks
+  `CATALOG_UNAVAILABLE` first, then searches and reads them from a separate MCP
+  process, pages with cursors,
   verifies the stale catalog while the observer is stopped, and asserts that no
   historical text reached any channel notification.
 
-Not exercised here: real Claude or Codex clients calling the new tools, native
+Not exercised here: real coding agent clients calling the new tools, native
 service installation on Linux/Windows with a large pre-existing log tree, and
 any cross-device scenario (history is local by design).

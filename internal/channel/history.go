@@ -216,7 +216,7 @@ type catalogReader struct {
 	mod    time.Time
 }
 
-const startObserverHint = "No session-history catalog exists in this runtime directory. Start the observer service (rhizome service install, or rhizome service start) so it indexes local Claude and Codex logs; MCP processes only read the catalog."
+const startObserverHint = "No session-history catalog exists in this runtime directory. Start the observer service (rhizome service install, or rhizome service start) so it indexes local coding agent logs; MCP processes only read the catalog."
 
 // load returns the current catalog and whether the observer service holds its
 // runtime lock. Missing, corrupt, foreign-scope and newer catalogs are errors.
