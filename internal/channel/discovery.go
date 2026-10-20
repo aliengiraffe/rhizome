@@ -26,11 +26,18 @@ import (
 	pb "rhizome/proto"
 )
 
+// NodeMeta serializes the identity into memberlist's bounded metadata. Labels
+// (session_name, project) give way rune by rune, longest first, so routing and
+// authentication fields are never the reason an advertisement is dropped.
 func (n *Node) NodeMeta(limit int) []byte {
 	identity := n.local()
 	b, _ := json.Marshal(identity)
-	for len(b) > limit && len(identity.Project) > 0 {
-		identity.Project = identity.Project[:len(identity.Project)-1]
+	for len(b) > limit && (len(identity.Project) > 0 || len(identity.SessionName) > 0) {
+		if len(identity.SessionName) >= len(identity.Project) {
+			identity.SessionName = trimRune(identity.SessionName)
+		} else {
+			identity.Project = trimRune(identity.Project)
+		}
 		b, _ = json.Marshal(identity)
 	}
 	if len(b) > limit {

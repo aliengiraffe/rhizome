@@ -22,6 +22,29 @@ replay/live boundaries, slow subscriber disconnection, bounded receiver queues,
 rate limits, channel handshake, prompt explicit delivery, 8 KiB batching and
 30-notification circuit-breaker re-arm.
 
+Session names (2026-10-19): unit tests cover label normalization (Unicode,
+control characters, whitespace, instruction-like text, 96-byte rune-safe
+bounds), stable fallbacks, explicit > native > fallback precedence including
+title arrival/change/removal and override clearing, stale-generation fencing,
+override persistence across a node restart and non-inheritance by another
+same-directory session, gossip metadata with maximum-size name/project/session
+ID still advertising with routing fields intact, Claude `ai-title`/`custom-title`
+transcript records (pre-binding baseline pass and live updates, foreign and
+malformed records ignored, no activity published), Codex `thread.name` through
+the fake App Server (native title, change, confirmed removal, transient failure
+kept), per-thread `set_session_name` isolation on a shared Codex connection,
+unbound rejection for both agents, and a live rename observed by a subscribed
+peer without any change to generation, node ID, stream, listeners or feed. The
+stdio smoke exercises the fallback label, explicit naming visible to a peer
+process, oversized rejection, persistence across a publisher restart and
+clearing. The Claude record shapes were checked against local transcripts
+(`{"type":"ai-title","aiTitle":…,"sessionId":…}` and
+`{"type":"custom-title","customTitle":…,"sessionId":…}`); the Codex field was
+checked against the generated App Server v2 schema for 0.163.0.
+`scripts/smoke_codex.py --live` passed against the running 0.163.0 daemon after
+this change (it does not exercise naming itself). Interactive rendering of names
+in either client UI was not re-run for this change.
+
 The Python smoke starts actual binary processes with independent stdio pipes and
 a private cluster. It checks every stdout line as JSON, initialization, UNBOUND
 startup, same-directory binding, announcements, direct messages, transcript

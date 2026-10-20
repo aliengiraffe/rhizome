@@ -124,6 +124,7 @@ func (c *codexCollector) scan(ctx context.Context, n *Node, gen uint64) bool {
 		Thread struct {
 			ID     string  `json:"id"`
 			Parent *string `json:"parentThreadId"`
+			Name   *string `json:"name"`
 			Status struct {
 				Type string `json:"type"`
 			} `json:"status"`
@@ -137,6 +138,13 @@ func (c *codexCollector) scan(ctx context.Context, n *Node, gen uint64) bool {
 		c.state(n, "unsupported child or mismatched thread", false)
 		return false
 	}
+	// A verified read is the only native title source: null is a confirmed
+	// removal, while the failures above leave the last known title in place.
+	var title string
+	if read.Thread.Name != nil {
+		title = *read.Thread.Name
+	}
+	n.setNativeTitle(gen, true, title)
 	status := read.Thread.Status.Type
 	if status != "idle" && status != "active" {
 		c.state(n, status, false)

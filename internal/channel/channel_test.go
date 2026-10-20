@@ -367,6 +367,9 @@ func TestCircuitBreakerAndRearm(t *testing.T) {
 }
 func TestMCPHandshakeAndTools(t *testing.T) {
 	n := node(t)
+	if err := n.start(filepath.Join(t.TempDir(), "runtime")); err != nil {
+		t.Fatal(err)
+	}
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	adapter := &channelTransport{base: serverTransport}
 	ss, err := n.mcpServer().Connect(n.ctx, adapter, nil)
@@ -387,12 +390,16 @@ func TestMCPHandshakeAndTools(t *testing.T) {
 		t.Fatal("channel capability missing")
 	}
 	tools, err := cs.ListTools(n.ctx, nil)
-	if err != nil || len(tools.Tools) != 6 {
+	if err != nil || len(tools.Tools) != 7 {
 		t.Fatalf("tools %v %v", tools, err)
 	}
 	r, err := cs.CallTool(n.ctx, &mcp.CallToolParams{Name: "publish", Arguments: map[string]any{"text": "unbound"}})
 	if err != nil || !r.IsError {
 		t.Fatalf("unbound publish %v %v", r, err)
+	}
+	r, err = cs.CallTool(n.ctx, &mcp.CallToolParams{Name: "set_session_name", Arguments: map[string]any{"name": "unbound"}})
+	if err != nil || !r.IsError {
+		t.Fatalf("unbound set_session_name %v %v", r, err)
 	}
 	dir := t.TempDir()
 	r, err = cs.CallTool(n.ctx, &mcp.CallToolParams{Name: "observe_session", Arguments: Hook{SessionID: "hook-session", Cwd: dir, TranscriptPath: filepath.Join(dir, "s.jsonl"), Event: "UserPromptSubmit"}})
@@ -402,6 +409,18 @@ func TestMCPHandshakeAndTools(t *testing.T) {
 	b, _ := json.Marshal(n.status())
 	if !strings.Contains(string(b), "hook-session") {
 		t.Fatal("hook didn't bind")
+	}
+	r, err = cs.CallTool(n.ctx, &mcp.CallToolParams{Name: "set_session_name", Arguments: map[string]any{"name": "  Rhizome: naming test  "}})
+	if err != nil || r.IsError {
+		t.Fatalf("set_session_name %v %v", r, err)
+	}
+	var named map[string]string
+	if json.Unmarshal([]byte(r.Content[0].(*mcp.TextContent).Text), &named) != nil || named["session_name"] != "Rhizome: naming test" || named["source"] != "explicit" {
+		t.Fatalf("unexpected naming result %v", named)
+	}
+	r, err = cs.CallTool(n.ctx, &mcp.CallToolParams{Name: "list_sessions", Arguments: map[string]any{}})
+	if err != nil || r.IsError || !strings.Contains(r.Content[0].(*mcp.TextContent).Text, `"session_name":"Rhizome: naming test"`) {
+		t.Fatalf("list_sessions missing name %v %v", r, err)
 	}
 }
 

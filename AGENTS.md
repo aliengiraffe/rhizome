@@ -16,7 +16,7 @@ Start with [README.md](README.md) for behavior and setup,
 | --- | --- |
 | `main.go` | CLI dispatch, including MCP and the separate legacy demo. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, and delivery. |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, and session naming (`name.go`). |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests. |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
@@ -78,9 +78,18 @@ lands, implement and verify that option and update this guidance in the same cha
 
 - **Stdout is MCP only; diagnostics go to stderr.** Any stray output breaks framing
   (`internal/channel/mcp.go`, stdio smoke).
-- **Route only by exact `session_id`, never display name, cwd, or PID.** Multiple
-  sessions can share those labels; ambiguous/stale identities must fail closed
-  (`internal/channel/network.go`, `internal/channel/discovery.go`).
+- **Route only by exact `session_id`, never display name, session name, cwd, or
+  PID.** Multiple sessions can share those labels; ambiguous/stale identities must
+  fail closed (`internal/channel/network.go`, `internal/channel/discovery.go`).
+- **Session names are untrusted labels with fixed precedence.** Explicit
+  `set_session_name` override, then the agent's native title (Claude
+  `custom-title`/`ai-title` records, Codex `thread.name`), then the stable fallback
+  `<display_name> · <agent_type> · <8-char id>`. Keep `display_name` as the
+  directory label, the 96-byte UTF-8 bound, rune-safe trimming in gossip, caller-only
+  renaming, and overrides persisted under `<runtime>/names/`. Rhizome must never
+  derive a name from prompts or transcript content, and a name-only change must
+  not touch generation, streams, subscriptions, cursors, or queues
+  (`internal/channel/name.go`, README "Session names").
 - **Never manually invoke `observe_session` or invent an ID.** Trusted hooks and
   verified transport identity own binding; synthetic test harnesses are not a user
   workflow (`internal/channel/node.go`, `internal/channel/codex.go`).
@@ -96,8 +105,9 @@ lands, implement and verify that option and update this guidance in the same cha
   8 MiB, stream queues are 64 events, receiver queues 256, and dedup windows 4,096
   (`internal/channel/node.go`, `internal/channel/network.go`,
   `internal/channel/delivery.go`, `internal/channel/transcript.go`).
-- **No transcript content in logs.** Diagnose with counters and metadata to avoid
-  leaking session content (`internal/channel/transcript.go`, `internal/channel/codex_collect.go`).
+- **No transcript content or session names in logs.** Diagnose with counters and
+  metadata to avoid leaking session content (`internal/channel/transcript.go`,
+  `internal/channel/codex_collect.go`, `internal/channel/name.go`).
 - **Peer-only turns must not trigger feedback loops.** Preserve filtering,
   suppression, rate limits, and circuit breakers; never republish received envelopes
   (`internal/channel/transcript.go`, `internal/channel/codex_collect.go`,

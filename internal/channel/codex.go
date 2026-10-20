@@ -139,11 +139,13 @@ func (n *Node) observeCodex(ctx context.Context, h Hook) error {
 	n.mu.Lock()
 	first := n.identity.SessionId == ""
 	n.mu.Unlock()
+	var nativeTitle *string
 	if first {
 		var info struct {
 			Thread struct {
 				ID     string  `json:"id"`
 				Parent *string `json:"parentThreadId"`
+				Name   *string `json:"name"`
 			} `json:"thread"`
 		}
 		if err := n.codex.reader.call(ctx, "thread/read", map[string]any{"threadId": h.SessionID}, &info); err != nil {
@@ -152,16 +154,25 @@ func (n *Node) observeCodex(ctx context.Context, h Hook) error {
 		if info.Thread.ID != h.SessionID || info.Thread.Parent != nil {
 			return errors.New("child or mismatched Codex thread cannot bind")
 		}
+		nativeTitle = info.Thread.Name
 	}
 	n.mu.Lock()
 	if first {
 		n.identity.SessionId = h.SessionID
 		n.identity.Generation++
+		n.names = nameState{explicit: loadOverride(n.runtime, h.SessionID)}
+		if nativeTitle != nil {
+			n.names.custom = cleanName(*nativeTitle)
+		}
 	}
 	n.identity.Project = clip(h.Cwd, 180)
 	n.identity.DisplayName = clip(filepath.Base(h.Cwd), 40)
+	renamed := n.resolveNameLocked()
 	gen := n.identity.Generation
 	n.mu.Unlock()
+	if renamed && !first {
+		n.advertise()
+	}
 	if first {
 		// Finish the baseline attempt before returning the hook. An unavailable
 		// reader stays explicitly paused and takes a baseline when it reconnects.

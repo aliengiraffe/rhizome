@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -30,6 +31,8 @@ type collector struct {
 	toolOrder    []string
 	anchor       []byte
 	peerResponse bool
+	baseline     int64 // bytes present at binding; scanned once for title records only
+	titled       bool
 }
 
 func newCollector(path string) (*collector, error) {
@@ -48,6 +51,7 @@ func newCollector(path string) (*collector, error) {
 	}
 	c.info = st
 	c.offset = st.Size()
+	c.baseline = c.offset
 	if c.offset > 0 {
 		b := []byte{0}
 		_, _ = f.ReadAt(b, c.offset-1)
@@ -128,6 +132,12 @@ func (c *collector) scan(n *Node, gen uint64) {
 		n.activity(gen, "gap", "Transcript replaced or truncated; collection resumed from new contents")
 	}
 	c.info = st
+	if !c.titled {
+		c.titled = true
+		if !changed && c.baseline > 0 {
+			c.scanTitles(f, n, gen)
+		}
+	}
 	if _, err = f.Seek(c.offset, io.SeekStart); err != nil {
 		return
 	}
@@ -176,6 +186,75 @@ func (c *collector) consume(b []byte, n *Node, gen uint64) {
 		}
 	}
 }
+
+// scanTitles reads the pre-binding transcript once, looking only at title
+// records so a session named before Rhizome bound still exposes its native
+// title. No activity is published and no conversation content is retained.
+func (c *collector) scanTitles(f *os.File, n *Node, gen uint64) {
+	const maxTitleScan = 64 * 1024 * 1024
+	limit := c.baseline
+	if limit > maxTitleScan {
+		limit = maxTitleScan
+	}
+	r := bufio.NewReaderSize(io.NewSectionReader(f, 0, limit), 64*1024)
+	session := n.local().SessionId
+	var custom, auto *string
+	for {
+		line, err := r.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			// Oversized line: discard the rest; title records are tiny.
+			for err == bufio.ErrBufferFull {
+				_, err = r.ReadSlice('\n')
+			}
+			if err != nil {
+				break
+			}
+			continue
+		}
+		if kind, title, ok := titleRecord(line, session); ok {
+			if kind == "custom-title" {
+				custom = &title
+			} else {
+				auto = &title
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if auto != nil {
+		n.setNativeTitle(gen, false, *auto)
+	}
+	if custom != nil {
+		n.setNativeTitle(gen, true, *custom)
+	}
+}
+
+// titleRecord decodes a Claude title record. Claude Code writes
+// {"type":"ai-title","aiTitle":...} when it names a session automatically and
+// {"type":"custom-title","customTitle":...} when the user renames it; both
+// carry sessionId. Records for another session are ignored.
+func titleRecord(line []byte, session string) (kind, title string, ok bool) {
+	if !bytes.Contains(line, []byte(`-title"`)) {
+		return "", "", false
+	}
+	var r struct {
+		Type        string `json:"type"`
+		SessionID   string `json:"sessionId"`
+		AITitle     string `json:"aiTitle"`
+		CustomTitle string `json:"customTitle"`
+	}
+	if json.Unmarshal(line, &r) != nil || (r.SessionID != "" && r.SessionID != session) {
+		return "", "", false
+	}
+	switch r.Type {
+	case "ai-title":
+		return r.Type, r.AITitle, true
+	case "custom-title":
+		return r.Type, r.CustomTitle, true
+	}
+	return "", "", false
+}
 func (c *collector) skip(n *Node, why string) {
 	n.mu.Lock()
 	n.stats.ParserSkips++
@@ -219,7 +298,11 @@ func (c *collector) normalize(line []byte, n *Node, gen uint64) {
 	}
 	if r.Type != "assistant" && r.Type != "user" {
 		switch r.Type {
-		case "progress", "system", "file-history-snapshot", "attachment", "api-request-blob", "api-request", "api-request-shape", "last-prompt", "mode", "permission-mode", "atis-latch", "bridge-session", "ai-title":
+		case "ai-title", "custom-title":
+			if kind, title, ok := titleRecord(line, local.SessionId); ok {
+				n.setNativeTitle(gen, kind == "custom-title", title)
+			}
+		case "progress", "system", "file-history-snapshot", "attachment", "api-request-blob", "api-request", "api-request-shape", "last-prompt", "mode", "permission-mode", "atis-latch", "bridge-session":
 		default:
 			c.skip(n, "unknown type")
 		}
