@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-process MCP framing, routing, restart and EOF checks. Run after make build."""
+"""Real-process MCP framing, routing, restart and EOF checks. Run after task build."""
 import json
 import os
 from pathlib import Path

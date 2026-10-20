@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Opt-in live test: creates two disposable Codex threads and runs small model turns.
-Requires a running local daemon, authenticated Codex, and `make build`.
+Requires a running local daemon, authenticated Codex, and `task build`.
 Does not trust hooks, change config, or start/restart the daemon.
 """
 import argparse
