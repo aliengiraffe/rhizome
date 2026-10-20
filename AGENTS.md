@@ -61,6 +61,12 @@ with `--lan` on an isolated runtime directory per process and verifies pinned TL
 It exercises one machine only; cross-device behavior is covered by the manual
 two-machine check in [docs/verification.md](docs/verification.md).
 
+**Tailscale coverage:** `internal/channel/tailscale_test.go` drives Tailscale mode
+on loopback through an injected daemon view (beacon port, peer enumeration,
+same-device mode isolation, wrong-token peers). Nothing in `make check` talks to
+a real tailnet; the two-device Tailscale checklist in
+[docs/verification.md](docs/verification.md) is manual.
+
 ## Go engineering principles
 
 - Follow idiomatic Go: MixedCaps names, focused packages, small APIs, and exported
@@ -120,6 +126,18 @@ two-machine check in [docs/verification.md](docs/verification.md).
   sending the token (`internal/channel/lan.go`, `internal/channel/discovery.go`).
   Widening the address policy or skipping pinning changes the trust boundary;
   processes in different modes on one device must keep ignoring each other.
+- **Tailscale mode is a third mode, not a wider LAN mode.** `--tailscale`/
+  `RHIZOME_TAILSCALE=1` implies the LAN transport but its address policy accepts
+  only loopback, `100.64.0.0/10` and `fd7a:115c:a1e0::/48`; local and LAN
+  policies stay byte-for-byte unchanged and the gossip key is derived per mode.
+  Bind/advertise default to the Tailscale IPv4 read from `tailscale status --json`;
+  a missing CLI, stopped daemon or missing IP must fail startup, never fall back
+  to loopback or `0.0.0.0`. The well-known gossip port (`--gossip-port`, default
+  7946, `RHIZOME_GOSSIP_PORT`) is a per-device beacon that forwards to the
+  holder's ephemeral listener; peers are enumerated every `--discovery-interval`
+  (`RHIZOME_DISCOVERY_INTERVAL`) and joined through the same token-keyed
+  `join()` path as mDNS and `--join`. mDNS is off by default in this mode
+  (`internal/channel/tailscale.go`, `internal/channel/lan.go`, README).
 - **Never silently loosen retention, queue, or deduplication limits.** They bound
   memory and slow-peer impact: publisher retention is five minutes/1,000 events/
   8 MiB, stream queues are 64 events, receiver queues 256, and dedup windows 4,096
