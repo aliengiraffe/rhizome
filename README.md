@@ -16,11 +16,15 @@ limitations](docs/codex.md) and the samples in `examples/codex/`.
 
 ## Claude setup
 
-Requires Go 1.25+, macOS or Linux. Claude Code **2.1.302** is the tested client;
-older versions are not supported by this verification.
+Requires Go 1.25+, [Task v3](https://taskfile.dev/docs/installation), and macOS or Linux.
+Claude Code **2.1.302** is the tested client; older versions are not supported by this verification.
+
+Install Task with `brew install go-task` or
+`go install github.com/go-task/task/v3/cmd/task@latest` (ensure your Go bin directory
+is on `PATH`). List available tasks with `task --list`.
 
 ```sh
-make build
+task build
 ```
 
 This repository ships both `.mcp.json` and `.claude/settings.json`. From this
@@ -198,8 +202,8 @@ Then run `/rhizome-collab` in the agent with an optional task description.
 ## Verification
 
 ```sh
-make check                         # go vet ./... and go test -race ./...
-make build
+task check                         # go vet ./... and go test -race ./...
+task build
 python3 scripts/smoke_stdio.py      # real processes, valid stdout, EOF, restart
 ```
 
@@ -214,7 +218,8 @@ For the interactive acceptance checklist and recorded results, see
 upgrading Claude, the Go MCP SDK, hook configuration, or transcript parsing.
 
 To regenerate the checked-in gRPC/protobuf files, install `protoc`, then run
-`make proto` (pinned Go generators install into `.bin`). Production service
+`task proto` (pinned Go generators install into `.bin`). Override the compiler
+with `PROTOC=/path/to/protoc task proto`. Production service
 `rhizome.v1.Channel` is separate from the legacy demo service.
 
 ## Original demo

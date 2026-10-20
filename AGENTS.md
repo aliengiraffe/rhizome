@@ -19,19 +19,22 @@ Start with [README.md](README.md) for behavior and setup,
 | `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, and delivery. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests. |
-| `Makefile`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
+| `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
 
 ## Commands and completion
 
-Run from the repository root with Go 1.25+ and Python 3. Prefer Makefile targets
-over their underlying commands.
+Run from the repository root with Go 1.25+, Python 3, and [Task v3](https://taskfile.dev/docs/installation).
+Install Task with `brew install go-task` or
+`go install github.com/go-task/task/v3/cmd/task@latest`, with the Go bin directory
+on `PATH`. Prefer Taskfile tasks over their underlying commands; `task --list`
+lists them. Use `PROTOC=/path/to/protoc task proto` to override the compiler.
 
 ```sh
-make build                         # Build the rhizome executable.
-make check                         # go vet ./... and go test -race ./...
+task build                         # Build the rhizome executable.
+task check                         # go vet ./... and go test -race ./...
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
 git diff --check                   # Check whitespace errors.
-make proto                         # Requires protoc; installs pinned generators in .bin.
+task proto                         # Requires protoc; installs pinned generators in .bin.
 python3 scripts/smoke_codex.py --help # Inspect live smoke prerequisites/options.
 ```
 

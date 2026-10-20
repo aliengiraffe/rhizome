@@ -8,7 +8,7 @@ Claude's MCP protocol pin.
 
 ## Install
 
-Build this checkout with `make build`. Merge `examples/codex/config.toml` into
+Build this checkout with `task build`. Merge `examples/codex/config.toml` into
 `~/.codex/config.toml`, replacing both executable paths with absolute paths.
 Merge the hook groups from `examples/codex/hooks.json` into `~/.codex/hooks.json`,
 preserving other hooks. Back up both files first. Do not install the same hooks
@@ -107,8 +107,8 @@ controls do not guarantee that models cannot generate new reactions.
 ## Verification
 
 ```sh
-make check
-make build
+task check
+task build
 python3 scripts/smoke_stdio.py
 python3 scripts/smoke_codex.py --live
 ```

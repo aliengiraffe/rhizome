@@ -9,7 +9,7 @@ All passed:
 
 - `go vet ./...`
 - `go test -race ./...`
-- `make build`
+- `task build`
 - `python3 scripts/smoke_stdio.py`
 - `git diff --check`
 
@@ -105,7 +105,7 @@ forcing every failure in the interactive UI.
   The Claude endpoint in this test is an MCP protocol harness, not another
   interactive Claude model. The earlier Claude interactive results above remain
   the evidence for actual Claude channel rendering.
-- `make check` (`go vet ./...`, `go test -race ./...`) and
+- `task check` (`go vet ./...`, `go test -race ./...`) and
   `scripts/smoke_stdio.py` pass. Codex tests cover missing/malformed caller
   metadata, conflicting hooks, nullable transcript path, concurrent callers on
   one MCP connection, baseline/delta deduplication, tool completion, excluded
