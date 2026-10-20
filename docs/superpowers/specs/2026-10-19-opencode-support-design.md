@@ -155,9 +155,11 @@ Rhizome to plugin: `deliver {id, sessionID, text}`.
      line plus `<rhizome-peer-event>{json}</rhizome-peer-event>`).
    - `ack` counts as written.
    - `fail` counts as dropped and records the delivery error.
-   - A timeout (5 s) or no connected plugin returns an `errUnavailable`
-     equivalent. The events are retained in the existing bounded queue, as Codex
-     retains them while unavailable.
+   - No connected plugin returns an `errDestinationUnavailable` equivalent and
+     the events are retained in the existing bounded queue. A delivery that was
+     written but not acknowledged within 5 s (or whose connection dropped) is
+     counted as dropped, with "acceptance unknown; not retried", as for Codex
+     queue failures. This prevents duplicate peer content.
    - At most one delivery is in flight per session.
 5. **Retirement.**
    - `forget` or 24 hours idle closes the node through the existing close path:
@@ -190,8 +192,8 @@ Rhizome to plugin: `deliver {id, sessionID, text}`.
   | Nodes per process | 64 |
   | Idle eviction | 24 h |
 
-  Malformed or oversized frames are dropped and counted, and repeated violations
-  disconnect. No existing retention, queue, dedup, rate, or circuit-breaker limit
+  Malformed frames are dropped and counted; more than 16 per connection, or any
+  oversized frame, closes the connection. No existing retention, queue, dedup, rate, or circuit-breaker limit
   changes.
 
 ## Security and invariants
