@@ -61,7 +61,7 @@ func TestEscaping(t *testing.T) {
 func TestFileResolutionAndUninstall(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	body := fmt.Sprintf("runtime_dir = %q\nservice.claude_root = %q\nservice.codex_root = %q\n", filepath.Join(dir, "run"), filepath.Join(dir, "claude"), filepath.Join(dir, "codex"))
+	body := fmt.Sprintf("runtime_dir = %q\nclaude.projects_dir = %q\ncodex.sessions_dir = %q\n", filepath.Join(dir, "run"), filepath.Join(dir, "claude"), filepath.Join(dir, "codex"))
 	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
 		t.Fatal(err)
 	}

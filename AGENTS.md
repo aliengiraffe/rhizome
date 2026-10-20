@@ -84,7 +84,10 @@ lands, implement and verify that option and update this guidance in the same cha
 - **One configuration resolver.** `internal/config` owns settings with explicit
   flag > env > TOML > default precedence and strict unknown-key rejection.
   MCP and service share `runtime_dir` through `~/.rhizome/config.toml`; tokens
-  never enter configuration. `RHIZOME_CONFIG`/`--config` select an existing file.
+  never enter configuration. Keys are grouped per agent (`[claude]`, `[codex]`);
+  which agent a process serves is the per-launch `rhizome mcp --agent` flag and
+  must never become a configuration key. `RHIZOME_CONFIG`/`--config` select an
+  existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
   CLI usage: `rhizome mcp | setup | service | config | demo [flags]`.

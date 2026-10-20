@@ -23,34 +23,34 @@ for diagnostics. All startup diagnostics and errors go to stderr.
 | TOML key | Environment | Flag | Default |
 | --- | --- | --- | --- |
 | `runtime_dir` | `RHIZOME_RUNTIME_DIR` | service `--runtime-dir` | `~/.rhizome/run` |
-| `mcp.agent` | — | mcp `--agent` | `claude` |
-| `mcp.codex_bin` | — | mcp `--codex-bin` | `codex` |
-| `agents.claude_config_dir` | `CLAUDE_CONFIG_DIR` | — | `~/.claude` |
-| `agents.codex_home` | `CODEX_HOME` | — | `~/.codex` |
-| `service.claude_root` | — | service `--claude-root` | effective Claude config directory + `/projects` |
-| `service.codex_root` | — | service `--codex-root` | effective Codex home + `/sessions` |
+| `claude.config_dir` | `CLAUDE_CONFIG_DIR` | — | `~/.claude` |
+| `claude.projects_dir` | — | service `--claude-root` | effective `claude.config_dir` + `/projects` |
+| `codex.bin` | — | mcp `--codex-bin` | `codex` |
+| `codex.home` | `CODEX_HOME` | — | `~/.codex` |
+| `codex.sessions_dir` | — | service `--codex-root` | effective `codex.home` + `/sessions` |
 
 ```toml
 runtime_dir = "~/.rhizome/run"
 
-[mcp]
-agent = "claude"
-codex_bin = "codex"
+[claude]
+config_dir = "~/.claude"
+# Omit, or leave empty, to derive from config_dir.
+projects_dir = ""
 
-[agents]
-claude_config_dir = "~/.claude"
-codex_home = "~/.codex"
-
-[service]
-# Omit roots, or leave them empty, to derive them from [agents].
-claude_root = ""
-codex_root = ""
+[codex]
+bin = "codex"
+home = "~/.codex"
+# Omit, or leave empty, to derive from home.
+sessions_dir = ""
 ```
 
-Path settings expand `~`, `$HOME`, and `${HOME}` and must resolve to absolute
-paths. `codex_bin` may be an executable name on PATH. Empty agent directories
-also use their defaults. Unknown keys/tables, wrong types, invalid TOML, relative
-paths, unsupported agents, and identical service roots fail before startup.
+Settings are grouped by the agent they describe. Which agent a process serves is
+not configuration: each MCP client launches `rhizome mcp --agent claude` or
+`--agent codex` (Claude is the default), so one file serves both agents on a
+device. Path settings expand `~`, `$HOME`, and `${HOME}` and must resolve to
+absolute paths. `codex.bin` may be an executable name on PATH. Empty agent
+directories also use their defaults. Unknown keys/tables, wrong types, invalid
+TOML, relative paths, and identical log roots fail before startup.
 The file is limited to 64 KiB and must be a regular, user-owned file, not a
 symlink or group/world-writable file; 0644 is accepted on Unix. Windows checks
 ownership and rejects write grants to other accounts except SYSTEM and

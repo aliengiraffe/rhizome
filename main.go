@@ -34,7 +34,8 @@ func entry() error {
 	switch mode {
 	case "mcp":
 		opts := flag.NewFlagSet("mcp", flag.ContinueOnError)
-		config.Bind(opts, "agent", "codex-bin")
+		agent := opts.String("agent", "claude", "delivery agent: claude or codex")
+		config.Bind(opts, "codex-bin")
 		if err := opts.Parse(os.Args[1:]); err != nil {
 			return err
 		}
@@ -45,17 +46,17 @@ func entry() error {
 		if err != nil {
 			return err
 		}
-		switch c.MCP.Agent {
+		switch *agent {
 		case "claude":
 			return channel.Run(c)
 		case "codex":
 			return channel.RunCodex(c)
 		default:
-			return fmt.Errorf("unsupported agent %q", c.MCP.Agent)
+			return fmt.Errorf("unsupported agent %q", *agent)
 		}
 	case "config":
 		fs := flag.NewFlagSet("config", flag.ContinueOnError)
-		config.Bind(fs, "runtime-dir", "agent", "codex-bin", "claude-root", "codex-root")
+		config.Bind(fs, "runtime-dir", "codex-bin", "claude-root", "codex-root")
 		if err := fs.Parse(os.Args[1:]); err != nil {
 			return err
 		}

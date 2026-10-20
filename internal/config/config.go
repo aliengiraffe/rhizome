@@ -16,20 +16,19 @@ import (
 )
 
 // Config contains effective settings and their provenance. It never holds tokens.
+// Settings are grouped by the agent they describe; which agent a process serves
+// is a per-launch choice (`rhizome mcp --agent`) and is never configured here.
 type Config struct {
 	RuntimeDir string `toml:"runtime_dir"`
-	MCP        struct {
-		Agent    string `toml:"agent"`
-		CodexBin string `toml:"codex_bin"`
-	} `toml:"mcp"`
-	Agents struct {
-		ClaudeConfigDir string `toml:"claude_config_dir"`
-		CodexHome       string `toml:"codex_home"`
-	} `toml:"agents"`
-	Service struct {
-		ClaudeRoot string `toml:"claude_root"`
-		CodexRoot  string `toml:"codex_root"`
-	} `toml:"service"`
+	Claude     struct {
+		ConfigDir   string `toml:"config_dir"`   // CLAUDE_CONFIG_DIR; skills and transcripts live under it.
+		ProjectsDir string `toml:"projects_dir"` // Transcript root the observer watches; default <config_dir>/projects.
+	} `toml:"claude"`
+	Codex struct {
+		Bin         string `toml:"bin"`          // Codex CLI executable name or path.
+		Home        string `toml:"home"`         // CODEX_HOME; App Server socket and skills live under it.
+		SessionsDir string `toml:"sessions_dir"` // Session log root the observer watches; default <home>/sessions.
+	} `toml:"codex"`
 	Path    string            `toml:"-"`
 	Found   bool              `toml:"-"`
 	Sources map[string]string `toml:"-"`
@@ -44,12 +43,11 @@ type setting struct {
 func (c *Config) settings() []setting {
 	return []setting{
 		{"runtime_dir", "RHIZOME_RUNTIME_DIR", "runtime-dir", &c.RuntimeDir, true},
-		{"mcp.agent", "", "agent", &c.MCP.Agent, false},
-		{"mcp.codex_bin", "", "codex-bin", &c.MCP.CodexBin, false},
-		{"agents.claude_config_dir", "CLAUDE_CONFIG_DIR", "", &c.Agents.ClaudeConfigDir, true},
-		{"agents.codex_home", "CODEX_HOME", "", &c.Agents.CodexHome, true},
-		{"service.claude_root", "", "claude-root", &c.Service.ClaudeRoot, true},
-		{"service.codex_root", "", "codex-root", &c.Service.CodexRoot, true},
+		{"claude.config_dir", "CLAUDE_CONFIG_DIR", "", &c.Claude.ConfigDir, true},
+		{"claude.projects_dir", "", "claude-root", &c.Claude.ProjectsDir, true},
+		{"codex.bin", "", "codex-bin", &c.Codex.Bin, false},
+		{"codex.home", "CODEX_HOME", "", &c.Codex.Home, true},
+		{"codex.sessions_dir", "", "codex-root", &c.Codex.SessionsDir, true},
 	}
 }
 
@@ -116,7 +114,7 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	}
 	// TOML keys are case-sensitive even though the decoder can match Go fields
 	// case-insensitively. Reject alternate spellings instead of losing their source.
-	known := map[string]bool{"mcp": true, "agents": true, "service": true}
+	known := map[string]bool{"claude": true, "codex": true}
 	for _, s := range raw.settings() {
 		known[s.key] = true
 	}
@@ -127,19 +125,19 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	}
 	// Validate file paths even if an override would hide the invalid value.
 	for _, s := range raw.settings() {
-		if (s.path || s.key == "mcp.codex_bin" && binaryPath(*s.value)) && *s.value != "" {
+		if (s.path || s.key == "codex.bin" && binaryPath(*s.value)) && *s.value != "" {
 			if _, err := expand(*s.value, home); err != nil {
 				return c, fmt.Errorf("config %s: %s: %w", path, s.key, err)
 			}
 		}
 	}
 	c.RuntimeDir = filepath.Join(home, ".rhizome", "run")
-	c.MCP.Agent, c.MCP.CodexBin = "claude", "codex"
-	c.Agents.ClaudeConfigDir, c.Agents.CodexHome = filepath.Join(home, ".claude"), filepath.Join(home, ".codex")
+	c.Codex.Bin = "codex"
+	c.Claude.ConfigDir, c.Codex.Home = filepath.Join(home, ".claude"), filepath.Join(home, ".codex")
 	rawSettings := raw.settings()
 	for i, s := range c.settings() {
 		source := "default"
-		if md.IsDefined(strings.Split(s.key, ".")...) && (*rawSettings[i].value != "" || s.key == "runtime_dir" || strings.HasPrefix(s.key, "mcp.")) {
+		if md.IsDefined(strings.Split(s.key, ".")...) && (*rawSettings[i].value != "" || s.key == "runtime_dir" || s.key == "codex.bin") {
 			*s.value, source = *rawSettings[i].value, "file"
 		}
 		if s.env != "" {
@@ -152,16 +150,16 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 		}
 		if source == "default" {
 			switch s.key {
-			case "service.claude_root":
-				*s.value = filepath.Join(c.Agents.ClaudeConfigDir, "projects")
-			case "service.codex_root":
-				*s.value = filepath.Join(c.Agents.CodexHome, "sessions")
+			case "claude.projects_dir":
+				*s.value = filepath.Join(c.Claude.ConfigDir, "projects")
+			case "codex.sessions_dir":
+				*s.value = filepath.Join(c.Codex.Home, "sessions")
 			}
 		}
 		if *s.value == "" {
 			return c, fmt.Errorf("config %s: %s must not be empty (%s)", path, s.key, source)
 		}
-		if s.path || s.key == "mcp.codex_bin" && binaryPath(*s.value) {
+		if s.path || s.key == "codex.bin" && binaryPath(*s.value) {
 			*s.value, err = expand(*s.value, home)
 			if err != nil {
 				return c, fmt.Errorf("config %s: %s (%s): %w", path, s.key, source, err)
@@ -173,11 +171,8 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	if err != nil {
 		return c, err
 	}
-	if c.MCP.Agent != "claude" && c.MCP.Agent != "codex" {
-		return c, fmt.Errorf("config %s: mcp.agent must be claude or codex", path)
-	}
-	if c.Service.ClaudeRoot == c.Service.CodexRoot {
-		return c, fmt.Errorf("config %s: service.claude_root and service.codex_root must differ", path)
+	if c.Claude.ProjectsDir == c.Codex.SessionsDir {
+		return c, fmt.Errorf("config %s: claude.projects_dir and codex.sessions_dir must differ", path)
 	}
 	return c, nil
 }

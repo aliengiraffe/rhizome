@@ -27,10 +27,7 @@ func TestLayers(t *testing.T) {
 	for _, s := range schema.settings() {
 		t.Run(s.key, func(t *testing.T) {
 			file, env, override := "/file", "/env", "/flag"
-			if s.key == "mcp.agent" {
-				file, env, override = "codex", "codex", "claude"
-			}
-			if s.key == "mcp.codex_bin" {
+			if s.key == "codex.bin" {
 				file, env, override = "file-codex", "env-codex", "flag-codex"
 			}
 			path := fixture(t, fmt.Sprintf("%s = %q\n", s.key, file))
@@ -73,13 +70,13 @@ func TestLayers(t *testing.T) {
 
 func TestInvalidFiles(t *testing.T) {
 	cases := []struct{ body, key string }{
-		{"unknown = 1", "unknown"}, {`RUNTIME_DIR = "/tmp/runtime"`, "RUNTIME_DIR"}, {"[MCP]", "MCP"}, {"[unknown]", "unknown"},
-		{"mcp.agent = 1", "agent"}, {"mcp.agent = [", ""},
+		{"unknown = 1", "unknown"}, {`RUNTIME_DIR = "/tmp/runtime"`, "RUNTIME_DIR"}, {"[CODEX]", "CODEX"}, {"[unknown]", "unknown"},
+		{"[mcp]\nagent = 'claude'", "mcp"}, {"[agents]", "agents"}, {"[service]", "service"},
+		{"codex.bin = 1", "bin"}, {"codex.bin = [", ""},
 		{`runtime_dir = "relative"`, "runtime_dir"},
-		{`agents.codex_home = "relative"`, "agents.codex_home"},
-		{`service.claude_root = "relative"`, "service.claude_root"},
-		{"service.claude_root = '/same'\nservice.codex_root = '/same'", "service.claude_root"},
-		{`mcp.agent = "other"`, "mcp.agent"},
+		{`codex.home = "relative"`, "codex.home"},
+		{`claude.projects_dir = "relative"`, "claude.projects_dir"},
+		{"claude.projects_dir = '/same'\ncodex.sessions_dir = '/same'", "claude.projects_dir"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.body, func(t *testing.T) {
@@ -106,7 +103,7 @@ func TestPathsAndSelection(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".rhizome")); !os.IsNotExist(err) {
 		t.Fatal("read created directory")
 	}
-	p := fixture(t, "runtime_dir = '~/run'\nagents.codex_home = '$HOME/codex'\nagents.claude_config_dir = '${HOME}/claude'\n")
+	p := fixture(t, "runtime_dir = '~/run'\ncodex.home = '$HOME/codex'\nclaude.config_dir = '${HOME}/claude'\n")
 	env := func(k string) string {
 		if k == "RHIZOME_CONFIG" {
 			return p
@@ -117,7 +114,7 @@ func TestPathsAndSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.RuntimeDir != filepath.Join(home, "run") || c.Service.CodexRoot != filepath.Join(home, "codex", "sessions") || c.Service.ClaudeRoot != filepath.Join(home, "claude", "projects") {
+	if c.RuntimeDir != filepath.Join(home, "run") || c.Codex.SessionsDir != filepath.Join(home, "codex", "sessions") || c.Claude.ProjectsDir != filepath.Join(home, "claude", "projects") {
 		t.Fatalf("%+v", c)
 	}
 	missing := filepath.Join(home, "missing.toml")
@@ -129,7 +126,7 @@ func TestPathsAndSelection(t *testing.T) {
 	if _, err := Resolve(nil, func(string) string { return missing }); err == nil {
 		t.Fatal("env missing accepted")
 	}
-	other := fixture(t, "mcp.agent = 'codex'")
+	other := fixture(t, "codex.bin = 'other-codex'")
 	c, err = Resolve(map[string]string{"config": other}, env)
 	if err != nil || c.Path != other {
 		t.Fatalf("%+v %v", c, err)
@@ -172,8 +169,8 @@ func TestFlagsAndOutput(t *testing.T) {
 		t.Setenv(key, "")
 	}
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	Bind(fs, "agent", "runtime-dir")
-	if err := fs.Parse([]string{"--agent", "codex"}); err != nil {
+	Bind(fs, "codex-bin", "runtime-dir")
+	if err := fs.Parse([]string{"--codex-bin", "flag-codex"}); err != nil {
 		t.Fatal(err)
 	}
 	c, err := FromFlags(fs)
@@ -184,7 +181,7 @@ func TestFlagsAndOutput(t *testing.T) {
 	if err := c.Write(&out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "not found") || !strings.Contains(out.String(), `mcp.agent = "codex" # source: flag`) || strings.Contains(out.String(), "token") {
+	if !strings.Contains(out.String(), "not found") || !strings.Contains(out.String(), `codex.bin = "flag-codex" # source: flag`) || strings.Contains(out.String(), "token") {
 		t.Fatal(out.String())
 	}
 	for _, s := range c.settings() {

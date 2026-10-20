@@ -239,7 +239,7 @@ func queueCodex(ctx context.Context, binary, socket, thread, text string, meta m
 
 func RunCodex(c config.Config) error {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
-	resolved, err := exec.LookPath(c.MCP.CodexBin)
+	resolved, err := exec.LookPath(c.Codex.Bin)
 	if err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func RunCodex(c config.Config) error {
 	if err != nil {
 		return err
 	}
-	home := c.Agents.CodexHome
+	home := c.Codex.Home
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, binary: resolved, socket: filepath.Join(home, "app-server-control", "app-server-control.sock"), runtime: c.RuntimeDir}

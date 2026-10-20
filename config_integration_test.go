@@ -52,7 +52,7 @@ func configProcess(t *testing.T, home string, args ...string) *exec.Cmd {
 func TestConfigCLIFailures(t *testing.T) {
 	home := t.TempDir()
 	p := filepath.Join(home, "config.toml")
-	for _, body := range []string{"unknown = 1", "mcp.agent = 1", `runtime_dir = "relative"`} {
+	for _, body := range []string{"unknown = 1", "codex.bin = 1", "[mcp]\nagent = 'codex'", `runtime_dir = "relative"`} {
 		if err := os.WriteFile(p, []byte(body), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -77,7 +77,7 @@ func TestConfigSetupAndMCP(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	body := fmt.Sprintf("runtime_dir = %q\nagents.claude_config_dir = %q\nagents.codex_home = %q\nmcp.agent = 'codex'\nmcp.codex_bin = 'missing-codex-executable-for-test'\n", rt, claude, codex)
+	body := fmt.Sprintf("runtime_dir = %q\nclaude.config_dir = %q\ncodex.home = %q\ncodex.bin = 'missing-codex-executable-for-test'\n", rt, claude, codex)
 	if err := os.WriteFile(p, []byte(body), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -86,10 +86,10 @@ func TestConfigSetupAndMCP(t *testing.T) {
 	if err != nil || !bytes.Contains(out, []byte(filepath.Join(claude, "skills"))) || !bytes.Contains(out, []byte(filepath.Join(codex, "skills"))) {
 		t.Fatalf("%s %v", out, err)
 	}
-	cmd = configProcess(t, home, "mcp", "--config", p)
+	cmd = configProcess(t, home, "mcp", "--config", p, "--agent", "codex")
 	out, err = cmd.CombinedOutput()
 	if err == nil || !bytes.Contains(out, []byte("missing-codex-executable-for-test")) {
-		t.Fatalf("Codex default ignored: %s %v", out, err)
+		t.Fatalf("codex.bin ignored: %s %v", out, err)
 	}
 	for _, envOverride := range []bool{false, true} {
 		want := rt
@@ -147,7 +147,7 @@ func TestConfigObserverRuntime(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		body := fmt.Sprintf("runtime_dir = %q\nservice.claude_root = %q\nservice.codex_root = %q\n", rt, claude, codex)
+		body := fmt.Sprintf("runtime_dir = %q\nclaude.projects_dir = %q\ncodex.sessions_dir = %q\n", rt, claude, codex)
 		if err := os.WriteFile(p, []byte(body), 0644); err != nil {
 			t.Fatal(err)
 		}

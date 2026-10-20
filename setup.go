@@ -41,7 +41,7 @@ type agent struct {
 // same configuration directories the MCP integration documents, plus the agent
 // binary on PATH. Undetected agents are still returned so --agents can force them.
 func detectAgents(c config.Config, lookPath func(string) (string, error)) []agent {
-	claudeDir, codexDir := c.Agents.ClaudeConfigDir, c.Agents.CodexHome
+	claudeDir, codexDir := c.Claude.ConfigDir, c.Codex.Home
 	agents := []agent{
 		{Name: "claude", Label: "Claude Code", Skills: filepath.Join(claudeDir, "skills")},
 		{Name: "codex", Label: "Codex", Skills: filepath.Join(codexDir, "skills")},

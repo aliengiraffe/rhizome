@@ -27,7 +27,7 @@ type Config struct {
 
 // FromConfig adapts resolved configuration for the observer.
 func FromConfig(c config.Config) Config {
-	return Config{ConfigPath: c.Path, Observer: channel.ObserverOptions{Runtime: c.RuntimeDir, ClaudeRoot: c.Service.ClaudeRoot, CodexRoot: c.Service.CodexRoot}}
+	return Config{ConfigPath: c.Path, Observer: channel.ObserverOptions{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir}}
 }
 
 type command struct {

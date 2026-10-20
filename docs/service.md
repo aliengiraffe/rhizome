@@ -31,9 +31,10 @@ environment overrides. For example:
 
 ```toml
 runtime_dir = "/absolute/private/run"
-[service]
-claude_root = "/absolute/claude/projects"
-codex_root = "/absolute/codex/sessions"
+[claude]
+projects_dir = "/absolute/claude/projects"
+[codex]
+sessions_dir = "/absolute/codex/sessions"
 ```
 
 ```sh
