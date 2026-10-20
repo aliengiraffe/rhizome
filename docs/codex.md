@@ -73,6 +73,15 @@ survive MCP restarts. See the README for limits and precedence.
 Discovery includes `agent_type`; older advertisements without it mean Claude.
 The same exact-ID conflict checks apply across agents.
 
+`search_sessions` and `read_session_history` are available in Codex mode with
+the same `_meta.threadId` requirement as every other tool: a missing or invalid
+caller identity is the JSON error `CALLER_UNVERIFIED`. They read the local
+rollout logs under `[codex].sessions_dir` through the observer's catalog and
+never touch the App Server: no thread is read, loaded, resumed, or started, and
+the direct collector's contract below is unchanged. Rollouts carry no thread
+title, so historical Codex rows use an explicit override or the fallback name.
+See [history.md](history.md).
+
 ## Collection and delivery
 
 The collector connects by WebSocket over the **existing** local socket at

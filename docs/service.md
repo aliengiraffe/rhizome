@@ -4,7 +4,9 @@
 Claude Code and Codex logs without requiring Rhizome in those agents, including
 headless sessions. Existing MCP/channel peers can list and subscribe to their
 exact session IDs. A passive session cannot receive messages: `send` returns an
-observation-only error until an integrated endpoint is available.
+observation-only error until an integrated endpoint is available. The same
+process is the single writer of the local [session-history catalog](history.md)
+that `search_sessions` and `read_session_history` query.
 
 ```sh
 rhizome service install
@@ -77,8 +79,9 @@ out. Native service-manager status is separate from observer health.
 
 Installed observers write JSON diagnostics to `observer.log`, rotated at 2 MiB
 with one backup. `observer-health.json` reports last update, watched directories,
-tracked files, active observed publishers, degraded coverage, parser skips, and
-suppressed events. `status` verifies the process lock before reporting running.
+tracked files, active observed publishers, degraded coverage, parser skips,
+suppressed events, and a `catalog` block (indexing state, indexed files and
+sessions, pending work, last write, coverage, warnings, counters). `status` verifies the process lock before reporting running.
 Foreground `run` logs to stderr. No transcript contents or tokens are logged.
 Windows runtime directories use a protected inheritable current-user DACL;
 Unix runtime directories must be private and user-owned.
@@ -121,6 +124,21 @@ be unavailable and replay gaps are reported. A conservative startup baseline
 suppresses automatic output until a subsequent human prompt when previous
 peer-only turn state cannot be established.
 
+## Live observation versus historical indexing
+
+Live observation starts every existing file at its current EOF and only
+publishes bytes appended afterwards. Historical indexing is a separate pass over
+the same inventory: every `.jsonl` file enumerated by the walk is queued and
+parsed from its last checkpoint for identity, timestamps, and titles only, with
+a 4 MiB budget per maintenance tick so backfill never stalls live reads. The
+indexer does not create publisher nodes, acquire collection leases, or emit
+events; a pre-existing file becomes searchable through `search_sessions` while
+`list_sessions` still does not list it until new activity appears. The catalog
+lives at `<runtime_dir>/history/catalog.json`, is bounded to 4,096 files, and
+stays readable (reported as `stale`) after the service stops. Shutdown flushes
+pending catalog changes and removes only `observer-health.json`. Limits,
+tombstones, rebuilds, and root changes are documented in [history.md](history.md).
+
 ## Direct integration coexistence
 
 All updated processes in one runtime share OS locks keyed by exact session ID.
@@ -154,9 +172,10 @@ python3 scripts/smoke_service.py
 
 Go tests exercise actual filesystem notifications with no polling fallback,
 missing roots/new nested directories, both ownership orders, partial lines,
-rotation, filtering, duplicate direct rejection, and passive delivery rejection.
-The service smoke uses separate observer/MCP processes and synthetic logs to
-verify subscription handoffs, direct delivery, daemon restart, and no duplicate
-replay. No models or real user logs are involved. Service-definition tests validate
+rotation, filtering, duplicate direct rejection, passive delivery rejection, and
+catalog indexing without publishing. The service smoke uses separate
+observer/MCP processes and synthetic logs to verify subscription handoffs,
+direct delivery, daemon restart, no duplicate replay, pre-existing logs becoming
+searchable and readable, and a stale catalog while the service is stopped. No models or real user logs are involved. Service-definition tests validate
 XML and arguments; they do not prove installation/startup on another operating
 system. Native install/login/recovery tests must be recorded per platform.

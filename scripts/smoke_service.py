@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Real observer + MCP process coexistence, discovery, handoff and restart checks."""
+"""Real observer + MCP process coexistence, discovery, handoff, restart and
+historical catalog checks (search_sessions / read_session_history)."""
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,56 @@ def append(path, uid, text, role='assistant'):
                            'cwd': str(path.parent), 'message': {'content': text}}) + '\n')
 
 
+def historical(path, session, ts, uid, text, role='assistant'):
+    """A timestamped record of a session that ended before the observer existed."""
+    content = [{'type': 'text', 'text': text}] if role == 'assistant' else text
+    with path.open('a') as f:
+        f.write(json.dumps({'type': role, 'uuid': uid, 'sessionId': session, 'timestamp': ts,
+                           'cwd': '/work/past', 'message': {'role': role, 'content': content}}) + '\n')
+
+
+def history_checks(client, running):
+    """Search and read the pre-existing session; the agent process never existed."""
+    found = client.tool('search_sessions', {'project_path': '/work/past', 'agent_type': 'claude'})
+    catalog = found['catalog']
+    assert catalog['service_running'] is running, catalog
+    assert catalog['state'] == ('ready' if running else 'stale'), catalog
+    assert catalog['coverage_complete'] is running, catalog
+    assert [s['session_id'] for s in found['sessions']] == ['past'], found
+    past = found['sessions'][0]
+    assert past['session_name'] == 'Past work' and past['name_source'] == 'native', past
+    assert past['live_status'] == 'not_discovered' and past['delivery_capable'] is False, past
+    assert past['history_availability'] == 'available', past
+    assert past['started_at'] == '2026-09-01T10:00:00Z' and past['last_activity_at'] == '2026-09-01T10:05:00Z', past
+    assert found['next_cursor'] is None
+    page = client.tool('read_session_history', {'session_id': 'past', 'agent_type': 'claude', 'limit': 1})
+    assert [e['text'] for e in page['events']] == ['historical answer'], page
+    assert page['coverage'] == {'state': 'complete', 'gaps': [], 'skipped_records': 0,
+                                'content_policy': 'assistant_activity_only'}, page
+    assert page['next_cursor'], page
+    rest = client.tool('read_session_history', {'session_id': 'past', 'agent_type': 'claude', 'limit': 1,
+                                                'cursor': page['next_cursor']})
+    assert [e['kind'] for e in rest['events']] == ['turn_completed'], rest
+    assert rest['next_cursor'] is None and rest['snapshot']['id'] == page['snapshot']['id'], rest
+    replay = client.error('read_session_history', {'session_id': 'past', 'agent_type': 'claude', 'limit': 1,
+                                                   'cursor': page['next_cursor']})
+    assert replay['code'] in ('INVALID_CURSOR', 'CURSOR_EXPIRED'), replay
+    assert client.error('search_sessions', {'limit': 0})['code'] == 'INVALID_ARGUMENT'
+    assert client.error('read_session_history', {'session_id': 'nope', 'agent_type': 'claude'})['code'] == 'SESSION_NOT_FOUND'
+    codex = client.tool('search_sessions', {'agent_type': 'codex'})['sessions']
+    assert [s['session_id'] for s in codex] == ['11111111-2222-3333-4444-555555555555'], codex
+    assert codex[0]['name_source'] == 'fallback' and codex[0]['project_path'] == '/work/codex', codex
+    codex_page = client.tool('read_session_history', {'session_id': codex[0]['session_id'], 'agent_type': 'codex'})
+    assert [e['text'] for e in codex_page['events']] == ['codex historical answer', 'Tool started: shell',
+                                                        'Tool completed: shell'], codex_page
+
+
+def catalog_ready(client):
+    """True once the observer has flushed a complete catalog (written on its first tick)."""
+    result = client.call('tools/call', {'name': 'search_sessions', 'arguments': {'session_id': 'past'}})
+    return not result.get('isError') and json.loads(result['content'][0]['text'])['catalog']['state'] == 'ready'
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryFile() as log:
         directory = Path(tmp)
@@ -21,8 +72,34 @@ def main():
         roots.mkdir()
         transcript = roots / 'observed.jsonl'
         processes, clients = [], []
-        command = [str(ROOT / 'rhizome'), 'service', 'run', '--runtime-dir', str(directory / 'run'),
-                   '--claude-root', str(roots), '--codex-root', str(directory / 'codex')]
+        # MCP and the observer share runtime and log roots through one TOML file.
+        config = directory / 'config.toml'
+        config.write_text('runtime_dir = %s\n[claude]\nprojects_dir = %s\n[codex]\nsessions_dir = %s\n'
+                          % (json.dumps(str(directory / 'run')), json.dumps(str(roots)), json.dumps(str(directory / 'codex'))))
+        env = {'RHIZOME_CONFIG': str(config)}
+        # Logs written before the service ever ran, including a native title.
+        past = roots / 'project' / 'past.jsonl'
+        past.parent.mkdir()
+        historical(past, 'past', '2026-09-01T10:00:00Z', 'p1', 'historical prompt', 'user')
+        with past.open('a') as f:
+            f.write(json.dumps({'type': 'custom-title', 'customTitle': 'Past work', 'sessionId': 'past'}) + '\n')
+        historical(past, 'past', '2026-09-01T10:04:00Z', 'p2', 'historical answer')
+        with past.open('a') as f:
+            f.write(json.dumps({'type': 'assistant', 'uuid': 'p3', 'sessionId': 'past', 'timestamp': '2026-09-01T10:05:00Z',
+                                'cwd': '/work/past', 'message': {'role': 'assistant', 'content': [{'type': 'thinking', 'thinking': 'hidden'}],
+                                                                 'stop_reason': 'end_turn'}}) + '\n')
+        rollout = directory / 'codex' / '2026' / '09' / '02' / 'rollout.jsonl'
+        rollout.parent.mkdir(parents=True)
+        with rollout.open('w') as f:
+            for record in [
+                {'timestamp': '2026-09-02T00:00:00Z', 'type': 'session_meta', 'payload': {'id': '11111111-2222-3333-4444-555555555555', 'cwd': '/work/codex', 'source': 'cli'}},
+                {'timestamp': '2026-09-02T00:00:01Z', 'type': 'response_item', 'payload': {'type': 'message', 'id': 'u', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'codex prompt'}]}},
+                {'timestamp': '2026-09-02T00:00:02Z', 'type': 'response_item', 'payload': {'type': 'message', 'id': 'a', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'codex historical answer'}]}},
+                {'timestamp': '2026-09-02T00:00:03Z', 'type': 'response_item', 'payload': {'type': 'function_call', 'id': 'f', 'call_id': 'c', 'name': 'shell', 'arguments': 'secret args'}},
+                {'timestamp': '2026-09-02T00:00:04Z', 'type': 'response_item', 'payload': {'type': 'function_call_output', 'call_id': 'c', 'output': 'secret output'}},
+            ]:
+                f.write(json.dumps(record) + '\n')
+        command = [str(ROOT / 'rhizome'), 'service', 'run', '--config', str(config)]
         def start():
             p = subprocess.Popen(command, stdout=log, stderr=log)
             processes.append(p)
@@ -30,10 +107,20 @@ def main():
             assert p.poll() is None
             return p
         try:
-            observer = start()
-            subscriber = Client(directory)
+            subscriber = Client(directory, env=env)
             clients.append(subscriber)
             subscriber.bind('subscriber', directory)
+            # No catalog yet: an actionable error, not an empty result.
+            missing = subscriber.error('search_sessions', {})
+            assert missing['code'] == 'CATALOG_UNAVAILABLE' and 'rhizome service' in missing['message'], missing
+            observer = start()
+            until(lambda: catalog_ready(subscriber))
+            history_checks(subscriber, running=True)
+            health = json.loads((directory / 'run' / 'observer-health.json').read_text())
+            assert health['catalog']['state'] == 'ready' and health['catalog']['sessions'] == 2, health
+            assert 'historical' not in json.dumps(health) and '/work/past' not in json.dumps(health), health
+            # Historical sessions are neither peers nor publishers.
+            assert not [s for s in subscriber.tool('list_sessions')['sessions'] if s['identity']['session_id'] == 'past']
             append(transcript, 'initial', 'initial')
             def session():
                 return [s for s in subscriber.tool('list_sessions')['sessions']
@@ -44,7 +131,7 @@ def main():
             until(lambda: subscriber.tool('list_sessions')['subscriptions']['observed']['state'] == 'following')
             append(transcript, 'passive', 'passive-marker')
             subscriber.event('passive-marker')
-            direct = Client(directory)
+            direct = Client(directory, env=env)
             clients.append(direct)
             direct.bind('observed', roots)
             until(lambda: len(session()) == 1 and session()[0]['delivery_capable'])
@@ -65,7 +152,10 @@ def main():
             observer.terminate()
             assert observer.wait(timeout=15) == 0
             processes.remove(observer)
+            # A stopped service serves a visibly stale catalog; reads still work.
+            history_checks(subscriber, running=False)
             start()
+            until(lambda: catalog_ready(subscriber))
             append(transcript, 'restart-human', 'continue again', 'user')
             until(lambda: len(session()) == 1)
             # A new observer stream starts live, without replaying old log content.
@@ -78,14 +168,18 @@ def main():
             for message in subscriber.events:
                 content = message.get('params', {}).get('content', '')
                 assert not any(marker in content for marker in
-                               ['passive-marker', 'integrated-marker', 'resumed-marker']), content
+                               ['passive-marker', 'integrated-marker', 'resumed-marker', 'historical']), content
+            # Indexing continues through native watches for live-written logs.
+            until(lambda: any(s['session_id'] == 'observed' and s['live_status'] == 'observed'
+                              for s in subscriber.tool('search_sessions', {})['sessions']))
         finally:
             for client in clients:
                 client.close()
             for process in processes:
                 process.terminate()
                 process.wait(timeout=15)
-    print('PASS: observer discovery, direct handoff/delivery, passive takeover, restart without duplicate replay')
+    print('PASS: observer discovery, direct handoff/delivery, passive takeover, restart without duplicate replay, '
+          'historical catalog search/read, stale catalog while stopped')
 
 
 if __name__ == '__main__':

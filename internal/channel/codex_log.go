@@ -7,7 +7,7 @@ import (
 
 // Consume response_item only: event_msg often mirrors the same assistant text.
 // Tool arguments, results, reasoning, system prompts and user text are never emitted.
-func (c *collector) normalizeCodexLog(line []byte, n *Node, gen uint64) {
+func (c *collector) normalizeCodexLog(line []byte, n activitySink, gen uint64) {
 	var r struct {
 		Type    string `json:"type"`
 		Ordinal *int64 `json:"ordinal"`

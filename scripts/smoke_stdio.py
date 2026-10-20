@@ -23,13 +23,17 @@ LAN = '--lan' in sys.argv[1:] or os.environ.get('RHIZOME_SMOKE_LAN') == '1'
 class Client:
     count = 0
 
-    def __init__(self, directory, join=None, run=None):
+    def __init__(self, directory, join=None, run=None, env=None):
         Client.count += 1
         if run is None:  # A restarted process on one device keeps its runtime directory.
             run = directory / ('run-%d' % Client.count if LAN else 'run')
         self.run = run
         args = [str(ROOT / 'rhizome'), 'mcp']
-        env = {**os.environ, 'RHIZOME_RUNTIME_DIR': str(run)}
+        # Isolate every process from the developer's ~/.rhizome/config.toml: an
+        # empty file selects built-in defaults, and the runtime stays private.
+        isolated = directory / 'smoke-config.toml'
+        isolated.touch(mode=0o600)
+        env = {**os.environ, 'RHIZOME_CONFIG': str(isolated), 'RHIZOME_RUNTIME_DIR': str(run), **(env or {})}
         token = directory / 'token'
         if LAN:
             args += ['--lan', '--bind-addr', '127.0.0.1', '--mdns=false']
@@ -87,6 +91,12 @@ class Client:
         result = self.call('tools/call', {'name': name, 'arguments': args or {}})
         assert not result.get('isError'), result
         return json.loads(result['content'][0]['text'])
+
+    def error(self, name, args=None):
+        """Call a tool expected to fail and return its JSON error payload."""
+        result = self.call('tools/call', {'name': name, 'arguments': args or {}})
+        assert result.get('isError'), result
+        return json.loads(result['content'][0]['text'])['error']
 
     def bind(self, session, directory):
         self.tool('observe_session', {'session_id': session, 'transcript_path': str(directory / (session + '.jsonl')),

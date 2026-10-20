@@ -35,6 +35,7 @@ type observer struct {
 	files map[string]*observedFile
 	dirs  map[string]bool
 	retry bool
+	index *historyIndex // catalog writer; nil only in harnesses that skip indexing
 }
 
 // RunObserver observes local log changes until cancellation. Only one observer
@@ -70,15 +71,21 @@ func RunObserver(ctx context.Context, opts ObserverOptions) error {
 	}
 	defer w.Close()
 	o := &observer{ctx: ctx, opts: opts, watch: w, files: map[string]*observedFile{}, dirs: map[string]bool{}}
+	o.index = newHistoryIndex(historyScope{Runtime: opts.Runtime, ClaudeRoot: opts.ClaudeRoot, CodexRoot: opts.CodexRoot}, func() bool { return o.retry })
 	defer func() {
 		for _, f := range o.files {
 			if f.n != nil {
 				f.n.close()
 			}
 		}
+		// The catalog stays readable (visibly stale) after shutdown; only health is removed.
+		if o.index.dirty {
+			o.index.flush()
+		}
 		os.Remove(filepath.Join(opts.Runtime, "observer-health.json"))
 	}()
 	o.inventory(true)
+	o.index.walkDone()
 	o.health()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -101,6 +108,7 @@ func RunObserver(ctx context.Context, opts ObserverOptions) error {
 				if f := o.files[event.Name]; f != nil && f.n != nil {
 					f.n.activity(1, "gap", "Observed log removed or renamed; awaiting replacement")
 				}
+				o.index.removed(event.Name)
 			}
 			if event.Op&fsnotify.Create != 0 {
 				for path, f := range o.files {
@@ -143,6 +151,8 @@ func RunObserver(ctx context.Context, opts ObserverOptions) error {
 					o.scan(path, f)
 				}
 			}
+			// Catalog backfill and watch-driven updates share this tick with a byte budget.
+			o.index.work(ctx)
 			o.health()
 		}
 	}
@@ -172,7 +182,11 @@ func (o *observer) health() {
 			f.n.mu.Unlock()
 		}
 	}
-	b, _ := json.Marshal(map[string]any{"updated_at": time.Now().UTC(), "observed_sessions": active, "watched_directories": len(o.dirs), "tracked_files": len(o.files), "degraded": o.retry, "parser_skips": skips, "suppressed_events": suppressed, "metadata_unavailable": metadataPending})
+	health := map[string]any{"updated_at": time.Now().UTC(), "observed_sessions": active, "watched_directories": len(o.dirs), "tracked_files": len(o.files), "degraded": o.retry, "parser_skips": skips, "suppressed_events": suppressed, "metadata_unavailable": metadataPending}
+	if o.index != nil {
+		health["catalog"] = o.index.health()
+	}
+	b, _ := json.Marshal(health)
 	path := filepath.Join(o.opts.Runtime, "observer-health.json")
 	if err := os.WriteFile(path, b, 0600); err != nil {
 		slog.Warn("observer_health_write", "error", err)
@@ -258,6 +272,9 @@ func (o *observer) visit(path string, initial bool) {
 		}
 		if !d.Type().IsRegular() || filepath.Ext(path) != ".jsonl" {
 			return nil
+		}
+		if o.index != nil {
+			o.index.enqueue(path)
 		}
 		if f := o.files[path]; f != nil {
 			if !initial {

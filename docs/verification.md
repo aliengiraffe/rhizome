@@ -334,3 +334,42 @@ only the answered keys, that Enter at every prompt yields `mode = "local"`, that
 second run shows the file and keeps it by default, and that `rhizome config`
 reports the keys with source `file`. In Tailscale mode with the daemon stopped,
 setup must warn and still write the file, and `rhizome mcp` must refuse to start.
+
+## Session history catalog (#25, 2026-10-20)
+
+Automated on macOS:
+
+- `internal/channel/history_test.go`: pre-existing Claude and Codex fixtures
+  indexed without creating publishers; child transcripts, identity-less files
+  and foreign-session records excluded; native titles, explicit overrides and
+  fallbacks; timestamps from supported records only; AND filters, exact IDs,
+  exact project paths (no subtree), case-folded title substrings, inclusive
+  `updated_after`/exclusive `updated_before`, unknown timestamps last and
+  excluded by date filters, deterministic ordering with tie-breakers; search
+  pagination over a fixed snapshot while the catalog changes, single-use
+  forward-only cursors, tampered/mismatched/foreign-process/evicted cursors;
+  catalog states (missing, stale, indexing, degraded, corrupt, newer schema,
+  foreign scope, world-readable); read content policy (prompts, thinking, tool
+  bodies, Rhizome tool calls and results, peer envelopes and reactions across
+  page boundaries, sidechains, other-session records, mirrored Codex text,
+  reasoning, function outputs), stable event IDs across pages and snapshots,
+  user-only sessions, invalid arguments and unknown fields; fixed EOF snapshots
+  ignoring later appends, truncation and rename replacement (`SOURCE_CHANGED`),
+  symlink refusal, tombstoned deletions and duplicate identities; response and
+  record budgets (`event_too_large`, `oversized_record`, `incomplete_tail`)
+  with responses under 1 MiB; live-status join (`live`, `observed`,
+  `not_discovered`, self not delivery-capable) and untouched live state;
+  registration in both agent modes with schema/decoder agreement, Codex
+  `CALLER_UNVERIFIED`; incremental checkpoints, replacement re-indexing, visible
+  limits and path-free health output.
+- `task build`, `task check` (`go vet ./...`, `go test -race ./...`),
+  `git diff --check`, `python3 scripts/smoke_stdio.py` with and without
+  `--lan`, and `python3 scripts/smoke_service.py`, which now writes Claude and
+  Codex logs before the observer starts, checks `CATALOG_UNAVAILABLE` first,
+  then searches and reads them from a separate MCP process, pages with cursors,
+  verifies the stale catalog while the observer is stopped, and asserts that no
+  historical text reached any channel notification.
+
+Not exercised here: real Claude or Codex clients calling the new tools, native
+service installation on Linux/Windows with a large pre-existing log tree, and
+any cross-device scenario (history is local by design).

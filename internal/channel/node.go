@@ -77,6 +77,7 @@ type pending struct {
 type counters struct{ Suppressed, Received, Queued, Written, Dropped, Pauses, ParserSkips, QueueHandoffs, QueueFailures, CollectionGaps uint64 }
 type Node struct {
 	collectionLease  *os.File
+	archive          *historyService // read-only history catalog client; nil in parser tests
 	suppressActivity bool
 	codex            *codexCollector
 	collectionState  string
@@ -134,6 +135,22 @@ func newNode(parent context.Context) *Node {
 	return &Node{discovered: map[string]*pb.Identity{}, ctx: ctx, cancel: cancel, identity: &pb.Identity{Protocol: 1, NodeId: id(), AgentType: "claude", Host: shortHost()}, retired: map[string]bool{}, stream: id(), listeners: map[*listener]bool{}, feeds: map[string]*feed{}, seen: map[string]bool{}, rearmed: map[string]bool{}, warned: map[string]bool{}}
 }
 func cloneIdentity(i *pb.Identity) *pb.Identity { return proto.Clone(i).(*pb.Identity) }
+
+// activitySink receives normalized transcript records. Node implements it for
+// live collection; historical reads use an in-memory sink so both paths apply
+// exactly the same content policy.
+type activitySink interface {
+	activity(gen uint64, kind, text string)
+	setNativeTitle(gen uint64, custom bool, title string)
+	local() *pb.Identity
+	countSkip()
+}
+
+func (n *Node) countSkip() {
+	n.mu.Lock()
+	n.stats.ParserSkips++
+	n.mu.Unlock()
+}
 func (n *Node) local() *pb.Identity {
 	n.mu.Lock()
 	defer n.mu.Unlock()

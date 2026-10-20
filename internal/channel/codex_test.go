@@ -109,7 +109,7 @@ func TestCodexCallerAndSharedConnection(t *testing.T) {
 	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, opts: Options{Runtime: filepath.Join(t.TempDir(), "run")}, binary: "/bin/false", socket: "/nonexistent.sock"}
 	defer manager.close()
 	st, ct := mcp.NewInMemoryTransports()
-	ss, err := makeServer(manager.resolve, false, func() {}).Connect(ctx, st, nil)
+	ss, err := makeServer(manager.resolve, false, func() {}, nil).Connect(ctx, st, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

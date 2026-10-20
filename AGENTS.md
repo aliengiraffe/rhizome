@@ -6,8 +6,11 @@ Rhizome is a Go MCP bridge for local Claude Code and Codex sessions. It binds
 verified session identities, collects selected activity, discovers peers through
 memberlist, and delivers events over authenticated loopback gRPC. Claude uses
 channel notifications; Codex uses per-thread nodes and local queue delivery.
-An optional per-user service observes Claude/Codex logs independently of MCP;
-see [docs/service.md](docs/service.md) for lifecycle, boundaries, and validation.
+An optional per-user service observes Claude/Codex logs independently of MCP
+and maintains the local session-history catalog behind `search_sessions` and
+`read_session_history`; see [docs/service.md](docs/service.md) for lifecycle,
+boundaries, and validation and [docs/history.md](docs/history.md) for the
+history contract.
 
 Start with [README.md](README.md) for behavior and setup,
 [docs/codex.md](docs/codex.md) for Codex contracts, and
@@ -19,7 +22,7 @@ Start with [README.md](README.md) for behavior and setup,
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, and session naming (`name.go`). |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), and session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools). |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests. |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
@@ -37,7 +40,7 @@ task build                         # Build the rhizome executable.
 ./rhizome config                   # Inspect effective configuration and sources.
 task check                         # go vet ./... and go test -race ./...
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
-python3 scripts/smoke_service.py    # Separate observer/MCP processes and handoffs.
+python3 scripts/smoke_service.py    # Separate observer/MCP processes, handoffs, history catalog.
 python3 scripts/smoke_stdio.py --lan # Same scenario in LAN mode: pinned TLS, separate registries.
 git diff --check                   # Check whitespace errors.
 task proto                         # Requires protoc; installs pinned generators in .bin.
@@ -166,6 +169,20 @@ a real tailnet; the two-device Tailscale checklist in
 - **Native watches drive observer collection.** Do not add normal-path tree
   polling. Keep file/directory/session limits and visible degraded coverage.
   See `internal/channel/observer.go`, `ownership.go`, and `docs/service.md`.
+- **History is a read-only, local, metadata-first cache.** The observer is the
+  only catalog writer (`<runtime>/history/catalog.json`, atomic rename, version
+  1, scope-bound to runtime and roots); MCP processes only read it and serve a
+  visibly `stale` catalog when the service is stopped. Indexing and history
+  reads must never publish, create nodes, take collection leases, touch live
+  queues/cursors, contact an agent daemon, or open files outside the configured
+  roots (re-confined on every page, symlinks refused). Reads reuse the live
+  normalizers through `activitySink` from byte zero so the content policy stays
+  identical; never add a raw-record fallback. Keep the documented bounds
+  (4,096 files, 8,192 queued, 4 MiB per tick, 512 tombstones; 8 MiB scan,
+  1 MiB response, 2 MiB record, 10 s deadline, 4 concurrent queries, 32
+  snapshots for 15 minutes), signed single-use forward-only cursors, and the
+  stable error codes in `docs/history.md`. Live status comes only from current
+  discovery; never derive `delivery_capable` from a catalog row.
 
 ## Git and PR conventions
 
