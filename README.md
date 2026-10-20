@@ -3,8 +3,9 @@
 One Go MCP process per Claude Code session. Rhizome binds through that session's
 hooks, watches its transcript, discovers local peers with memberlist, and streams
 selected peer activity over authenticated loopback gRPC into its own MCP channel.
-Two sessions in the same directory remain separate. There is no launch wrapper,
-broker, sidecar, or background device-wide transcript scanner.
+Two sessions in the same directory remain separate. An optional background
+observer discovers local headless sessions from their logs. Install it with
+`rhizome service install`; see [service setup and platform behavior](docs/service.md).
 
 ## Codex
 
@@ -72,8 +73,9 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 | `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. |
 
 Use `list_sessions` in each session, then ask one to subscribe to the other's exact
-`session_id`. Display names and session names are labels, never addresses. Multiple
-live nodes with one session ID are ambiguous and cannot be routed. List results
+`session_id`. Display names and session names are labels, never addresses. Direct
+integrations take precedence over passive observers of the same session. Multiple
+direct nodes with one session ID remain ambiguous and cannot be routed. List results
 are gossip snapshots; routing verifies identities over authenticated gRPC.
 
 ## Session names
@@ -154,7 +156,8 @@ out of scope.
 
 ## Activity, replay and bounded delivery
 
-Only the hook-supplied top-level transcript is opened. First binding starts at its
+In direct Claude mode, only the hook-supplied top-level transcript is opened.
+The optional [background observer](docs/service.md) discovers logs separately. First binding starts at its
 current EOF, including discarding a partial historical line. Directory filesystem
 notifications wake incremental JSONL reads, with one-second polling as fallback.
 Incomplete lines are retained; oversized records are skipped with diagnostics.
@@ -244,6 +247,7 @@ Then run `/rhizome-collab` in the agent with an optional task description.
 task check                         # go vet ./... and go test -race ./...
 task build
 python3 scripts/smoke_stdio.py      # real processes, valid stdout, EOF, restart
+python3 scripts/smoke_service.py    # observer/direct coexistence and restart
 ```
 
 Tests cover binding generations and stale hooks, simultaneous bootstrap,

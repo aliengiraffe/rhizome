@@ -26,7 +26,7 @@ func main() {
 
 func entry() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: rhizome mcp | setup | demo [flags]")
+		return fmt.Errorf("usage: rhizome mcp | setup | service | demo [flags]")
 	}
 	mode := os.Args[1]
 	os.Args = append(os.Args[:1], os.Args[2:]...)
@@ -49,6 +49,8 @@ func entry() error {
 		default:
 			return fmt.Errorf("unsupported agent %q", *agent)
 		}
+	case "service":
+		return serviceCommand(os.Args[1:])
 	case "setup":
 		return setup(os.Args[1:])
 	case "demo":

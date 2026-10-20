@@ -149,3 +149,29 @@ restart in Codex, an active-turn queue smoke, and a simultaneous real Claude mod
 plus real Codex model smoke. These platform lifecycle cases are not claimed as
 verified by the automated protocol tests. Process restart still intentionally
 loses subscriptions, replay, deduplication and delivery cursors.
+
+## Background observer (#10, 2026-10-19)
+
+Verified on macOS in this implementation:
+
+- `make build`, `make check` (including race tests), and existing stdio smoke.
+- Native-notification tests for Claude/Codex logs, late-created nested roots,
+  startup history boundaries, partial lines, rotation, filtering, ownership
+  handoff in both orders, duplicate direct rejection, and passive delivery errors.
+- `scripts/smoke_service.py`: separate observer and MCP processes, discovery,
+  direct delivery during coexistence, observer takeover, restart, and no duplicate
+  replay. Uses synthetic logs and an isolated runtime.
+- Native LaunchAgent install, identical reinstall, status, stop, start, status,
+  and uninstall, with a temporary HOME/config/runtime and synthetic log roots.
+  The temporary service was removed. No user agent configuration was changed.
+- `scripts/smoke_codex.py --live`: existing authenticated daemon, disposable
+  threads, real assistant collection and bidirectional queue/Claude-protocol
+  delivery. Confirms direct Codex regression coverage; this is not a Windows
+  App Server delivery claim.
+- Linux amd64 and Windows amd64 cross-compilation; platform service definition
+  XML/argument tests. Cross-compilation does not validate native service execution.
+
+Not exercised here: actual logout/login or reboot startup, native Windows Task
+Scheduler and Linux systemd installation/recovery, and Windows ACL behavior at
+runtime. Run those platform smoke checks before claiming runtime verification
+on those operating systems. See [service.md](service.md) for scope and limits.

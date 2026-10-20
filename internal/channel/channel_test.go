@@ -112,13 +112,26 @@ func TestConcurrentBootstrapAndAmbiguity(t *testing.T) {
 		}
 	}
 	endpoints := map[string]bool{}
-	for _, n := range nodes {
+	for idx, n := range nodes {
 		ep := n.local().Endpoint
 		if endpoints[ep] {
 			t.Fatal("port collision")
 		}
 		endpoints[ep] = true
-		bind(t, n, "same", dir)
+		if idx == 0 {
+			bind(t, n, "same", dir)
+		} else {
+			if err := n.observe(Hook{SessionID: "same", TranscriptPath: filepath.Join(dir, "same.jsonl"), Cwd: dir, Event: "UserPromptSubmit"}); err == nil {
+				t.Fatal("duplicate collector acquired ownership")
+			}
+			// Simulate a legacy peer without collection fencing: routing must
+			// still fail closed when multiple direct identities are advertised.
+			n.mu.Lock()
+			n.identity.SessionId = "same"
+			n.identity.Generation = 1
+			n.mu.Unlock()
+			_ = n.members.UpdateNode(time.Second) // eventual routing below is authoritative
+		}
 	}
 	eventually(t, func() bool {
 		_, err := nodes[0].resolve(context.Background(), "same")

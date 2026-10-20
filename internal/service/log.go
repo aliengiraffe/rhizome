@@ -1,0 +1,49 @@
+package service
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"rhizome/internal/channel"
+	"rhizome/internal/localstate"
+	"sync"
+)
+
+type rotatingLog struct {
+	mu   sync.Mutex
+	path string
+}
+
+func (w *rotatingLog) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if st, err := os.Stat(w.path); err == nil && st.Size()+int64(len(p)) > 2*1024*1024 {
+		if err := os.Remove(w.path + ".1"); err != nil && !os.IsNotExist(err) {
+			return 0, err
+		}
+		if err := os.Rename(w.path, w.path+".1"); err != nil {
+			return 0, err
+		}
+	}
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	return f.Write(p)
+}
+
+// Run starts the installed observer with bounded diagnostics in its runtime dir.
+func Run(ctx context.Context, c Config) error {
+	if err := validate(&c); err != nil {
+		return err
+	}
+	if err := localstate.SecureDir(c.Observer.Runtime); err != nil {
+		return err
+	}
+	previous := slog.Default()
+	defer slog.SetDefault(previous)
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&rotatingLog{path: filepath.Join(c.Observer.Runtime, "observer.log")}, nil)))
+	return channel.RunObserver(ctx, c.Observer)
+}

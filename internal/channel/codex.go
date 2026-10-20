@@ -158,6 +158,12 @@ func (n *Node) observeCodex(ctx context.Context, h Hook) error {
 	}
 	n.mu.Lock()
 	if first {
+		lease, err := n.claimCollection(h.SessionID)
+		if err != nil {
+			n.mu.Unlock()
+			return err
+		}
+		n.collectionLease = lease
 		n.identity.SessionId = h.SessionID
 		n.identity.Generation++
 		n.names = nameState{explicit: loadOverride(n.runtime, h.SessionID)}
