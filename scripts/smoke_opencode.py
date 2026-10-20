@@ -57,7 +57,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix='rzoc-', dir='/tmp'))
     server = server_log = peer = None
     sessions = []
-    url = env = project = None
+    url = env = project = password = None
     try:
         run, project, config = tmp / 'run', tmp / 'project', tmp / 'config' / 'opencode'
         for d in (run, project, config / 'plugins'):
@@ -67,8 +67,9 @@ def main():
         subprocess.run(['git', 'init', '-q', str(project)], check=True)
         # An empty commit gives the repo its own OpenCode project; a commitless repo
         # would share the "global" project with the user's real sessions.
-        subprocess.run(['git', '-c', 'user.name=rz', '-c', 'user.email=rz@local', 'commit', '--allow-empty',
-                        '-m', 'init', '-q'], cwd=project, check=True)
+        # Throwaway repo: never sign, whatever the user's global git config says.
+        subprocess.run(['git', '-c', 'user.name=rz', '-c', 'user.email=rz@local', '-c', 'commit.gpgsign=false',
+                        'commit', '--allow-empty', '-m', 'init', '-q'], cwd=project, check=True)
         shutil.copy(ROOT / 'plugins' / 'opencode' / 'rhizome.js', config / 'plugins' / 'rhizome.js')
         (config / 'opencode.json').write_text(json.dumps({
             '$schema': 'https://opencode.ai/config.json',
@@ -100,8 +101,11 @@ def main():
                     if sid not in sessions:
                         sessions.append(sid)
             if check and done.returncode != 0:
-                raise AssertionError('opencode %s failed (exit %d): %s' % (argv[0], done.returncode,
-                                                                          done.stderr.strip()[-300:]))
+                excerpt = done.stderr.strip()
+                if password:  # never echo the server password; scrub before clipping
+                    excerpt = excerpt.replace(password, '***')
+                excerpt = excerpt[-300:]
+                raise AssertionError('opencode %s failed (exit %d): %s' % (argv[0], done.returncode, excerpt))
             return done
 
         first = opencode('run', '--model', args.model, '--format', 'json', 'Reply with the single word ready.')

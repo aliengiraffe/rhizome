@@ -112,6 +112,9 @@ func (m *openCodeNodes) worker() {
 }
 
 func (m *openCodeNodes) process(w workItem) {
+	// Node start and close (network work) deliberately run under frameMu so
+	// session lifecycle stays serialized. Tool calls are not blocked by this:
+	// resolve takes only mu.
 	m.frameMu.Lock()
 	defer m.frameMu.Unlock()
 	if n := m.dropped.Swap(0); n > 0 {

@@ -275,6 +275,7 @@ func TestCodexUnavailableRetainsDelivery(t *testing.T) {
 	n.identity.SessionId = threadA
 	n.identity.Generation = 1
 	n.codex = newCodexCollector(threadA, &fakeCodex{})
+	n.external = true
 	n.ready = true
 	n.deliveryReady = true
 	n.notify = func(context.Context, string, map[string]string) error {
