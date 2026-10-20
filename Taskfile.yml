@@ -29,3 +29,8 @@ tasks:
     cmds:
       - go vet ./...
       - go test -race ./...
+
+  test-plugin:
+    desc: Run OpenCode plugin tests (Node 20+; skipped when node is absent)
+    cmds:
+      - 'if command -v node >/dev/null 2>&1; then node --test plugins/opencode/*.test.mjs; else echo "node not found; skipping plugin tests"; fi'

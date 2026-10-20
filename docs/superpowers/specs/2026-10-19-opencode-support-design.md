@@ -134,6 +134,7 @@ Rhizome to plugin: `deliver {id, sessionID, text}`.
      its metadata if it exists (project, display name, native title).
    - A non-empty `parentID` is refused and counted.
    - Synthetic inputs never bind.
+   - The plugin relays only sessions whose `ctx.session.get` location directory matches its own instance's directory; OpenCode delivers every session event to every location's plugin instance, so unscoped relaying would bind one session in two Rhizome processes.
 2. **Tool calls.**
    - The node comes from `_meta` only.
    - No node for the session returns `UNBOUND`, with the hint to install the
