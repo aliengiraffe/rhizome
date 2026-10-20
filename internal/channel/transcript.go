@@ -107,7 +107,7 @@ func (c *collector) run(ctx context.Context, n *Node, gen uint64) {
 		c.scan(n, gen)
 	}
 }
-func (c *collector) scan(n *Node, gen uint64) {
+func (c *collector) scan(n activitySink, gen uint64) {
 	c.more = false
 	f, err := os.Open(c.path)
 	if err != nil {
@@ -172,7 +172,7 @@ func (c *collector) scan(n *Node, gen uint64) {
 	c.setAnchor(f)
 	c.more = c.offset < st.Size()
 }
-func (c *collector) consume(b []byte, n *Node, gen uint64) {
+func (c *collector) consume(b []byte, n activitySink, gen uint64) {
 	for len(b) > 0 {
 		i := bytes.IndexByte(b, '\n')
 		var piece []byte
@@ -205,7 +205,7 @@ func (c *collector) consume(b []byte, n *Node, gen uint64) {
 // scanTitles reads the pre-binding transcript once, looking only at title
 // records so a session named before Rhizome bound still exposes its native
 // title. No activity is published and no conversation content is retained.
-func (c *collector) scanTitles(f *os.File, n *Node, gen uint64) {
+func (c *collector) scanTitles(f *os.File, n activitySink, gen uint64) {
 	const maxTitleScan = 64 * 1024 * 1024
 	limit := c.baseline
 	if limit > maxTitleScan {
@@ -270,10 +270,8 @@ func titleRecord(line []byte, session string) (kind, title string, ok bool) {
 	}
 	return "", "", false
 }
-func (c *collector) skip(n *Node, why string) {
-	n.mu.Lock()
-	n.stats.ParserSkips++
-	n.mu.Unlock()
+func (c *collector) skip(n activitySink, why string) {
+	n.countSkip()
 	slog.Debug("parser_skip", "reason", why)
 }
 
@@ -286,7 +284,7 @@ type block struct {
 	IsError   bool   `json:"is_error"`
 }
 
-func (c *collector) normalize(line []byte, n *Node, gen uint64) {
+func (c *collector) normalize(line []byte, n activitySink, gen uint64) {
 	if c.agent == "codex" {
 		c.normalizeCodexLog(line, n, gen)
 		return

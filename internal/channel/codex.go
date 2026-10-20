@@ -256,7 +256,8 @@ func RunCodex(c config.Config, o Options) error {
 	defer cancel()
 	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, binary: resolved, socket: filepath.Join(home, "app-server-control", "app-server-control.sock"), opts: o}
 	defer manager.close()
-	server := makeServer(manager.resolve, false, func() {})
+	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir})
+	server := makeServer(manager.resolve, false, func() {}, history)
 	session, err := server.Connect(ctx, &mcp.StdioTransport{}, nil)
 	if err != nil {
 		return err

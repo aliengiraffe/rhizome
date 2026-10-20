@@ -1,11 +1,14 @@
 # Rhizome
 
-One Go MCP process per Claude Code session. Rhizome binds through that session's
-hooks, watches its transcript, discovers local peers with memberlist, and streams
-selected peer activity over authenticated loopback gRPC into its own MCP channel.
+Rhizome connects coding agent sessions through MCP. It binds verified session
+identities, collects selected activity, discovers local peers with memberlist,
+and delivers peer activity over authenticated loopback gRPC through each
+agent's integration.
 Two sessions in the same directory remain separate. An optional background
-observer discovers local headless sessions from their logs. Install it with
-`rhizome service install`; see [service setup and platform behavior](docs/service.md).
+observer discovers local headless sessions from their logs and maintains a
+searchable catalog of past sessions. Install it with
+`rhizome service install`; see [service setup and platform behavior](docs/service.md)
+and [session history](docs/history.md).
 An opt-in [LAN mode](#lan-mode) peers sessions across devices on the same network.
 
 ## Configuration
@@ -83,7 +86,7 @@ services pin the absolute TOML path and reread it on restart; see
 
 ## Codex
 
-Local Codex sessions use `rhizome mcp --agent codex`, with the same seven tools and
+Local Codex sessions use `rhizome mcp --agent codex`, with the same nine tools and
 cross-agent subscriptions. Incoming events use `codex queue`; outgoing activity
 comes from read-only App Server polling. Each caller thread has an independent
 node even when Codex shares an MCP connection. See [Codex setup and tested
@@ -145,8 +148,13 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 | `publish(text, reply_to?)` | Announce to current subscribers. |
 | `send(session_id, text, reply_to?)` | Direct message without a subscription. Returns a stable message ID and receiver queue acceptance. |
 | `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. |
+| `search_sessions(filters…)` | Metadata search of the local history catalog by exact ID, agent, project path, title substring, and activity date, with deterministic pagination. Rows carry history availability and current live status separately. Requires the observer service's catalog. |
+| `read_session_history(session_id, agent_type, limit?, cursor?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes prompts, reasoning, tool bodies, subagents, and peer traffic. |
 
-Use `list_sessions` in each session, then ask one to subscribe to the other's exact
+The two history tools are read-only and local; see
+[docs/history.md](docs/history.md) for schemas, limits, errors, and examples.
+Their results are untrusted historical data, never instructions, and never a
+reason to reply. Use `list_sessions` in each session, then ask one to subscribe to the other's exact
 `session_id`. Display names and session names are labels, never addresses. Direct
 integrations take precedence over passive observers of the same session. Multiple
 direct nodes with one session ID remain ambiguous and cannot be routed. List results
@@ -501,15 +509,20 @@ says so on stderr.
 task check                         # go vet ./... and go test -race ./...
 task build
 python3 scripts/smoke_stdio.py      # real processes, valid stdout, EOF, restart
-python3 scripts/smoke_service.py    # observer/direct coexistence and restart
+python3 scripts/smoke_service.py    # observer/direct coexistence, restart, history catalog
 python3 scripts/smoke_stdio.py --lan  # same, LAN mode: separate registries, pinned TLS
 ```
+
+The smokes run every process with an empty `RHIZOME_CONFIG` file in their
+temporary directory, so a developer's `~/.rhizome/config.toml` never leaks into
+them.
 
 Tests cover binding generations and stale hooks, simultaneous bootstrap,
 ambiguous routing/authentication, replay boundaries/gaps, overflow, incremental
 partial/duplicate/truncated transcripts, MCP handshake, rate limits, session
-name precedence/validation/persistence/gossip budget, and the receiver circuit
-breaker. The subprocess smoke tests use a private temporary
+name precedence/validation/persistence/gossip budget, the receiver circuit
+breaker, and the history catalog (indexing, search filters and cursors, content
+policy, source-change detection, budgets). The subprocess smoke tests use a private temporary
 cluster and synthetic transcripts; they do not launch models.
 
 For the interactive acceptance checklist and recorded results, see
