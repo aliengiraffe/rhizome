@@ -180,4 +180,72 @@ test("buffer is bounded before connect and reports overflow first", async () => 
   cleanup(); await srv.stop()
 })
 
+test("a throwing event is skipped and a failed subscription resubscribes", async () => {
+  const srv = listen(); await srv.start()
+  const { ctx, emit } = fakeCtx()
+  const cleanup = plugin.setup(ctx)
+  await srv.next((f) => f.type === "hello")
+  emit({ type: "session.text.ended", get data() { throw new Error("boom") } })
+  emit({ type: "session.inbox.enqueued", data: { sessionID: "ses_a", item: { type: "user", payload: { text: "go" } } } })
+  assert.equal((await srv.next()).type, "bind")
+  cleanup(); await srv.stop()
+
+  const srv2 = listen(); await srv2.start()
+  const real = fakeCtx()
+  let calls = 0
+  const second = fakeCtx()
+  real.ctx.event.subscribe = ((first) => (args) => (++calls === 1 ? first : second.ctx.event.subscribe(args)))(
+    { [Symbol.asyncIterator]() { return { next: async () => { throw new Error("stream died") } } } })
+  calls = 0
+  const cleanup2 = plugin.setup(real.ctx)
+  await srv2.next((f) => f.type === "hello")
+  await new Promise((r) => setTimeout(r, 400))
+  second.emit({ type: "session.inbox.enqueued", data: { sessionID: "ses_b", item: { type: "user", payload: { text: "go" } } } })
+  assert.equal((await srv2.next((f) => f.type === "bind")).sessionID, "ses_b")
+  cleanup2(); await srv2.stop()
+})
+
+for (const [name, ch] of [["newlines", "\n"], ["control characters", "\u0001"]]) {
+  test(`serialized text frames stay under the line limit with ${name}`, async () => {
+    const srv = listen(); await srv.start()
+    const { ctx, emit } = fakeCtx()
+    const cleanup = plugin.setup(ctx)
+    await srv.next((f) => f.type === "hello")
+    emit({ type: "session.inbox.enqueued", data: { sessionID: "ses_a", item: { type: "user", payload: { text: "go" } } } })
+    await srv.next((f) => f.type === "input")
+    emit({ type: "session.text.ended", data: { sessionID: "ses_a", assistantMessageID: "m", text: ch.repeat(16384) } })
+    const text = await srv.next((f) => f.type === "text")
+    assert.ok(Buffer.byteLength(JSON.stringify(text) + "\n") < 64 * 1024)
+    assert.ok(text.text.length > 0)
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses_a" } })
+    assert.deepEqual(await srv.next((f) => f.type === "turn"), { type: "turn", sessionID: "ses_a" })
+    cleanup(); await srv.stop()
+  })
+}
+
+test("child sessions are never relayed after binding", async () => {
+  const srv = listen(); await srv.start()
+  const { ctx, hooks, emit } = fakeCtx({ getResult: (id) => id === "ses_c"
+    ? { parentID: "ses_p", title: "c", location: { directory: project } }
+    : { parentID: "", title: "p", location: { directory: project } } })
+  const cleanup = plugin.setup(ctx)
+  await srv.next((f) => f.type === "hello")
+  emit({ type: "session.inbox.enqueued", data: { sessionID: "ses_c", item: { type: "user", payload: { text: "go" } } } })
+  assert.equal((await srv.next()).parentID, "ses_p")
+  emit({ type: "session.text.ended", data: { sessionID: "ses_c", assistantMessageID: "m", text: "x" } })
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_c" } })
+  await hooks["execute.before"]({ tool: "read", sessionID: "ses_c", id: "c1" })
+  emit({ type: "session.inbox.enqueued", data: { sessionID: "ses_p", item: { type: "user", payload: { text: "go" } } } })
+  await srv.next((f) => f.type === "bind" && f.sessionID === "ses_p")
+  assert.deepEqual(srv.all.filter((f) => f.sessionID === "ses_c").map((f) => f.type), ["bind"])
+  cleanup(); await srv.stop()
+})
+
+test("setup with an unresolvable directory is a no-op", () => {
+  const { ctx } = fakeCtx()
+  ctx.location = { directory: join(root, "does-not-exist") }
+  const cleanup = plugin.setup(ctx)
+  assert.equal(typeof cleanup, "function"); cleanup()
+})
+
 test.after(() => rmSync(root, { recursive: true, force: true }))

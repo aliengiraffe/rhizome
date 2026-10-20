@@ -13,35 +13,51 @@ const MAX_BUFFER = 256
 const MAX_TEXT = 16 * 1024
 const MAX_LINE = 64 * 1024
 const MAX_PENDING_WRITE = 1024 * 1024
+const MAX_FIELD = 1024
+const MAX_FRAME = 60 * 1024
 const PEER_MARKER = "<rhizome-peer-event>"
 
 // Must match bridgeSocketPath in internal/channel/opencode_bridge.go.
-function socketPath(directory) {
+function socketPath(realDirectory) {
   const runtime = process.env.RHIZOME_RUNTIME_DIR || join(homedir(), ".rhizome", "run")
-  const hash = createHash("sha256").update(realpathSync(directory)).digest("hex").slice(0, 12)
+  const hash = createHash("sha256").update(realDirectory).digest("hex").slice(0, 12)
   return join(runtime, `opencode-${process.pid}-${hash}.sock`)
 }
 
-// Cut UTF-8 text to MAX_TEXT bytes without splitting a character.
-function truncate(text) {
+// Cut UTF-8 text to max bytes without splitting a character.
+function clip(text, max) {
   const buf = Buffer.from(String(text ?? ""), "utf8")
-  if (buf.length <= MAX_TEXT) return buf.toString("utf8")
-  let end = MAX_TEXT
+  if (buf.length <= max) return buf.toString("utf8")
+  let end = max
   while (end > 0 && (buf[end] & 0xc0) === 0x80) end--
   return buf.subarray(0, end).toString("utf8")
+}
+const field = (v) => clip(v, MAX_FIELD)
+// A session ID is a non-empty string within the field cap; anything else is ignored.
+const sid = (v) => (typeof v === "string" && v !== "" && Buffer.byteLength(v) <= MAX_FIELD ? v : "")
+
+// Build a text frame whose serialized form stays under MAX_FRAME; JSON escaping
+// can grow raw text several times.
+function textFrame(sessionID, messageID, text) {
+  let budget = MAX_TEXT
+  for (;;) {
+    const frame = { type: "text", sessionID, messageID, text: clip(text, budget) }
+    if (budget === 0 || Buffer.byteLength(JSON.stringify(frame)) <= MAX_FRAME) return frame
+    budget = Math.floor(budget / 2)
+  }
 }
 
 export default {
   id: "rhizome",
   setup(ctx) {
-    const directory = ctx.location.directory
-    let realDirectory = null
-    try { realDirectory = realpathSync(directory) } catch {}
+    const directory = ctx.location?.directory
+    let realDirectory
+    try { realDirectory = realpathSync(directory) } catch { return () => {} }
     // Session IDs this instance has bound as top-level sessions. OpenCode
     // delivers every session event to every location's plugin instance, so
     // only these sessions are relayed.
     const local = new Set()
-    const path = socketPath(directory)
+    const path = socketPath(realDirectory)
     const queue = []
     let dropped = 0
     let socket = null
@@ -110,7 +126,7 @@ export default {
     // True only when the session's location directory is this instance's.
     const inThisLocation = (info) => {
       const dir = info?.location?.directory
-      if (!dir || !realDirectory) return false
+      if (!dir) return false
       try { return realpathSync(dir) === realDirectory } catch { return false }
     }
 
@@ -121,64 +137,81 @@ export default {
       let info
       try { info = await ctx.session.get({ sessionID }) } catch { return false }
       if (!inThisLocation(info)) return false
-      const parentID = String(info?.parentID ?? "")
-      send({ type: "bind", sessionID, parentID, directory, title: String(info?.title ?? "") })
+      const parentID = field(info?.parentID)
+      send({ type: "bind", sessionID, parentID, directory, title: field(info?.title) })
       if (parentID === "") local.add(sessionID)
       return true
     }
 
     const onEvent = async (event) => {
       const d = event?.data ?? {}
+      const id = sid(d.sessionID)
+      if (id === "") return
       switch (event?.type) {
         case "session.inbox.enqueued": {
           const kind = d.item?.type
           if (kind !== "user" && kind !== "synthetic") return
           const rhizome = String(d.item?.payload?.text ?? "").includes(PEER_MARKER)
-          if (kind === "user" && !rhizome) await bind(d.sessionID)
-          if (!local.has(d.sessionID)) return
-          send({ type: "input", sessionID: d.sessionID, kind, rhizome })
+          if (kind === "user" && !rhizome) await bind(id)
+          if (!local.has(id)) return
+          send({ type: "input", sessionID: id, kind, rhizome })
           return
         }
         case "session.text.ended":
-          if (!local.has(d.sessionID)) return
-          send({ type: "text", sessionID: d.sessionID, messageID: String(d.assistantMessageID ?? ""), text: truncate(d.text) })
+          if (!local.has(id)) return
+          send(textFrame(id, field(d.assistantMessageID), d.text))
           return
         case "session.execution.succeeded":
-          if (!local.has(d.sessionID)) return
-          send({ type: "turn", sessionID: d.sessionID })
+          if (!local.has(id)) return
+          send({ type: "turn", sessionID: id })
           return
         case "session.renamed":
-          if (!local.has(d.sessionID)) return
-          send({ type: "title", sessionID: d.sessionID, title: String(d.title ?? "") })
+          if (!local.has(id)) return
+          send({ type: "title", sessionID: id, title: field(d.title) })
           return
         case "session.deleted":
-          if (!local.has(d.sessionID)) return
-          send({ type: "forget", sessionID: d.sessionID })
-          local.delete(d.sessionID)
+          if (!local.has(id)) return
+          send({ type: "forget", sessionID: id })
+          local.delete(id)
           return
       }
     }
 
     const tool = (phase) => async (ev) => {
-      if (!local.has(ev.sessionID)) return
-      send({ type: "tool", sessionID: ev.sessionID, callID: String(ev.id ?? ""), name: String(ev.tool ?? ""), phase: phase(ev) })
+      try {
+        const id = sid(ev?.sessionID)
+        if (!local.has(id)) return
+        send({ type: "tool", sessionID: id, callID: field(ev.id), name: field(ev.tool), phase: phase(ev) })
+      } catch {}
     }
     const registrations = [
       ctx.tool.hook("execute.before", tool(() => "start")),
       ctx.tool.hook("execute.after", tool((ev) => (ev.status === "completed" ? "completed" : "failed"))),
     ]
     const controller = new AbortController()
-    void (async () => {
+    let subBackoff = 250
+    let subTimer = null
+    // One bad event is skipped; an ended or failed subscription is retried.
+    const subscribe = async () => {
       try {
-        for await (const event of ctx.event.subscribe({ signal: controller.signal })) await onEvent(event)
+        for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+          subBackoff = 250
+          try { await onEvent(event) } catch {}
+        }
       } catch {}
-    })()
+      if (closed) return
+      subTimer = setTimeout(() => void subscribe(), subBackoff)
+      subTimer.unref?.()
+      subBackoff = Math.min(subBackoff * 2, 15000)
+    }
+    void subscribe()
     connect()
 
     return () => {
       closed = true
       controller.abort()
       clearTimeout(timer)
+      clearTimeout(subTimer)
       for (const r of registrations) r?.dispose?.()
       socket?.destroy()
     }
