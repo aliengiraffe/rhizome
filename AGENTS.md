@@ -216,8 +216,9 @@ a real tailnet; the two-device Tailscale checklist in
   plugin relays allowlisted events and executes deliveries; all filtering stays in
   Go, and it relays only sessions of its own directory (re-binding them after
   each reconnect). Across OpenCode instance reloads Go restores bindings from a
-  persisted per-location list (`<runtime>/opencode-bindings/`, 0600, 64 entries,
-  24 h idle) holding only sessions a human prompt bound; the plugin re-verifies
+  persisted list keyed by OpenCode PID plus location like the socket
+  (`<runtime>/opencode-bindings/`, 0600, 64 entries, 24 h idle, dead-PID files
+  removed) holding only sessions a human prompt bound; the plugin re-verifies
   each before binding, and an exiting process never unlinks a successor's
   socket. Bridge limits: 64 KiB frames, 256-frame plugin buffer, 256
   pending plugin inputs, 512-frame manager queue, 16 KiB text, 5 s

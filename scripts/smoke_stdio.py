@@ -187,6 +187,8 @@ def opencode_scenario(directory, claude):
         assert 'UNBOUND' in oc.tool_error('list_sessions', meta={'ai.opencode/sessionID': 'ses_smokeChild'})
         until(lambda: any(s['identity']['session_id'] == 'ses_smokeAlpha1' and s['identity']['agent_type'] == 'opencode'
                           for s in claude.tool('list_sessions')['sessions']))
+        old_node = next(s['identity']['node_id'] for s in claude.tool('list_sessions')['sessions']
+                        if s['identity']['session_id'] == 'ses_smokeAlpha1')
         claude.tool('subscribe', {'session_id': 'ses_smokeAlpha1'})
         until(lambda: claude.tool('list_sessions')['subscriptions']['ses_smokeAlpha1']['state'] == 'following')
         plugin.send({'type': 'input', 'sessionID': 'ses_smokeAlpha1', 'kind': 'user', 'rhizome': False})
@@ -214,7 +216,10 @@ def opencode_scenario(directory, claude):
         assert 'UNBOUND' in oc.tool_error('list_sessions', meta=alpha)
         plugin.send({'type': 'bind', 'sessionID': 'ses_smokeAlpha1', 'parentID': '', 'directory': str(project), 'title': 'smoke title'})
         until(lambda: not oc.call('tools/call', {'name': 'list_sessions', 'arguments': {}, '_meta': alpha}).get('isError'))
-        until(lambda: any(s['identity']['session_id'] == 'ses_smokeAlpha1' for s in claude.tool('list_sessions')['sessions']))
+        # Wait until discovery shows only the new process's node for the session.
+        until(lambda: [s['identity']['node_id'] != old_node and s['status'] == 'live'
+                       for s in claude.tool('list_sessions')['sessions']
+                       if s['identity']['session_id'] == 'ses_smokeAlpha1'] == [True])
         claude.tool('send', {'session_id': 'ses_smokeAlpha1', 'text': 'restored-marker'})
         frame = plugin.expect('deliver')
         assert frame['sessionID'] == 'ses_smokeAlpha1' and 'restored-marker' in frame['text']

@@ -509,7 +509,7 @@ func RunOpenCode(c config.Config, o Options) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	store, err := newOpenCodeStore(runtime, cwd)
+	store, err := newOpenCodeStore(runtime, os.Getppid(), cwd)
 	if err != nil {
 		return err
 	}

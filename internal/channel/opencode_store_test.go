@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +15,12 @@ import (
 
 func testStore(t *testing.T, runtime, location string, now *time.Time) *openCodeStore {
 	t.Helper()
-	s, err := newOpenCodeStore(runtime, location)
+	return testStorePID(t, runtime, os.Getpid(), location, now)
+}
+
+func testStorePID(t *testing.T, runtime string, pid int, location string, now *time.Time) *openCodeStore {
+	t.Helper()
+	s, err := newOpenCodeStore(runtime, pid, location)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,31 +172,94 @@ func TestOpenCodeStoreLifecycle(t *testing.T) {
 	location := shortDir(t)
 	now := time.Unix(1_000_000, 0)
 	m := storeManager(t, runtime, location, &now)
+	expect := func(step, want string) {
+		t.Helper()
+		m.flushStore()
+		if got := strings.Join(storedIDs(t, m.store), ","); got != want {
+			t.Fatalf("%s: stored %q want %q", step, got, want)
+		}
+	}
 	for _, sid := range []string{"ses_a", "ses_b", "ses_c", "ses_d"} {
 		m.handle(bindFrame(sid, "", location, ""))
 	}
 	m.handle(bindFrame("ses_child", "ses_a", location, ""))
-	m.flushStore()
-	if got := strings.Join(storedIDs(t, m.store), ","); got != "ses_a,ses_b,ses_c,ses_d" {
-		t.Fatalf("binds not stored: %q", got)
-	}
+	expect("bind", "ses_a,ses_b,ses_c,ses_d")
 	m.handle(bridgeFrame{Type: "forget", SessionID: "ses_a"})
-	m.handle(bridgeFrame{Type: "unrestorable", SessionID: "ses_b"}) // bound: kept
-	m.restoring = map[string]time.Time{"ses_x": now}
-	m.store.touch("ses_x", now)
-	m.handle(bridgeFrame{Type: "unrestorable", SessionID: "ses_x"}) // not bound: dropped
+	expect("forget", "ses_b,ses_c,ses_d")
+	m.handle(bridgeFrame{Type: "unrestorable", SessionID: "ses_b"})
+	expect("unrestorable while bound", "ses_b,ses_c,ses_d")
+	m.store.touch("ses_x", now) // stored by an earlier process, not bound here
+	expect("unbound entry", "ses_b,ses_c,ses_d,ses_x")
+	m.handle(bridgeFrame{Type: "unrestorable", SessionID: "ses_x"})
+	expect("unrestorable while unbound", "ses_b,ses_c,ses_d")
+
+	// Idle eviction: ses_b and ses_d go idle past the TTL while ses_c is active.
 	now = now.Add(time.Hour)
-	m.handle(bridgeFrame{Type: "turn", SessionID: "ses_c"}) // activity keeps ses_c alive
+	m.handle(bridgeFrame{Type: "turn", SessionID: "ses_c"})
 	now = now.Add(openCodeIdleTTL - 30*time.Minute)
-	m.sweep() // ses_b and ses_d idle for more than 24h
+	m.store.now = func() time.Time { return now.Add(-2 * time.Hour) } // keep store expiry out of this step
+	m.sweep()
 	m.persistActivity()
-	m.flushStore()
-	if got := strings.Join(storedIDs(t, m.store), ","); got != "ses_c" {
-		t.Fatalf("after forget/unrestorable/idle: %q", got)
-	}
+	expect("idle sweep", "ses_c")
 	m.close() // shutdown keeps entries for the next process
 	if got := strings.Join(storedIDs(t, m.store), ","); got != "ses_c" {
 		t.Fatalf("shutdown dropped entries: %q", got)
+	}
+}
+
+func TestOpenCodeStoreScopedToOpenCodeProcess(t *testing.T) {
+	runtime, location := shortDir(t), shortDir(t)
+	now := time.Now()
+	mine := testStorePID(t, runtime, os.Getpid(), location, &now)
+	mine.touch("ses_a", now)
+	if err := mine.flush(); err != nil {
+		t.Fatal(err)
+	}
+	// A second OpenCode process in the same directory gets an empty restore list.
+	if ids := storedIDs(t, testStorePID(t, runtime, os.Getppid(), location, &now)); len(ids) != 0 {
+		t.Fatalf("other OpenCode process sees entries: %v", ids)
+	}
+	// The same OpenCode process (an instance reload) still sees them.
+	if ids := storedIDs(t, testStorePID(t, runtime, os.Getpid(), location, &now)); len(ids) != 1 {
+		t.Fatalf("same process lost entries: %v", ids)
+	}
+}
+
+func TestOpenCodeStoreRemovesDeadProcessFiles(t *testing.T) {
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	dead := cmd.Process.Pid
+	runtime, location := shortDir(t), shortDir(t)
+	now := time.Now()
+	for _, pid := range []int{dead, os.Getppid()} {
+		s := testStorePID(t, runtime, pid, location, &now)
+		s.touch("ses_a", now)
+		if err := s.flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := filepath.Join(runtime, "opencode-bindings")
+	other := filepath.Join(base, "unrelated.json")
+	if err := os.WriteFile(other, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	testStorePID(t, runtime, os.Getpid(), location, &now)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	got := strings.Join(names, " ")
+	if strings.Contains(got, fmt.Sprintf("opencode-%d-", dead)) {
+		t.Fatalf("dead process files kept: %s", got)
+	}
+	if !strings.Contains(got, fmt.Sprintf("opencode-%d-", os.Getppid())) || !strings.Contains(got, "unrelated.json") {
+		t.Fatalf("live or unrelated files removed: %s", got)
 	}
 }
 

@@ -4,10 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -56,7 +60,12 @@ type openCodeStore struct {
 	ioMu            sync.Mutex // serializes flushes within this process
 }
 
-func newOpenCodeStore(runtime, location string) (*openCodeStore, error) {
+// newOpenCodeStore opens the store for one OpenCode process (pid, the same
+// pairing key as the bridge socket) and location. An instance reload stays in
+// the same OpenCode process, so its sessions restore; another OpenCode process
+// in the same directory never sees them. Files of dead OpenCode processes are
+// removed.
+func newOpenCodeStore(runtime string, pid int, location string) (*openCodeStore, error) {
 	abs, hash, err := resolveLocation(location)
 	if err != nil {
 		return nil, err
@@ -65,8 +74,44 @@ func newOpenCodeStore(runtime, location string) (*openCodeStore, error) {
 	if err := secureDir(base); err != nil {
 		return nil, err
 	}
-	return &openCodeStore{dir: abs, path: filepath.Join(base, hash[:32]+".json"), lock: filepath.Join(base, hash[:32]+".lock"),
+	removeDeadStores(base, pid)
+	name := fmt.Sprintf("opencode-%d-%s", pid, hash[:32])
+	return &openCodeStore{dir: abs, path: filepath.Join(base, name+".json"), lock: filepath.Join(base, name+".lock"),
 		now: time.Now, upsert: map[string]time.Time{}, remove: map[string]bool{}}, nil
+}
+
+var storeName = regexp.MustCompile(`^opencode-([0-9]+)-[0-9a-f]{32}\.(json|lock|json\.tmp)$`)
+
+// removeDeadStores deletes store files whose OpenCode process no longer exists.
+// The current process's files are never touched.
+func removeDeadStores(base string, self int) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	removed := 0
+	for _, e := range entries {
+		m := storeName.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		pid, err := strconv.Atoi(m[1])
+		if err != nil || pid == self || pid <= 0 || processAlive(pid) {
+			continue
+		}
+		if os.Remove(filepath.Join(base, e.Name())) == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		slog.Info("opencode_store_cleanup", "removed", removed)
+	}
+}
+
+// processAlive reports whether pid exists; EPERM means it exists as another user.
+func processAlive(pid int) bool {
+	err := unix.Kill(pid, 0)
+	return err == nil || errors.Is(err, unix.EPERM)
 }
 
 // touch records that sid is bound with the given last-activity time.

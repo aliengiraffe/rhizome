@@ -42,14 +42,19 @@ OpenCode mode exposes six tools: the usual seven minus `observe_session`.
 - OpenCode periodically disposes and rebuilds a location instance (cause inside
   OpenCode unconfirmed; `opencode reload` forces it): the plugin is set up afresh
   and a new Rhizome process starts. So that idle sessions do not vanish, Rhizome
-  persists the location's bound top-level session IDs with their last-activity
-  time in `<runtime>/opencode-bindings/<hash>.json` (mode 0600; `<hash>` is the
-  first 32 hex characters of SHA-256 of the resolved directory; merged under a
-  flock with atomic rename, at most 64 entries, entries idle over 24 h dropped).
+  persists the bound top-level session IDs with their last-activity time in
+  `<runtime>/opencode-bindings/opencode-<parent pid>-<hash>.json` (mode 0600;
+  keyed like the socket by the OpenCode process ID, which a reload keeps, and
+  the first 32 hex characters of SHA-256 of the resolved directory; merged under
+  a flock with atomic rename, at most 64 entries, entries idle over 24 h
+  dropped). Another OpenCode process in the same directory never restores these
+  sessions. Files of OpenCode processes that no longer exist are removed at
+  startup.
   After every `hello` Rhizome sends `{"type":"restore","sessions":[...]}`; the
   plugin verifies each ID exactly like a prompt bind and answers with an ordinary
   `bind`, or `{"type":"unrestorable","sessionID":...}` when it is missing, a
-  child or another location's, which removes the entry. Only sessions a human
+  child or another location's; that removes the entry unless the session is
+  currently bound in this process. Only sessions a human
   prompt bound ever enter the store; `session.deleted` and idle eviction remove
   them, a shutdown keeps them. A restored session starts like a fresh bind
   (human turn state) and keeps its stored activity time.
