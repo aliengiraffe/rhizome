@@ -14,9 +14,12 @@ without gateway capability are not exported; older clients ignore gateway proxy
 advertisements. Keep MCP networking in its default local mode. Legacy
 shared-token LAN/Tailscale gossip remains available separately, but cannot be
 combined with gateway pairing in the same configuration. Bound OpenCode sessions
-(`agent_type: "opencode"`) are exported like Claude and Codex sessions; a paired
-host whose build predates OpenCode support rejects such a snapshot and drops the
-link, so upgrade both hosts before binding OpenCode sessions on a paired host.
+(`agent_type: "opencode"`) are exported like Claude and Codex sessions, but only
+over links whose websocket handshake negotiated the `rhizome.gateway.opencode.v1`
+subprotocol. A paired host whose build predates OpenCode support selects none, so
+the link stays up and that host sees only Claude and Codex sessions; upgrade both
+hosts to share OpenCode sessions. Without this negotiation such a host would
+reject the snapshot and drop the link.
 
 On each host, put the persistent settings in its existing TOML configuration:
 

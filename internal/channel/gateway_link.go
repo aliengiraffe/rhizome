@@ -2,10 +2,12 @@ package channel
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -25,6 +27,7 @@ type gatewayFrame struct {
 	Error      string            `json:"error,omitempty"`
 }
 type gatewayLink struct {
+	opencode     bool // the peer negotiated gatewaySubprotocolOpenCode
 	lastSnapshot time.Time
 	established  time.Time
 	stopOnce     sync.Once
@@ -107,7 +110,7 @@ func (g *gateway) attach(host string, c *websocket.Conn, outgoing bool) bool {
 		<-old.done
 	}
 	ctx, cancel := context.WithCancel(g.ctx)
-	l := &gatewayLink{lastSnapshot: time.Now(), established: time.Now(), g: g, host: host, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
+	l := &gatewayLink{opencode: c.Subprotocol() == gatewaySubprotocolOpenCode, lastSnapshot: time.Now(), established: time.Now(), g: g, host: host, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
 	g.mu.Lock()
 	if reason := g.attachRejection(host, outgoing, true); reason != "" {
 		g.mu.Unlock()
@@ -311,7 +314,7 @@ func (l *gatewayLink) advertise() {
 		sessions := []*pb.Identity{}
 		scanCtx, stopScan := context.WithTimeout(l.ctx, 3*time.Second)
 		for _, p := range logicalPeers(l.g.base.peers()) {
-			if !gatewayExportable(p) {
+			if !gatewayExportable(p) || !gatewayPeerAccepts(p, l.opencode) {
 				continue
 			}
 			// Probe before export: stale gossip never establishes remote authority.
@@ -622,6 +625,26 @@ func (p *gatewayProxy) close() {
 // gatewayExportable is the single export/access policy hook. Session privacy
 // (#37) must extend this predicate; paired peers currently see all bound local
 // sessions from bridge-capable processes, but never forwarded identities.
+// gatewaySubprotocolOpenCode is offered and selected on the link's websocket
+// handshake by builds whose snapshots may carry OpenCode sessions. Builds that
+// predate OpenCode support select no subprotocol and reject any snapshot
+// with an unknown agent type by dropping the link, so those peers never get
+// OpenCode sessions.
+const gatewaySubprotocolOpenCode = "rhizome.gateway.opencode.v1"
+
+func newGatewayUpgrader() *websocket.Upgrader {
+	return &websocket.Upgrader{HandshakeTimeout: 5 * time.Second, Subprotocols: []string{gatewaySubprotocolOpenCode}, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}
+}
+
+func newGatewayDialer(tlsCfg *tls.Config) *websocket.Dialer {
+	return &websocket.Dialer{TLSClientConfig: tlsCfg, HandshakeTimeout: 5 * time.Second, Proxy: nil, Subprotocols: []string{gatewaySubprotocolOpenCode}}
+}
+
+// gatewayPeerAccepts reports whether a snapshot sent to a peer may include p.
+func gatewayPeerAccepts(p *pb.Identity, opencode bool) bool {
+	return opencode || p.AgentType != "opencode"
+}
+
 func gatewayExportable(p *pb.Identity) bool {
 	return p != nil && p.SessionId != "" && p.GatewayHost == "" && p.GatewayVersion == 1
 }

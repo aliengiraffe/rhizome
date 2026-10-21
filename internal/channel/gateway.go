@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"golang.org/x/time/rate"
 	"rhizome/internal/config"
 	"rhizome/internal/localstate"
@@ -657,7 +656,7 @@ func (g *gateway) connect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "untrusted host", 403)
 		return
 	}
-	c, err := (&websocket.Upgrader{HandshakeTimeout: 5 * time.Second, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}).Upgrade(w, r, nil)
+	c, err := newGatewayUpgrader().Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
@@ -717,7 +716,7 @@ func (g *gateway) tryDial(host string) {
 		}()
 		ctx, cancel := context.WithTimeout(g.ctx, 5*time.Second)
 		defer cancel()
-		d := websocket.Dialer{TLSClientConfig: g.clientTLS(host), HandshakeTimeout: 5 * time.Second, Proxy: nil}
+		d := newGatewayDialer(g.clientTLS(host))
 		c, res, err := d.DialContext(ctx, "wss://"+p.Endpoint+"/v1/connect", nil)
 		if res != nil && res.Body != nil {
 			res.Body.Close()

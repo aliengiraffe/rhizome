@@ -619,3 +619,59 @@ func TestGatewayFailureClassification(t *testing.T) {
 		}
 	}
 }
+
+// TestGatewayOpenCodeNegotiation proves OpenCode sessions are exported only to
+// peers that negotiated the OpenCode subprotocol, in both dial directions;
+// builds that predate OpenCode select none and drop links over unknown agents.
+func TestGatewayOpenCodeNegotiation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		server   *websocket.Upgrader
+		dialer   func() *websocket.Dialer
+		wantOpen bool
+	}{
+		{"both new", newGatewayUpgrader(), func() *websocket.Dialer { return newGatewayDialer(nil) }, true},
+		{"old server", &websocket.Upgrader{}, func() *websocket.Dialer { return newGatewayDialer(nil) }, false},
+		{"old dialer", newGatewayUpgrader(), func() *websocket.Dialer { return &websocket.Dialer{} }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := make(chan string, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c, err := tc.server.Upgrade(w, r, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer c.Close()
+				server <- c.Subprotocol()
+			}))
+			defer srv.Close()
+			c, res, err := tc.dialer().Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			res.Body.Close()
+			for side, got := range map[string]string{"dialer": c.Subprotocol(), "server": <-server} {
+				if (got == gatewaySubprotocolOpenCode) != tc.wantOpen {
+					t.Fatalf("%s subprotocol %q, want opencode=%v", side, got, tc.wantOpen)
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayPeerAccepts(t *testing.T) {
+	for _, tc := range []struct {
+		agent    string
+		opencode bool
+		want     bool
+	}{
+		{"claude", false, true}, {"codex", false, true}, {"opencode", false, false},
+		{"claude", true, true}, {"codex", true, true}, {"opencode", true, true},
+	} {
+		if got := gatewayPeerAccepts(&pb.Identity{AgentType: tc.agent}, tc.opencode); got != tc.want {
+			t.Errorf("%s opencode=%v: got %v, want %v", tc.agent, tc.opencode, got, tc.want)
+		}
+	}
+}
