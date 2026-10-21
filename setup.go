@@ -72,9 +72,8 @@ func detectAgents(c config.Config, lookPath func(string) (string, error)) []agen
 		{Name: "claude", Label: "Claude Code", Skills: filepath.Join(claudeDir, "skills"), MCP: claudeGlobalConfig(claudeDir, home), Hooks: filepath.Join(claudeDir, "settings.json"), Binaries: []string{"claude"}},
 		{Name: "codex", Label: "Codex", Skills: filepath.Join(codexDir, "skills"), MCP: filepath.Join(codexDir, "config.toml"), Hooks: filepath.Join(codexDir, "hooks.json"), Binaries: []string{"codex"}},
 		{Name: "opencode", Label: "OpenCode", Skills: filepath.Join(openCodeDir, "skills"), Plugin: filepath.Join(openCodeDir, "plugins", "rhizome.js"), TUI: filepath.Join(openCodeDir, "plugins", "rhizome-tui", "tui.js"), Binaries: []string{"opencode"}},
-		// Setup installs only the skill for Cursor; the user merges examples/cursor/ into mcp.json and hooks.json.
 		// The Cursor CLI binary is `agent` (formerly `cursor-agent`); `cursor` is the IDE launcher.
-		{Name: "cursor", Label: "Cursor", Skills: filepath.Join(cursorDir, "skills"), Binaries: []string{"cursor", "agent", "cursor-agent"}},
+		{Name: "cursor", Label: "Cursor", Skills: filepath.Join(cursorDir, "skills"), MCP: filepath.Join(cursorDir, "mcp.json"), Hooks: filepath.Join(cursorDir, "hooks.json"), Binaries: []string{"cursor", "agent", "cursor-agent"}},
 	}
 	for i := range agents {
 		a := &agents[i]
@@ -312,7 +311,7 @@ func parseAgentFlag(value string, agents []agent) ([]bool, error) {
 
 func setup(args []string) error {
 	opts := flag.NewFlagSet("setup", flag.ContinueOnError)
-	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex, opencode, cursor) or \"all\": installs the skill, and for Claude and Codex also registers the MCP server and hooks at user scope (OpenCode: skill and plugins; its MCP entry is added by hand, see docs/opencode.md; Cursor: skill only, merge examples/cursor by hand, see docs/cursor.md); omit for an interactive picker")
+	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex, opencode, cursor) or \"all\": installs the skill, and for Claude, Codex and Cursor also registers the MCP server and hooks at user scope (OpenCode: skill and plugins; its MCP entry is added by hand, see docs/opencode.md); omit for an interactive picker")
 	config.Bind(opts, "runtime-dir", "gateway-mode", "gateway-listen", "gateway-advertise")
 	opts.Lookup("gateway-mode").Usage = "configure service-owned gateway pairing: off, lan or tailscale; requires local MCP networking"
 	opts.Lookup("gateway-listen").Usage = "gateway concrete listen IP:port; blank selects automatically"
@@ -361,8 +360,6 @@ func setup(args []string) error {
 			fmt.Printf("%-8s %-12s %s (%s)\n", a.Name, state, a.Skills, a.Reason)
 			if a.MCP != "" {
 				fmt.Printf("%-8s %-12s mcp %s; hooks %s\n", "", "", a.MCP, a.Hooks)
-			} else if a.Plugin == "" {
-				fmt.Printf("%-8s %-12s skill only; merge examples/%s into the agent's own configuration\n", "", "", a.Name)
 			}
 		}
 		return nil

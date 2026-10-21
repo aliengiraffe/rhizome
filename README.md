@@ -165,9 +165,11 @@ and peer events are injected at tool and turn boundaries (`additional_context`;
 the `stop` follow-up only with `[cursor] followup_delivery = true`). Each
 conversation gets its own node; several chats in one window need the
 `beforeMCPExecution` hook to attribute tool calls, otherwise they fail closed.
-Cursor logs are not indexed for history. This integration is verified with
-synthetic hook payloads only; see [Cursor setup, limitations and the live
-checklist](docs/cursor.md) and the samples in `examples/cursor/`.
+Cursor logs are not indexed for history. `rhizome setup --agents cursor`
+installs the skill, the MCP registration and the hooks under `~/.cursor`. This
+integration is verified with synthetic hook payloads only; see [Cursor setup,
+limitations and the live checklist](docs/cursor.md) and the samples in
+`examples/cursor/`.
 
 ## Claude setup
 
@@ -580,6 +582,7 @@ its plugins; its MCP entry is added by hand):
 | Claude Code | `mcpServers.rhizome` in `~/.claude.json` (or `<CLAUDE_CONFIG_DIR>/.claude.json`) | `hooks` in `<config dir>/settings.json` | `<config dir>/skills/rhizome-collab/` |
 | Codex | `[mcp_servers.rhizome]` in `<CODEX_HOME>/config.toml` | `<CODEX_HOME>/hooks.json` | `<CODEX_HOME>/skills/rhizome-collab/` |
 | OpenCode | not edited; add it by hand ([docs/opencode.md](docs/opencode.md)) | none; the plugins below relay events | `<config>/opencode/skills/rhizome-collab/` |
+| Cursor | `mcpServers.rhizome` in `<cursor dir>/mcp.json` | `<cursor dir>/hooks.json` (`version: 1`, shell commands running `rhizome hook --agent cursor`) | `<cursor dir>/skills/rhizome-collab/` |
 
 The registered command is the absolute path of the running `rhizome` executable
 with `mcp --agent <name>`, so keep that binary where it is or re-run setup after
@@ -588,8 +591,9 @@ with `--config`/`RHIZOME_CONFIG` (the default `~/.rhizome/config.toml` resolves
 at launch), and only if it exists. A non-default Claude config directory or
 Codex home is pinned in the entry's `env` (`CLAUDE_CONFIG_DIR`/`CODEX_HOME`),
 and a Codex executable found on PATH is pinned with `--codex-bin`. The token is
-never written anywhere. Hooks are the same definitions as `.claude/settings.json`
-and `examples/codex/hooks.json`. Setup resolves the destinations after the
+never written anywhere. Hooks are the same definitions as `.claude/settings.json`,
+`examples/codex/hooks.json` and `examples/cursor/hooks.json`; the Cursor hook
+command carries `--config` under the same rule, with paths shell-quoted. Setup resolves the destinations after the
 configuration questions, so directory answers apply to the same run.
 
 Writes are format-aware merges that touch only Rhizome's entries: other servers,

@@ -667,8 +667,8 @@ Not verified live. Cursor is installed on the development machine but no model
 turn was driven from the automated session. Run after installing or upgrading
 Cursor, and record the Cursor version:
 
-1. Merge `examples/cursor/{mcp.json,hooks.json}` with absolute paths, approve
-   the server, open one chat, submit a prompt, ask for `list_sessions`: expect
+1. Run `rhizome setup --agents cursor`, check `~/.cursor/mcp.json` and
+   `~/.cursor/hooks.json`, reload Cursor, approve the server, open one chat, submit a prompt, ask for `list_sessions`: expect
    `BOUND`, `agent_type: cursor`, `collection_state: hooks`,
    `delivery_mode: hook_pull`. Check `~/.rhizome/run/cursor/` holds one
    registration whose `roots` match the workspace after `roots/list`.

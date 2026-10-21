@@ -33,23 +33,27 @@ rather than through transport metadata.
 
 Build this checkout with `task build`, then:
 
-1. Merge `examples/cursor/mcp.json` into `~/.cursor/mcp.json` (or a project's
-   `.cursor/mcp.json`), replacing the command with the **absolute path** of the
-   built binary. Approve the server in the IDE's MCP settings; for the CLI run
-   `agent mcp enable rhizome` or pass `--approve-mcps`.
-2. Merge the hook groups from `examples/cursor/hooks.json` into
-   `~/.cursor/hooks.json` (`version: 1`), again with the absolute binary path.
-   Every entry runs `rhizome hook --agent cursor`, is non-blocking
-   (`failClosed: false`, 10 s timeout) and the `stop` entry sets `loop_limit: 1`.
-   Do not install the same hooks at both user and project scope.
-3. Install the collaboration skill: `./rhizome setup --agents cursor` writes
-   `~/.cursor/skills/rhizome-collab/SKILL.md`. Setup detects Cursor from
-   `~/.cursor` (or `[cursor].config_dir`) or a `cursor`, `agent` or
-   `cursor-agent` executable on PATH. Setup never writes Cursor's `mcp.json` or
-   `hooks.json`; merge them yourself and back them up first.
-4. If Rhizome's `runtime_dir` or configuration file is non-default, the hook
-   must see the same `RHIZOME_CONFIG`/`RHIZOME_RUNTIME_DIR` as the MCP server:
-   hooks resolve configuration exactly like every other command.
+1. Run `./rhizome setup --agents cursor` (or pick Cursor in the interactive
+   picker). Setup detects Cursor from `~/.cursor` (or `[cursor].config_dir`) or
+   a `cursor`, `agent` or `cursor-agent` executable on PATH, and installs at
+   user scope: the skill (`~/.cursor/skills/rhizome-collab/SKILL.md`), the
+   `rhizome` stdio server in `~/.cursor/mcp.json` (absolute binary path,
+   `mcp --agent cursor`), and the eight hook entries in `~/.cursor/hooks.json`
+   (`version: 1`). Every hook entry runs `<binary> hook --agent cursor`, is
+   non-blocking (`failClosed: false`, 10 s timeout); `beforeMCPExecution` has
+   `matcher: "rhizome"` and `stop` sets `loop_limit: 1`. The merge touches only
+   Rhizome's entries, keeps other servers and hooks, backs up changed files as
+   `<file>.bak-<timestamp>` and refuses to replace malformed files. The same
+   definitions are in `examples/cursor/` for a manual merge or a project-scope
+   `.cursor/` install; do not keep the same hooks at both scopes.
+2. Approve the server in the IDE's MCP settings; for the CLI run
+   `agent mcp enable rhizome` or pass `--approve-mcps`. Reload Cursor so it
+   reads the new hooks.
+3. If Rhizome's configuration file was selected explicitly
+   (`--config`/`RHIZOME_CONFIG`), setup threads `--config <path>` into both the
+   server entry and the hook command; otherwise hooks and the server resolve
+   the default `~/.rhizome/config.toml` at launch, exactly like every other
+   command.
 
 Open a chat, submit a prompt and ask Cursor to call `list_sessions`. Expect
 `binding: BOUND`, `collection_state: hooks` and `delivery_mode: hook_pull`.
