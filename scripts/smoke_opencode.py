@@ -90,15 +90,21 @@ def main():
         subprocess.run(['git', '-c', 'user.name=rz', '-c', 'user.email=rz@local', '-c', 'commit.gpgsign=false',
                         'commit', '--allow-empty', '-m', 'init', '-q'], cwd=project, check=True)
         shutil.copy(ROOT / 'plugins' / 'opencode' / 'rhizome.js', config / 'plugins' / 'rhizome.js')
+        # Isolate both Rhizome processes from the developer's ~/.rhizome/config.toml
+        # (network mode, gateway, hostname); the peer Client reuses this file.
+        rhizome_config = tmp / 'smoke-config.toml'
+        rhizome_config.touch(mode=0o600)
+        rhizome_config.write_text('hostname = "Smoke device"\n')
         (config / 'opencode.json').write_text(json.dumps({
             '$schema': 'https://opencode.ai/config.json',
             'model': args.model,
             'mcp': {'servers': {'rhizome': {'type': 'local', 'command': [str(ROOT / 'rhizome'), 'mcp', '--agent', 'opencode'],
-                                            'environment': {'RHIZOME_RUNTIME_DIR': str(run)}}}},
+                                            'environment': {'RHIZOME_RUNTIME_DIR': str(run), 'RHIZOME_CONFIG': str(rhizome_config)}}}},
             'permissions': [{'action': a, 'resource': '*', 'effect': 'deny'} for a in DENY],
         }))
         env = {**os.environ, 'XDG_CONFIG_HOME': str(tmp / 'config'), 'XDG_STATE_HOME': str(tmp / 'state'),
                'XDG_CACHE_HOME': str(tmp / 'cache'), 'RHIZOME_RUNTIME_DIR': str(run),
+               'RHIZOME_CONFIG': str(rhizome_config),
                # OpenCode takes its location from PWD; an inherited PWD would put the
                # disposable sessions in the caller's directory instead of the temp repo.
                'PWD': str(project)}
