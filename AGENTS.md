@@ -25,7 +25,7 @@ Start with [README.md](README.md) for behavior and setup,
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
 | `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`), and the OpenCode bridge (`opencode*.go`). |
-| `plugins/` | Embedded OpenCode relay plugin; relay only, no decisions. |
+| `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests. |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
@@ -200,7 +200,7 @@ a real tailnet; the two-device Tailscale checklist in
   metadata to avoid leaking session content (`internal/channel/transcript.go`,
   `internal/channel/codex_collect.go`, `internal/channel/opencode_collect.go`,
   `internal/channel/opencode.go`, `internal/channel/name.go`,
-  `plugins/opencode/rhizome.js`).
+  `plugins/opencode/rhizome.js`, `plugins/opencode/rhizome-tui.js`).
 - **Peer-only turns must not trigger feedback loops.** Preserve filtering,
   suppression, rate limits, and circuit breakers; never republish received
   envelopes (`internal/channel/transcript.go`, `internal/channel/codex_collect.go`,
@@ -225,7 +225,11 @@ a real tailnet; the two-device Tailscale checklist in
   256-frame plugin buffer, 256 pending inputs, 512-frame manager queue, 16 KiB
   text, 5 s acknowledgement, 64 sessions, 24 h idle
   (`internal/channel/opencode*.go`, `plugins/opencode/rhizome.js`,
-  [docs/opencode.md](docs/opencode.md)).
+  [docs/opencode.md](docs/opencode.md)). Peer deliveries stay synthetic, never
+  prompts. The TUI plugin (`plugins/opencode/rhizome-tui.js`, installed by setup
+  as `plugins/rhizome-tui/tui.js`) is display-only: it toasts a sanitized,
+  200-character excerpt of enqueued Rhizome-envelope synthetic items for its own
+  directory's sessions and never decides, sends, opens sockets or files, or logs.
 - **Coordinate collection across processes.** Direct integrations acquire the
   per-session OS lease before baselining. Passive scans yield and expose handoff
   gaps. Never route delivery to `observation_only` identities or replay another

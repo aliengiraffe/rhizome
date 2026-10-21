@@ -36,12 +36,20 @@ const skillName = "rhizome-collab"
 //go:embed plugins/opencode/rhizome.js
 var openCodePlugin []byte
 
+// openCodeTUIPlugin is the display-only OpenCode TUI plugin that shows a toast
+// for Rhizome peer deliveries, which the TUI otherwise hides as synthetic
+// input. OpenCode loads TUI plugins from <config>/plugins/<name>/tui.js.
+//
+//go:embed plugins/opencode/rhizome-tui.js
+var openCodeTUIPlugin []byte
+
 // agent is a coding agent Rhizome knows how to serve and where it loads skills.
 type agent struct {
 	Name     string // CLI/flag identifier: claude, codex, opencode
 	Label    string // human-readable name
 	Skills   string // directory that holds <skill>/SKILL.md
 	Plugin   string // OpenCode plugin destination; empty for other agents
+	TUI      string // OpenCode TUI plugin destination; empty for other agents
 	Detected bool
 	Reason   string // why it was (not) detected
 }
@@ -54,7 +62,7 @@ func detectAgents(c config.Config, lookPath func(string) (string, error)) []agen
 	agents := []agent{
 		{Name: "claude", Label: "Claude Code", Skills: filepath.Join(claudeDir, "skills")},
 		{Name: "codex", Label: "Codex", Skills: filepath.Join(codexDir, "skills")},
-		{Name: "opencode", Label: "OpenCode", Skills: filepath.Join(openCodeDir, "skills"), Plugin: filepath.Join(openCodeDir, "plugins", "rhizome.js")},
+		{Name: "opencode", Label: "OpenCode", Skills: filepath.Join(openCodeDir, "skills"), Plugin: filepath.Join(openCodeDir, "plugins", "rhizome.js"), TUI: filepath.Join(openCodeDir, "plugins", "rhizome-tui", "tui.js")},
 	}
 	for i := range agents {
 		a := &agents[i]
@@ -134,16 +142,16 @@ func installSkill(skillsDir string) (string, error) {
 	return status, nil
 }
 
-// installPlugin writes the embedded OpenCode plugin to dest and returns
+// installPlugin writes an embedded OpenCode plugin file to dest and returns
 // "installed", "updated", "unchanged" or "skipped (symlink to …)".
-func installPlugin(dest string) (string, error) {
+func installPlugin(dest string, content []byte) (string, error) {
 	if st, err := os.Lstat(dest); err == nil && st.Mode()&os.ModeSymlink != 0 {
 		target, _ := os.Readlink(dest)
 		return "skipped (symlink to " + target + ")", nil
 	}
 	have, err := os.ReadFile(dest)
 	switch {
-	case err == nil && bytes.Equal(have, openCodePlugin):
+	case err == nil && bytes.Equal(have, content):
 		return "unchanged", nil
 	case err != nil && !errors.Is(err, fs.ErrNotExist):
 		return "", err
@@ -155,7 +163,7 @@ func installPlugin(dest string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(dest, openCodePlugin, 0o644); err != nil {
+	if err := os.WriteFile(dest, content, 0o644); err != nil {
 		return "", err
 	}
 	return status, nil
@@ -381,11 +389,18 @@ func setup(args []string) error {
 		}
 		fmt.Printf("%s: %s %s\n", a.Label, status, filepath.Join(a.Skills, skillName))
 		if a.Plugin != "" {
-			status, err := installPlugin(a.Plugin)
+			status, err := installPlugin(a.Plugin, openCodePlugin)
 			if err != nil {
 				return fmt.Errorf("%s plugin: %w", a.Label, err)
 			}
 			fmt.Printf("%s: %s %s\n", a.Label, status, a.Plugin)
+		}
+		if a.TUI != "" {
+			status, err := installPlugin(a.TUI, openCodeTUIPlugin)
+			if err != nil {
+				return fmt.Errorf("%s TUI plugin: %w", a.Label, err)
+			}
+			fmt.Printf("%s: %s %s\n", a.Label, status, a.TUI)
 		}
 	}
 	if !any && !configOnly {
