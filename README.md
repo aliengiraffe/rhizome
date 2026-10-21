@@ -143,10 +143,13 @@ channel policy still applies. The development flag requires an **interactive**
 terminal; `claude -p` does not enable it. See the
 [Claude channel reference](https://code.claude.com/docs/en/channels-reference).
 
-For another project, merge the `rhizome` server entry and hook entries into that
-project's configuration. Set `command` to the **absolute path** of your built
-Rhizome binary. Preserve existing MCP servers and hooks. Do not change the server
-key unless you also update the hook server name, tool exclusions and channel flag.
+For every other project, `./rhizome setup --agents claude` registers the server
+at user scope (`~/.claude.json`) and installs the same hooks in
+`~/.claude/settings.json`; see [Installing into agents](#installing-into-agents).
+A project `.mcp.json` entry named `rhizome` takes precedence over the user-scope
+one, and project hooks run in addition to user hooks, so keep the Rhizome hooks
+in one place. Do not change the server key unless you also update the hook server
+name, tool exclusions and channel flag.
 
 The process starts **UNBOUND**. Initial `SessionStart` is skipped by Claude because
 its MCP clients are not yet available; Claude 2.1.302 displays a non-blocking hook
@@ -491,13 +494,16 @@ fingerprints never decide it, and a remote session is never assumed to belong
 to another person. History without `host_id` covers this device only. Evaluation
 cases are in [docs/collab-skill-evals.md](docs/collab-skill-evals.md).
 
-The skill is embedded in the binary; install it with:
+The skill is embedded in the binary and installed by `rhizome setup` together
+with the agent's MCP registration and hooks.
+
+### Installing into agents
 
 ```sh
 ./rhizome setup                     # interactive: pick agents with a checkbox list
 ./rhizome setup --agents all        # select every agent; terminal still asks config questions
 ./rhizome setup --agents claude     # or codex, or claude,codex
-./rhizome setup --list              # show what was detected and where skills go
+./rhizome setup --list              # read-only: detected agents and destinations
 ./rhizome setup --plain             # original line/picker prompts
 ```
 
@@ -505,16 +511,50 @@ Setup detects Claude Code (`$CLAUDE_CONFIG_DIR` or `~/.claude`, or `claude` on
 PATH) and Codex (`$CODEX_HOME` or `~/.codex`, or `codex` on PATH). The picker
 pre-selects detected agents; space toggles one, `a` toggles all, enter confirms.
 Without a terminal, `--agents` is required (unless only writing configuration with
-`--network`, below). The skill is written to
-`<agent dir>/skills/rhizome-collab/SKILL.md`; re-running setup updates it in
-place after upgrading Rhizome (`rhizome setup --agents all` refreshes an installed
-copy and reports `unchanged` when it is current). An existing symlink at that path is left alone, so
-a development checkout can still be linked instead:
+`--network`, below). For each selected agent, setup installs three things at
+**user scope**, so the agent finds Rhizome in every project:
+
+| Agent | MCP registration | Hooks | Skill |
+| --- | --- | --- | --- |
+| Claude Code | `mcpServers.rhizome` in `~/.claude.json` (or `<CLAUDE_CONFIG_DIR>/.claude.json`) | `hooks` in `<config dir>/settings.json` | `<config dir>/skills/rhizome-collab/` |
+| Codex | `[mcp_servers.rhizome]` in `<CODEX_HOME>/config.toml` | `<CODEX_HOME>/hooks.json` | `<CODEX_HOME>/skills/rhizome-collab/` |
+
+The registered command is the absolute path of the running `rhizome` executable
+with `mcp --agent <name>`, so keep that binary where it is or re-run setup after
+moving it. `--config <absolute path>` is added only when the file was selected
+with `--config`/`RHIZOME_CONFIG` (the default `~/.rhizome/config.toml` resolves
+at launch), and only if it exists. A non-default Claude config directory or
+Codex home is pinned in the entry's `env` (`CLAUDE_CONFIG_DIR`/`CODEX_HOME`),
+and a Codex executable found on PATH is pinned with `--codex-bin`. The token is
+never written anywhere. Hooks are the same definitions as `.claude/settings.json`
+and `examples/codex/hooks.json`. Setup resolves the destinations after the
+configuration questions, so directory answers apply to the same run.
+
+Writes are format-aware merges that touch only Rhizome's entries: other servers,
+hooks, matchers, preferences and credentials are kept, a changed file is first
+copied to `<file>.bak-<timestamp>`, and a symlinked file is edited through the
+link. A malformed file is reported and left untouched, and a failed write keeps
+the original. Re-running setup is idempotent: it repairs a stale registration
+(for example after moving the binary), refreshes the skill after an upgrade
+(`unchanged` when current), never duplicates hooks, and does not rewrite or back
+up a file that needs no change. An existing skill symlink is left alone, so a
+development checkout can still be linked instead:
 
 ```sh
 ln -s "$PWD/skills/rhizome-collab" ~/.claude/skills/rhizome-collab   # Claude Code
 ln -s "$PWD/skills/rhizome-collab" ~/.codex/skills/rhizome-collab    # Codex
 ```
+
+Setup reports each file and backup, then the steps it cannot do for you:
+
+- **Claude Code**: restart it and start with
+  `claude --dangerously-load-development-channels server:rhizome`; accept the
+  channel and hook prompts. Project `.mcp.json` entries named `rhizome` override
+  the user-scope entry; project hooks run in addition, so remove the Rhizome
+  hooks from a project (this checkout ships them) or from
+  `~/.claude/settings.json`. Setup never edits projects.
+- **Codex**: start a fresh session, review the Rhizome hooks in `/hooks` and
+  trust them. Do not keep the same hooks at project scope.
 
 Then run `/rhizome-collab` in the agent with an optional task description.
 
@@ -558,9 +598,11 @@ backed up first (`config.toml.bak-<timestamp>`). Without a terminal, pass the ty
 ./rhizome setup --network lan --replace-config   # back up and replace an existing file
 ```
 
-Combine with `--agents` to also install the skill. Without a terminal and without
-`--network`, setup installs skills as before, leaves configuration untouched and
-says so on stderr.
+Combine with `--agents` to also install the selected agents; the configuration
+is written first so its directories decide the destinations. Without a terminal
+and without `--network`, setup installs the selected agents, leaves configuration
+untouched and says so on stderr; it refuses to register an explicit `--config`
+file that does not exist yet.
 
 Bare `rhizome service` opens [service management](docs/service.md#terminal-interface)
 on usable terminals. `rhizome service status --tui` and

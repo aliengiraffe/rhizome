@@ -18,7 +18,8 @@ Start with [README.md](README.md) for behavior and setup,
 
 | Path | Responsibility |
 | --- | --- |
-| `main.go`, `service.go`, `gateway.go`, `files.go` | CLI dispatch, MCP, setup, service lifecycle and legacy demo. |
+| `main.go`, `service.go`, `gateway.go`, `files.go` | CLI dispatch, MCP, service lifecycle and legacy demo. |
+| `setup.go`, `setup_config.go`, `setup_agents.go` | `rhizome setup`: agent detection and picker, the configuration wizard, and user-scope skill/MCP/hook installation. |
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
@@ -157,6 +158,21 @@ See README, [service](docs/service.md#terminal-interface), and
   them before expiry, disconnection, or service restart. See [docs/files.md](docs/files.md).
   Run the gateway smoke for file changes; tests cover byte integrity and boundaries.
 
+- **Setup installs agents at user scope through Rhizome-owned merges.**
+  `rhizome setup --agents` (or the picker) installs, per supported agent, the
+  skill, the MCP registration and the binding hooks: Claude in
+  `~/.claude.json` (`<CLAUDE_CONFIG_DIR>/.claude.json` for a non-default
+  directory) plus `<config dir>/settings.json`, Codex in `<CODEX_HOME>/config.toml`
+  plus `hooks.json`. The entry is the absolute executable with `mcp --agent
+  <name>`, `--config` only for an explicit existing file, `--codex-bin` when
+  resolvable, and the agent home in `env` only when non-default; never a token.
+  Hook templates in `setup_agents.go` must equal `.claude/settings.json` and
+  `examples/codex/hooks.json` (tested). Merges touch only Rhizome entries,
+  keep everything else, back up changed files as `<file>.bak-<timestamp>`,
+  follow symlinks, reject malformed files without replacing them and skip
+  unchanged files. Configuration is written before installs so wizard
+  directories apply. Project files, `--list` and `--network`-only runs never
+  install anything; remaining restart/trust/channel steps are printed.
 - **Hostnames are display labels.** Shared top-level `hostname` is written by
   the setup prompt or `setup --network ... --hostname ...`. Blank clears an
   override and uses the OS short hostname in every mode, including Tailscale.

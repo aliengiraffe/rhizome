@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -43,6 +46,9 @@ type setupModel struct {
 	installService                      func(context.Context, string) error
 	apply                               func(context.Context) setupResult
 	probe                               func(context.Context) error
+	explicit                            bool                                        // configuration selected with --config/RHIZOME_CONFIG
+	reload                              func() (config.Config, error)               // re-resolves after the file is written
+	installAgent                        func(config.Config, agent, io.Writer) error // skill, MCP registration and hooks for one agent
 }
 
 func newSetupModel(c config.Config, path string, agents []agent, checked []bool, answers *configAnswers, replace bool) *setupModel {
@@ -63,6 +69,7 @@ func newSetupModel(c config.Config, path string, agents []agent, checked []bool,
 		return service.ManageQuiet(ctx, "install", service.FromConfig(c))
 	}
 	m.apply = m.applyAnswers
+	m.installAgent = m.defaultAgentInstaller
 	return m
 }
 func (m *setupModel) fields() []wizardField {
@@ -393,43 +400,36 @@ func (m *setupModel) applyAnswers(ctx context.Context) setupResult {
 	if err := m.validate(); err != nil {
 		return fail(err)
 	}
-	for i, a := range m.agents {
-		if !m.checked[i] {
-			continue
-		}
-		if err := ctx.Err(); err != nil {
-			return fail(err)
-		}
-		status, err := installSkill(a.Skills)
-		if err != nil {
-			return fail(fmt.Errorf("%s skill: %w", a.Label, err))
-		}
-		r.steps = append(r.steps, a.Label+": "+safeText(status))
-	}
 	a, err := m.answers()
 	if err != nil {
 		return fail(err)
 	}
+	// Configuration first: directory answers decide where agents are installed.
+	wrote := false
 	if a == nil || m.fixedAnswers != nil && m.exists && !m.replace {
 		r.steps = append(r.steps, "Kept configuration")
-		return r
+	} else {
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
+		body, err := a.render()
+		if err != nil {
+			return fail(err)
+		}
+		backup, err := writeConfig(m.path, body, m.exists && (m.replace || m.values["existing"] == "replace"), time.Now())
+		if backup != "" {
+			r.steps = append(r.steps, "Backed up "+safeText(backup))
+		}
+		if err != nil {
+			return fail(err)
+		}
+		wrote = true
+		r.steps = append(r.steps, "Wrote "+safeText(m.path))
 	}
-	if err := ctx.Err(); err != nil {
+	if err := m.installAgents(ctx, &r, wrote); err != nil {
 		return fail(err)
 	}
-	body, err := a.render()
-	if err != nil {
-		return fail(err)
-	}
-	backup, err := writeConfig(m.path, body, m.exists && (m.replace || m.values["existing"] == "replace"), time.Now())
-	if backup != "" {
-		r.steps = append(r.steps, "Backed up "+safeText(backup))
-	}
-	if err != nil {
-		return fail(err)
-	}
-	r.steps = append(r.steps, "Wrote "+safeText(m.path))
-	if m.values["service"] == "yes" {
+	if wrote && m.values["service"] == "yes" {
 		if err := ctx.Err(); err != nil {
 			return fail(err)
 		}
@@ -443,6 +443,62 @@ func (m *setupModel) applyAnswers(ctx context.Context) setupResult {
 		r.steps = append(r.steps, "Installed background service")
 	}
 	return r
+}
+
+// installAgents installs the skill, MCP registration and hooks for every checked
+// agent, reporting each file through r.steps. When the configuration was just
+// written it is re-read so the installs see its directories.
+func (m *setupModel) installAgents(ctx context.Context, r *setupResult, reload bool) error {
+	selected := false
+	for _, ok := range m.checked {
+		selected = selected || ok
+	}
+	if !selected {
+		return nil
+	}
+	c, agents := m.c, m.agents
+	if reload && m.reload != nil {
+		var err error
+		if c, err = m.reload(); err != nil {
+			return err
+		}
+		agents = detectAgents(c, exec.LookPath)
+	}
+	for i, a := range agents {
+		if !m.checked[i] {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var out bytes.Buffer
+		err := m.installAgent(c, a, &out)
+		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			if line = strings.TrimSpace(line); line != "" && !strings.HasSuffix(line, ":") {
+				r.steps = append(r.steps, a.Label+": "+safeText(line))
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// defaultAgentInstaller installs one agent with the running executable.
+func (m *setupModel) defaultAgentInstaller(c config.Config, a agent, out io.Writer) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if exe, err = filepath.Abs(exe); err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	return agentInstaller{exe: exe, home: home, c: c, explicit: m.explicit, lookPath: exec.LookPath, now: time.Now, out: out}.install(a)
 }
 func runSetupTUI(m *setupModel) error {
 	_, err := tea.NewProgram(m, tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout), tea.WithAltScreen()).Run()
