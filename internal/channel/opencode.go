@@ -507,6 +507,11 @@ func RunOpenCode(c config.Config, o Options) error {
 	if err != nil {
 		return err
 	}
+	if c.Sources["runtime_dir"] == "file" {
+		// The plugin cannot read config.toml: it finds the socket only through
+		// RHIZOME_RUNTIME_DIR in OpenCode's environment or the default directory.
+		slog.Warn("opencode_runtime_from_config", "hint", "set RHIZOME_RUNTIME_DIR to the same runtime_dir in the OpenCode environment, or the plugin cannot reach this process")
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
