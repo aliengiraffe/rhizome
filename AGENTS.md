@@ -213,20 +213,19 @@ a real tailnet; the two-device Tailscale checklist in
   [docs/codex.md](docs/codex.md)). OpenCode's only write is `synthetic` delivery.
 - **OpenCode identity comes only from `_meta["ai.opencode/sessionID"]`, and binding
   only from the plugin bridge.** Never add `observe_session` to OpenCode mode. The
-  plugin relays allowlisted events and executes deliveries; all filtering stays in
-  Go, and it relays only sessions of its own directory (re-binding them after
-  each reconnect). OpenCode mode shares the configuration/`[network]` resolution
-  and every other tool (12 versus 13), and each bound session holds the
-  collection lease. The plugin finds the socket only via `RHIZOME_RUNTIME_DIR`
-  or the default runtime directory, never `config.toml`. Across OpenCode
-  instance reloads Go restores bindings from a persisted list keyed by OpenCode
-  PID plus location like the socket (`<runtime>/opencode-bindings/`, 0600, 64
-  entries, 24 h idle, dead-PID files removed) holding only sessions a human prompt bound; the plugin re-verifies
-  each before binding, and an exiting process never unlinks a successor's
-  socket. Bridge limits: 64 KiB frames, 256-frame plugin buffer, 256
-  pending plugin inputs, 512-frame manager queue, 16 KiB text, 5 s
-  acknowledgement, 64 sessions, 24 h idle (`internal/channel/opencode*.go`,
-  `plugins/opencode/rhizome.js`, [docs/opencode.md](docs/opencode.md)).
+  plugin relays allowlisted events of its own directory's sessions and executes
+  deliveries; all filtering stays in Go. OpenCode mode shares configuration,
+  `[network]` and the other 12 tools. Each bound session holds the collection
+  lease; on an instance reload the predecessor releases leases once a successor
+  owns the socket (never unlinking it), and the successor retries busy binds for
+  at most 10 s; the plugin re-binds its sessions after every reconnect. Bindings
+  persist in `<runtime>/opencode-bindings/` (0600, 64 entries, 24 h idle, only
+  human-prompt binds, re-verified by the plugin). The plugin finds the socket via
+  `RHIZOME_RUNTIME_DIR` or the default only. Bridge limits: 64 KiB frames,
+  256-frame plugin buffer, 256 pending inputs, 512-frame manager queue, 16 KiB
+  text, 5 s acknowledgement, 64 sessions, 24 h idle
+  (`internal/channel/opencode*.go`, `plugins/opencode/rhizome.js`,
+  [docs/opencode.md](docs/opencode.md)).
 - **Coordinate collection across processes.** Direct integrations acquire the
   per-session OS lease before baselining. Passive scans yield and expose handoff
   gaps. Never route delivery to `observation_only` identities or replay another

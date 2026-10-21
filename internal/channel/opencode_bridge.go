@@ -314,6 +314,13 @@ func (b *bridge) deliver(ctx context.Context, sessionID, text string) error {
 	}
 }
 
+// owned reports whether the socket path still names the socket this bridge
+// created; an instance reload's successor replaces it.
+func (b *bridge) owned() bool {
+	st, err := os.Lstat(b.path)
+	return err == nil && os.SameFile(st, b.sock)
+}
+
 // close stops accepting, closes the connection, waits for goroutines and removes
 // the socket file if it is still the one this bridge created.
 func (b *bridge) close() {
@@ -326,7 +333,7 @@ func (b *bridge) close() {
 		c.Close()
 	}
 	b.wg.Wait()
-	if st, err := os.Lstat(b.path); err != nil || !os.SameFile(st, b.sock) {
+	if !b.owned() {
 		return // gone, or replaced by a successor process
 	}
 	if err := os.Remove(b.path); err != nil && !os.IsNotExist(err) {

@@ -43,7 +43,9 @@ file-transfer tools (`send_file`, `list_files`, `accept_file`, `cancel_file`;
 paired hosts only, see [file transfers](files.md)) and the read-only history
 tools (`search_sessions`, `read_session_history`), which serve the local Claude
 and Codex catalog: OpenCode sessions are not indexed by the history catalog or
-observed by the background service.
+observed by the background service. Because every tool needs a bound caller,
+the history tools return `CALLER_UNVERIFIED` (`UNBOUND`) until the session's
+first human prompt, unlike Codex mode.
 
 ## Identity and binding
 
@@ -78,7 +80,11 @@ observed by the background service.
   (human turn state) and keeps its stored activity time.
 - Each bound session holds the per-session collection lease (see
   [service.md](service.md)) for its lifetime, so a second Rhizome process cannot
-  collect the same session; its bind fails closed until the first retires it.
+  collect the same session. During an instance reload the predecessor retires
+  its sessions (keeping store entries) as soon as its plugin is gone and a
+  successor owns the socket path; the successor retries a bind that finds the
+  lease busy with doubling delays for up to 10 s, then fails closed and keeps the
+  store entry for the next prompt or reload.
 - There is no `observe_session` in OpenCode mode; never invent an ID.
 - Without the plugin (or before the first prompt) tools return `UNBOUND` with a
   setup hint.

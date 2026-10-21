@@ -214,7 +214,7 @@ full-text search; histories are not transcripts.
 | `CURSOR_EXPIRED` | Snapshot released, expired, evicted, or issued by another process. | Run a fresh initial query. |
 | `SOURCE_CHANGED` | File identity or EOF bytes changed between pages, or the catalog now records another file. | Run a fresh initial read. |
 | `RESOURCE_LIMIT` | Concurrency limit, or the deadline/cancellation arrived before any progress. | Yes. |
-| `CALLER_UNVERIFIED` | Codex mode without a verified `_meta.threadId`. | After updating Codex. |
+| `CALLER_UNVERIFIED` | Codex mode without a verified `_meta.threadId`; OpenCode mode without a verified `_meta["ai.opencode/sessionID"]` or before the session's first human prompt binds it (message starts `UNBOUND`). | After updating the agent, or after the first prompt. |
 | `REMOTE_HISTORY_DISABLED`, `POLICY_DENIED`, `REMOTE_HISTORY_UNSUPPORTED`, `PEER_UNAVAILABLE`, `GATEWAY_UNAVAILABLE` | Paired-host requests only; see [Paired-host history](#paired-host-history-opt-in). | `PEER_UNAVAILABLE` and `GATEWAY_UNAVAILABLE` after reconnecting or starting the service. |
 
 ## Examples

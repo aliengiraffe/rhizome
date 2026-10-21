@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"rhizome/internal/localstate"
 	pb "rhizome/proto"
 )
 
@@ -160,6 +162,131 @@ func TestOpenCodeCollectionLease(t *testing.T) {
 	if other.sessions["ses_a"] == nil {
 		t.Fatal("lease not released when the session was retired")
 	}
+	other.close()
+	m.handle(bindFrame("ses_a", "", dir, ""))
+	if m.sessions["ses_a"] == nil {
+		t.Fatal("lease not released on shutdown")
+	}
+}
+
+func pendingRetry(m *openCodeNodes, sid string) bool {
+	m.frameMu.Lock()
+	defer m.frameMu.Unlock()
+	return m.retries[sid] != nil
+}
+
+func boundIn(m *openCodeNodes, sid string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[sid] != nil
+}
+
+// An instance reload's successor restores a session while the predecessor
+// still holds its collection lease: the bind retries until the lease is free.
+func TestOpenCodeRestoreBindWaitsForLease(t *testing.T) {
+	old, runtime := openCodeManager(t)
+	dir := shortDir(t)
+	old.handle(bindFrame("ses_a", "", dir, ""))
+	if !boundIn(old, "ses_a") {
+		t.Fatal("predecessor did not bind")
+	}
+	now := time.Now()
+	next := newOpenCodeNodes(context.Background(), runtime)
+	next.store = testStore(t, runtime, dir, &now)
+	next.retryBase = 5 * time.Millisecond
+	t.Cleanup(next.close)
+	next.frame(bindFrame("ses_a", "", dir, "")) // restore answer from the fresh plugin
+	eventually(t, func() bool { return pendingRetry(next, "ses_a") })
+	if boundIn(next, "ses_a") {
+		t.Fatal("bound while the predecessor held the lease")
+	}
+	old.frameMu.Lock()
+	old.retire("ses_a", "shutdown")
+	old.frameMu.Unlock()
+	eventually(t, func() bool { return boundIn(next, "ses_a") })
+	if pendingRetry(next, "ses_a") {
+		t.Fatal("retry left pending after bind")
+	}
+}
+
+// When the lease never frees, the bind fails closed within the bound and the
+// store entry survives for the next prompt or reload.
+func TestOpenCodeRestoreBindGivesUp(t *testing.T) {
+	old, runtime := openCodeManager(t)
+	dir := shortDir(t)
+	old.handle(bindFrame("ses_a", "", dir, ""))
+	now := time.Now()
+	next := newOpenCodeNodes(context.Background(), runtime)
+	next.store = testStore(t, runtime, dir, &now)
+	next.store.touch("ses_a", now)
+	if err := next.store.flush(); err != nil {
+		t.Fatal(err)
+	}
+	next.retryBase, next.retryMax = 5*time.Millisecond, 40*time.Millisecond
+	t.Cleanup(next.close)
+	next.frame(bindFrame("ses_a", "", dir, ""))
+	eventually(t, func() bool { return pendingRetry(next, "ses_a") })
+	eventually(t, func() bool { return !pendingRetry(next, "ses_a") })
+	if boundIn(next, "ses_a") {
+		t.Fatal("bound a session another process still collects")
+	}
+	if ids := storedIDs(t, next.store); strings.Join(ids, ",") != "ses_a" {
+		t.Fatalf("store entry lost after failed restore: %v", ids)
+	}
+}
+
+// After the plugin disconnects, sessions are retired (releasing leases) only
+// once a successor owns the socket path; a same-instance reconnect keeps them.
+func TestOpenCodeHandoverReleasesLeases(t *testing.T) {
+	m, runtime := openCodeManager(t)
+	checks := make(chan bool, 64)
+	m.onHandover = func(retired bool) { checks <- retired }
+	path := filepath.Join(runtime, "h.sock")
+	b, err := listenBridge(path, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.bridge = b
+	b.start()
+	t.Cleanup(b.close)
+	dir := shortDir(t)
+	p := dialPlugin(t, path, true)
+	p.send(t, bindFrame("ses_a", "", dir, ""))
+	eventually(t, func() bool { return boundIn(m, "ses_a") })
+
+	// Same instance: the socket is still ours, so the session stays bound.
+	p.c.Close()
+	if retired := recv(t, checks); retired || !boundIn(m, "ses_a") {
+		t.Fatal("session retired although the socket is still owned")
+	}
+	p2 := dialPlugin(t, path, true)
+	eventually(t, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.pluginUp })
+
+	// Reload: a successor replaces the socket path, then the plugin goes away.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	successor, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { successor.Close() })
+	p2.c.Close()
+	for retired := false; !retired; {
+		retired = recv(t, checks)
+	}
+	if boundIn(m, "ses_a") {
+		t.Fatal("session kept after the socket was taken over")
+	}
+	lock, _, err := ownershipPaths(runtime, "ses_a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := localstate.Lock(lock, false)
+	if err != nil {
+		t.Fatalf("lease still held after handover: %v", err)
+	}
+	f.Close()
 }
 
 func TestOpenCodeRetirement(t *testing.T) {

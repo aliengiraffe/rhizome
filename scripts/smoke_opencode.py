@@ -170,10 +170,15 @@ def main():
                          if s['identity']['session_id'] == session), None)
         old_node, old_pids = node_of(), rhizome_children(server.pid)
         assert old_node and old_pids, 'no Rhizome node/process before reload'
+        reloaded = time.monotonic()
         opencode('reload', timeout=120)
-        wait_for(lambda: not (rhizome_children(server.pid) & old_pids), 60)
-        wait_for(lambda: rhizome_children(server.pid), 60)
+        # Do not wait for the old process to exit first: the restored node must
+        # appear even while the predecessor is still alive (lease handover).
         wait_for(lambda: node_of() not in (None, old_node), 90)
+        overlap = bool(rhizome_children(server.pid) & old_pids)
+        print('reload: restored after %.1fs; predecessor still running: %s'
+              % (time.monotonic() - reloaded, 'yes' if overlap else 'no'))
+        wait_for(lambda: not (rhizome_children(server.pid) & old_pids), 60)
         peer.tool('send', {'session_id': session, 'text': 'live-restore-marker: no action needed'})
 
         def restored_delivered():
