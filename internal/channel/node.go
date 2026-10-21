@@ -104,6 +104,9 @@ type Node struct {
 	outbox      []outboxEntry
 	outboxBytes int
 	peerTurn    bool
+	// cursorRegistry is the Cursor registration directory, fixed before the
+	// node is published, so status can count live Cursor MCP processes.
+	cursorRegistry string
 	pb.UnimplementedChannelServer
 	ctx    context.Context
 	cancel context.CancelFunc

@@ -249,11 +249,13 @@ See [setup](docs/reference.md#creating-the-configuration-file),
 - **Cursor binds through hooks, never through `tools/call`.** Cursor sends no
   conversation identity in MCP requests and cannot be woken when idle. `rhizome
   mcp --agent cursor` hosts one node per `conversation_id`, registers a private
-  0600 socket under `<runtime>/cursor/` with its PID and `roots/list`, and
+  0600 socket under `<runtime>/cursor/` with its PID, working directory and
+  `roots/list`, and
   `rhizome hook --agent cursor` (run by `~/.cursor/hooks.json`) forwards a
   minimized payload: never the prompt, tool bodies, transcripts or `user_email`.
-  The hook matches a process by `workspace_roots`, contacts exactly one
-  candidate, and otherwise answers Cursor's default (`{}`, `continue`, `ask`)
+  The hook ranks processes against `workspace_roots` (exact, then most
+  specific parent, then child; home and `/` never claim nested workspaces),
+  contacts exactly one best candidate, and otherwise answers Cursor's default (`{}`, `continue`, `ask`)
   with exit 0; it must never block Cursor. Tool calls resolve by a single-use
   `beforeMCPExecution` ticket (tool name + canonical input digest, 5 s) or the
   single bound conversation; anything else is `identity_ambiguous`. Collection

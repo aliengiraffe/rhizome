@@ -65,6 +65,10 @@ func result(value any, err error) (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}, nil, nil
 }
 func (n *Node) status() map[string]any {
+	processes := -1
+	if n.cursorRegistry != "" { // immutable after creation; read before locking
+		processes = liveCursorRegistrations(n.cursorRegistry)
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	feeds := map[string]any{}
@@ -86,6 +90,9 @@ func (n *Node) status() map[string]any {
 	if n.hookPull {
 		state["delivery_mode"] = "hook_pull"
 		state["outbox_depth"] = len(n.outbox)
+		if processes >= 0 {
+			state["cursor_processes"] = processes
+		}
 	}
 	return state
 }
