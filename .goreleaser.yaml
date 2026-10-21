@@ -1,0 +1,69 @@
+# GoReleaser builds every Rhizome release archive; it never publishes.
+# .github/workflows/release.yml stages a draft GitHub Release only after the
+# macOS package, checksums and native smoke runs pass, then publishes it.
+# See docs/releasing.md.
+#
+# RHIZOME_VERSION and RHIZOME_ASSET_VERSION come from
+# `go run ./internal/release/releasetool version`, which validates the tag as
+# SemVer first. Unset values fail the build rather than defaulting.
+version: 2
+
+project_name: rhizome
+
+builds:
+  - id: rhizome-darwin
+    main: .
+    binary: rhizome
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Env.RHIZOME_VERSION }} -X main.commit={{ .FullCommit }} -X main.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [darwin]
+    goarch: [amd64, arm64]
+
+  # Separate id so the Apple signing hook can only ever see darwin binaries.
+  # Linux and Windows binaries are unsigned.
+  - id: rhizome-other
+    main: .
+    binary: rhizome
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Env.RHIZOME_VERSION }} -X main.commit={{ .FullCommit }} -X main.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, windows]
+    goarch: [amd64, arm64]
+
+# Fuse both darwin slices first, then sign, verify, execute and notarize the
+# universal binary in the post hook, before any archive exists.
+universal_binaries:
+  - id: rhizome-darwin
+    ids: [rhizome-darwin]
+    replace: true
+    hooks:
+      post:
+        - cmd: bash scripts/release/sign-macos-binary.sh "{{ .Path }}"
+          output: true
+
+archives:
+  - id: rhizome
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "rhizome_{{ .Env.RHIZOME_ASSET_VERSION }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, README.md]
+
+snapshot:
+  version_template: "{{ .Env.RHIZOME_VERSION }}"
+
+# The workflow writes one manifest after the package is notarized and stapled.
+checksum:
+  disable: true
+
+release:
+  disable: true
+
+changelog:
+  disable: true

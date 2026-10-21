@@ -25,7 +25,8 @@ Start with [README.md](README.md) for behavior and setup,
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
 | `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), and session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`). |
 | `proto/` | Protocol definitions and generated Go bindings. |
-| `scripts/` | Process smoke tests. |
+| `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
+| `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums/smoke tool, and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
 
 ## Commands and completion
@@ -125,7 +126,7 @@ See README, [service](docs/service.md#terminal-interface), and
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
-  CLI usage: `rhizome mcp | setup | service | config | token | invite | join | peers | files | demo [flags]`.
+  CLI usage: `rhizome --version | mcp | setup | service | config | token | invite | join | peers | files | demo [flags]`.
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
   `mcp` only, with flag > env > file > default. `rhizome setup` is the only
@@ -179,6 +180,25 @@ See README, [service](docs/service.md#terminal-interface), and
   unchanged files. Configuration is written before installs so wizard
   directories apply. Project files, `--list` and `--network`-only runs never
   install anything; remaining restart/trust/channel steps are printed.
+- **Releases are tag-driven, signed and fail closed.** Only SemVer 2.0 tags
+  (optional `v`), validated by `internal/release` before any job reaches
+  secrets, publish. A prerelease component marks a prerelease; build metadata
+  alone does not. `rhizome --version` must stay side-effect free (no config,
+  writes, network or daemons) and report the exact version and commit
+  injected via ldflags. Production (`RHIZOME_SIGNING=required`) must never
+  degrade to ad-hoc or unsigned macOS artifacts. It requires a Developer ID
+  signature, execution of the signed binary, an explicit notarization
+  `Accepted`, and a stapled Developer ID Installer package whose only payload
+  is the same binary at `/usr/local/bin/rhizome` (receipt
+  `com.aliengiraffe.rhizome`). The package has no scripts and never touches
+  user config, state or the observer. Secrets stay in the `release`
+  environment; only the publish job writes releases. It stages a draft,
+  verifies the checksum manifest of every asset, and never replaces a
+  published release. Linux and Windows assets are unsigned. PRs and manual
+  runs build ad-hoc snapshots without secrets. Run `goreleaser check`,
+  `actionlint` and `shellcheck -x -P SCRIPTDIR scripts/release/*.sh` for
+  pipeline changes. Real signing is validated only by a tagged prerelease
+  (docs/releasing.md).
 - **Hostnames are display labels.** Shared top-level `hostname` is written by
   the setup prompt or `setup --network ... --hostname ...`. Blank clears an
   override and uses the OS short hostname in every mode, including Tailscale.
