@@ -1,0 +1,362 @@
+name: Release
+
+# SemVer tag push  → signed, notarized, smoke-tested GitHub Release, staged as
+#                    a draft and published only after every gate passes.
+# Pull request / workflow_dispatch → the same build and smoke matrix as an
+#                    unsigned, ad-hoc snapshot: no secrets, no release.
+# See docs/releasing.md for setup, tag conventions and recovery.
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+      - "[0-9]*"
+  pull_request:
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".goreleaser.yaml"
+      - "scripts/release/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a release mid-publication; superseded PR runs may be cancelled.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GO_VERSION: "1.25.x"
+  GORELEASER_VERSION: "v2.18.3"
+  ASSETS_ARTIFACT: rhizome-release-assets
+
+jobs:
+  meta:
+    name: Resolve release identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      production: ${{ steps.id.outputs.production }}
+      commit: ${{ steps.id.outputs.commit }}
+      tag: ${{ steps.id.outputs.tag }}
+      version: ${{ steps.id.outputs.version }}
+      asset_version: ${{ steps.id.outputs.asset_version }}
+      package_version: ${{ steps.id.outputs.package_version }}
+      prerelease: ${{ steps.id.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Validate the tag as SemVer before anything else runs
+        id: id
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          commit=$(git rev-parse HEAD)
+          if [ "$EVENT" = push ] && [ "$REF_TYPE" = tag ]; then
+            # A malformed tag fails here, before any job can reach secrets.
+            go run ./internal/release/releasetool version -tag "$REF_NAME" | tee -a "$GITHUB_OUTPUT"
+            if [ "$commit" != "$SHA" ]; then
+              echo "::error::checked-out commit $commit is not the tagged commit $SHA"
+              exit 1
+            fi
+            echo "production=true" >> "$GITHUB_OUTPUT"
+          else
+            go run ./internal/release/releasetool version -snapshot "$commit" | tee -a "$GITHUB_OUTPUT"
+            echo "production=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build, sign and package
+    needs: meta
+    runs-on: macos-15
+    timeout-minutes: 90
+    # Signing secrets live only in the protected `release` environment, which
+    # only SemVer tag pushes enter. Snapshots run with no environment.
+    environment: ${{ needs.meta.outputs.production == 'true' && 'release' || '' }}
+    env:
+      PRODUCTION: ${{ needs.meta.outputs.production }}
+      RHIZOME_VERSION: ${{ needs.meta.outputs.version }}
+      RHIZOME_ASSET_VERSION: ${{ needs.meta.outputs.asset_version }}
+      RHIZOME_EXPECT_VERSION: ${{ needs.meta.outputs.version }}
+      RHIZOME_SIGNING: ${{ needs.meta.outputs.production == 'true' && 'required' || 'adhoc' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: ${{ env.GORELEASER_VERSION }}
+          install-only: true
+      - name: goreleaser check
+        run: goreleaser check
+
+      - name: Import Apple credentials into a temporary keychain
+        if: needs.meta.outputs.production == 'true'
+        env:
+          APPLE_DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_INSTALLER_CERT_P12_BASE64: ${{ secrets.APPLE_INSTALLER_CERT_P12_BASE64 }}
+          APPLE_INSTALLER_CERT_PASSWORD: ${{ secrets.APPLE_INSTALLER_CERT_PASSWORD }}
+          APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in APPLE_DEVELOPER_ID_CERT_P12_BASE64 APPLE_DEVELOPER_ID_CERT_PASSWORD \
+                      APPLE_INSTALLER_CERT_P12_BASE64 APPLE_INSTALLER_CERT_PASSWORD \
+                      APPLE_NOTARY_API_KEY_P8_BASE64 APPLE_NOTARY_API_KEY_ID APPLE_NOTARY_API_ISSUER_ID; do
+            [ -n "${!name:-}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::the release environment is missing:$missing. See docs/releasing.md."
+            exit 1
+          fi
+          secrets_dir="${RUNNER_TEMP:?}/rhizome-signing"
+          mkdir -m 700 "$secrets_dir"
+          keychain="$secrets_dir/signing.keychain-db"
+          kpw=$(openssl rand -base64 24)
+          security create-keychain -p "$kpw" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$kpw" "$keychain"
+          echo "$APPLE_DEVELOPER_ID_CERT_P12_BASE64" | base64 --decode > "$secrets_dir/application.p12"
+          security import "$secrets_dir/application.p12" -k "$keychain" -f pkcs12 \
+            -P "$APPLE_DEVELOPER_ID_CERT_PASSWORD" -T /usr/bin/codesign
+          echo "$APPLE_INSTALLER_CERT_P12_BASE64" | base64 --decode > "$secrets_dir/installer.p12"
+          security import "$secrets_dir/installer.p12" -k "$keychain" -f pkcs12 \
+            -P "$APPLE_INSTALLER_CERT_PASSWORD" -T /usr/bin/productsign
+          rm -f "$secrets_dir/application.p12" "$secrets_dir/installer.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kpw" "$keychain" >/dev/null
+          # Prepend the temporary keychain to the user search list.
+          existing=$(security list-keychains -d user | tr -d '"' | xargs)
+          # shellcheck disable=SC2086 # word-splitting the keychain list is intended
+          security list-keychains -d user -s "$keychain" $existing
+          ( umask 077; echo "$APPLE_NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$secrets_dir/notary.p8" )
+          {
+            echo "RHIZOME_SIGN_KEYCHAIN=$keychain"
+            echo "APPLE_NOTARY_KEY_P8=$secrets_dir/notary.p8"
+            echo "APPLE_NOTARY_KEY_ID=$APPLE_NOTARY_API_KEY_ID"
+            echo "APPLE_NOTARY_ISSUER_ID=$APPLE_NOTARY_API_ISSUER_ID"
+          } >> "$GITHUB_ENV"
+          security find-identity -v "$keychain"
+
+      # The universal_binaries post hook signs, verifies, executes and (in
+      # production) notarizes the fused binary before any archive is written.
+      - name: Build archives
+        env:
+          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [ "$PRODUCTION" = true ]; then
+            goreleaser release --clean
+          else
+            goreleaser release --snapshot --clean
+          fi
+          # GoReleaser derives its own version from the tag; it must agree.
+          python3 -I - "$RHIZOME_VERSION" <<'PY'
+          import json, sys
+          meta = json.load(open("dist/metadata.json"))
+          if meta["version"] != sys.argv[1]:
+              sys.exit(f"::error::GoReleaser version {meta['version']!r} != {sys.argv[1]!r}")
+          PY
+
+      - name: Build, notarize and verify the macOS installer
+        env:
+          APPLE_INSTALLER_IDENTITY: ${{ vars.APPLE_INSTALLER_IDENTITY }}
+          RHIZOME_PKG_VERSION: ${{ needs.meta.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          extracted="$RUNNER_TEMP/archive-binary"
+          mkdir -p "$extracted"
+          # Package the binary exactly as shipped in the darwin archive.
+          bin=$(go run ./internal/release/releasetool extract -goos darwin -out "$extracted" \
+            -archive "dist/rhizome_${RHIZOME_ASSET_VERSION}_darwin_all.tar.gz")
+          RHIZOME_BINARY="$bin" RHIZOME_PKG_OUT="$PWD/dist/rhizome_${RHIZOME_ASSET_VERSION}_macos.pkg" \
+            bash scripts/release/build-macos-pkg.sh
+          bash scripts/release/verify-pkg-payload.sh "dist/rhizome_${RHIZOME_ASSET_VERSION}_macos.pkg" "$bin"
+
+      # Checksums are written only after signing, notarization and stapling.
+      - name: Write and verify checksums
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          COMMIT: ${{ needs.meta.outputs.commit }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TAG" ]; then id=(-tag "$TAG"); else id=(-snapshot "$COMMIT"); fi
+          go run ./internal/release/releasetool checksums "${id[@]}" -dir dist
+          mkdir upload
+          for f in $(go run ./internal/release/releasetool assets "${id[@]}"); do cp "dist/$f" upload/; done
+          go run ./internal/release/releasetool verify "${id[@]}" -dir upload -exact
+          cat "upload/rhizome_${RHIZOME_ASSET_VERSION}_checksums.txt"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.ASSETS_ARTIFACT }}
+          path: upload/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          if [ -n "${RHIZOME_SIGN_KEYCHAIN:-}" ]; then
+            security delete-keychain "$RHIZOME_SIGN_KEYCHAIN" || true
+          fi
+          rm -rf "${RUNNER_TEMP:?}/rhizome-signing"
+
+  smoke:
+    name: Smoke ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: [meta, build]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, goos: linux, goarch: amd64 }
+          - { runner: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
+          - { runner: windows-latest, goos: windows, goarch: amd64 }
+          - { runner: windows-11-arm, goos: windows, goarch: arm64 }
+          - { runner: macos-15, goos: darwin, goarch: arm64 }
+          - { runner: macos-15-intel, goos: darwin, goarch: amd64 }
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+      COMMIT: ${{ needs.meta.outputs.commit }}
+      RHIZOME_SIGNING: ${{ needs.meta.outputs.production == 'true' && 'required' || 'adhoc' }}
+      RHIZOME_EXPECT_VERSION: ${{ needs.meta.outputs.version }}
+      ASSET_VERSION: ${{ needs.meta.outputs.asset_version }}
+      GOOS_UNDER_TEST: ${{ matrix.goos }}
+      GOARCH_UNDER_TEST: ${{ matrix.goarch }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.ASSETS_ARTIFACT }}
+          path: assets
+      - name: Verify checksums, extract and run the native archive
+        run: |
+          set -euo pipefail
+          if [ -n "$TAG" ]; then id=(-tag "$TAG"); else id=(-snapshot "$COMMIT"); fi
+          echo "runner: $(uname -sm)"
+          go run ./internal/release/releasetool smoke "${id[@]}" -dir assets -commit "$COMMIT" \
+            -goos "$GOOS_UNDER_TEST" -goarch "$GOARCH_UNDER_TEST"
+      - name: Verify macOS signatures, notarization and package payload
+        if: matrix.goos == 'darwin'
+        run: |
+          set -euo pipefail
+          . scripts/release/lib.sh
+          mkdir -p "$RUNNER_TEMP/x"
+          bin=$(go run ./internal/release/releasetool extract -goos darwin -out "$RUNNER_TEMP/x" \
+            -archive "assets/rhizome_${ASSET_VERSION}_darwin_all.tar.gz")
+          pkg="assets/rhizome_${ASSET_VERSION}_macos.pkg"
+          bash scripts/release/verify-pkg-payload.sh "$pkg" "$bin"
+          if [ "$RHIZOME_SIGNING" = required ]; then
+            check_release_signature "$bin"
+            # A bare binary's ticket is checked online; the package's is stapled.
+            spctl --assess --type execute --verbose=4 "$bin" 2>&1 | tee "$RUNNER_TEMP/spctl-bin.txt"
+            grep -q 'source=Notarized Developer ID' "$RUNNER_TEMP/spctl-bin.txt"
+            pkgutil --check-signature "$pkg" | tee "$RUNNER_TEMP/pkgsig.txt"
+            grep -q 'Developer ID Installer:' "$RUNNER_TEMP/pkgsig.txt"
+            xcrun stapler validate "$pkg"
+            spctl --assess --type install --verbose=4 "$pkg" 2>&1 | tee "$RUNNER_TEMP/spctl-pkg.txt"
+            grep -q 'source=Notarized Developer ID' "$RUNNER_TEMP/spctl-pkg.txt"
+          else
+            echo "snapshot: ad-hoc binary and unsigned package; notarization not checked"
+          fi
+
+  publish:
+    name: Publish GitHub Release
+    needs: [meta, build, smoke]
+    if: needs.meta.outputs.production == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The only job that can write releases; it holds no signing secrets.
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.meta.outputs.tag }}
+      COMMIT: ${{ needs.meta.outputs.commit }}
+      PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+      ASSET_VERSION: ${{ needs.meta.outputs.asset_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ env.ASSETS_ARTIFACT }}
+          path: assets
+      - name: Verify assets and that the tag still names the built commit
+        run: |
+          set -euo pipefail
+          go run ./internal/release/releasetool verify -tag "$TAG" -dir assets -exact
+          ref=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG")
+          sha=$(jq -r .object.sha <<<"$ref")
+          if [ "$(jq -r .object.type <<<"$ref")" = tag ]; then
+            sha=$(gh api "repos/$GH_REPO/git/tags/$sha" -q .object.sha)
+          fi
+          if [ "$sha" != "$COMMIT" ]; then
+            echo "::error::tag $TAG now points at $sha, not the built commit $COMMIT; refusing to publish"
+            exit 1
+          fi
+      - name: Stage a draft release
+        run: |
+          set -euo pipefail
+          if draft=$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::a published release for $TAG already exists; published assets are never replaced. Cut a new version."
+              exit 1
+            fi
+            echo "removing the unpublished draft left by an earlier attempt"
+            gh release delete "$TAG" --yes
+          fi
+          flags=(--draft --verify-tag --title "Rhizome $TAG" --generate-notes --notes-file scripts/release/notes.md)
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease --latest=false); fi
+          gh release create "$TAG" "${flags[@]}" assets/*
+      - name: Verify uploaded assets against the manifest
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --dir uploaded
+          go run ./internal/release/releasetool verify -tag "$TAG" -dir uploaded -exact
+          cmp "assets/rhizome_${ASSET_VERSION}_checksums.txt" "uploaded/rhizome_${ASSET_VERSION}_checksums.txt"
+      - name: Publish
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --draft=false
+          state=$(gh release view "$TAG" --json isDraft,isPrerelease -q '"\(.isDraft) \(.isPrerelease)"')
+          if [ "$state" != "false $PRERELEASE" ]; then
+            echo "::error::published release state is '$state', expected 'false $PRERELEASE'"
+            exit 1
+          fi
+          gh release view "$TAG" --json url -q .url

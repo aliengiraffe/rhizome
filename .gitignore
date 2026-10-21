@@ -38,3 +38,4 @@ go.work.sum
 
 # Python smoke-test bytecode
 __pycache__/
+dist/

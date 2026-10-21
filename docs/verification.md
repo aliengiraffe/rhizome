@@ -526,3 +526,47 @@ Manual terminal checklist for releases (not a claim of native lifecycle checks):
   mutation and human visual checks on those platforms were not performed here;
   the recorded terminal run is automated macOS PTY coverage, not cross-platform
   visual or native lifecycle verification.
+
+## Release pipeline (#46, 2026-10-21)
+
+Automated and local evidence, macOS 26 arm64 with GoReleaser 2.17.1:
+
+- `go test -race ./internal/release/...` covers SemVer acceptance and rejection
+  (optional `v`, prerelease and build metadata, leading zeros, malformed input,
+  oversized components), prerelease classification, installer-version mapping,
+  the asset matrix, manifest completeness, tamper, duplicate, stray-file and
+  missing-asset failures, and bounded archive extraction and version smoke. It
+  also drives `scripts/release` with stubbed Apple tools: every non-`Accepted`
+  notarization outcome (including `Invalid` with exit 0, malformed JSON, a
+  missing id and a nonzero exit) fails; missing notary credentials,
+  identities or macOS fail before any signing tool runs; ad-hoc signatures and
+  signatures without hardened runtime or a timestamp fail; and a killed binary
+  or wrong version fails the execution gate. On macOS a real unsigned package
+  is built and its payload verified, and a mismatched payload is rejected.
+  These stubs do **not** validate real signing or notarization.
+- `rhizome --version` tests run with an invalid config file and a missing
+  `RHIZOME_CONFIG` and confirm that nothing is written.
+- `goreleaser check`, `actionlint` and `shellcheck` pass.
+- Local snapshot and tag-mode (`1.4.0-rc.2+b.7`) GoReleaser runs produced all
+  seven assets. The ad-hoc universal binary verified and ran natively and as
+  the x86_64 slice under Rosetta. The package payload matched the archive
+  binary and ran. Checksums and the native darwin smoke passed. Linux amd64
+  and arm64 archives ran in Alpine containers.
+- `GOOS=windows` and `GOOS=linux` `go vet ./...` pass for amd64 and arm64.
+
+- The first pull request snapshot run (Actions run 39646167543, 2026-10-21)
+  passed every job. It ran with no environment and no secrets, and the macOS
+  build hook executed the ad-hoc binary natively and its x86_64 slice. Package
+  payload verification passed. Each native smoke host verified the manifest and
+  ran its extracted archive, which reported the expected snapshot version and
+  commit: `ubuntu-latest` (x86_64), `ubuntu-24.04-arm` (aarch64),
+  `windows-latest`, `windows-11-arm`, `macos-15` (arm64) and `macos-15-intel`
+  (x86_64). The macOS hosts also re-verified the package payload. Publish was
+  skipped. On `windows-11-arm`, Git Bash's `uname` reports x86_64 because MSYS
+  is emulated; the arm64 archive is what was executed.
+
+Pending (requires the `release` environment and a pushed tag): real Developer
+ID signing, notarization `Accepted`, stapling, Gatekeeper assessment, draft
+staging and publication, and release downloads. Run a `v0.1.0-rc.1`
+prerelease and record the results here
+([releasing.md](releasing.md#validating-before-a-stable-release)).

@@ -117,9 +117,25 @@ comes from read-only App Server polling. Each caller thread has an independent
 node even when Codex shares an MCP connection. See [Codex setup and tested
 limitations](docs/codex.md) and the samples in `examples/codex/`.
 
+## Install
+
+Tagged releases on the [GitHub Releases page](https://github.com/aliengiraffe/rhizome/releases)
+ship a signed and notarized macOS installer (`rhizome_<version>_macos.pkg`, which
+installs `/usr/local/bin/rhizome`) and a universal macOS archive. They also ship
+**unsigned** Linux and Windows archives for amd64 and arm64, and a SHA-256
+manifest (`rhizome_<version>_checksums.txt`). Verify downloads with
+`shasum -a 256 -c rhizome_<version>_checksums.txt`, then check the build with
+`rhizome --version`. The installer never touches `~/.rhizome` and never installs
+or restarts the observer. Run `rhizome setup` and `rhizome service install`
+yourself, and after an upgrade run `rhizome service stop` and then
+`rhizome service start`. Tag conventions, prereleases, verification, upgrades,
+uninstall and platform limits are in [docs/releasing.md](docs/releasing.md).
+To build from source, follow the steps below.
+
 ## Claude setup
 
-Requires Go 1.25+, [Task v3](https://taskfile.dev/docs/installation), and macOS or Linux.
+Building from source requires Go 1.25+ and [Task v3](https://taskfile.dev/docs/installation).
+The MCP integration is tested on macOS and Linux.
 Claude Code **2.1.302** is the tested client; older versions are not supported by this verification.
 
 Install Task with `brew install go-task` or
