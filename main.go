@@ -29,7 +29,7 @@ func main() {
 
 func entry() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: rhizome mcp | setup | service | config | token | invite | join | peers | demo [flags]")
+		return fmt.Errorf("usage: rhizome mcp | setup | service | config | token | files | invite | join | peers | demo [flags]")
 	}
 	mode := os.Args[1]
 	os.Args = append(os.Args[:1], os.Args[2:]...)
@@ -97,6 +97,8 @@ func entry() error {
 			return err
 		}
 		return c.Write(os.Stdout)
+	case "files":
+		return filesCommand(os.Args[1:])
 	case "invite", "join", "peers":
 		return gatewayCommand(mode, os.Args[1:])
 	case "service":
