@@ -44,12 +44,12 @@ func logicalPeers(peers []*pb.Identity) []*pb.Identity {
 	direct := map[string]bool{}
 	for _, p := range peers {
 		if !p.ObservationOnly {
-			direct[p.SessionId] = true
+			direct[p.SessionId+"\x00"+p.GatewayHost] = true
 		}
 	}
 	out := make([]*pb.Identity, 0, len(peers))
 	for _, p := range peers {
-		if !p.ObservationOnly || !direct[p.SessionId] {
+		if !p.ObservationOnly || !direct[p.SessionId+"\x00"+p.GatewayHost] {
 			out = append(out, p)
 		}
 	}

@@ -384,3 +384,11 @@ authenticated identity probes in local/LAN/Tailscale modes for both agent types,
 and observer propagation. The stdio smokes list peers with the same custom host
 label and exercise exact-session routing. Live two-device checks and real
 terminal prompts remain manual; the checks above describe how to exercise them.
+
+## Paired-host gateway
+
+Run `python3 scripts/smoke_gateway.py` after `task build` for three isolated
+services with independent tokens, TLS invitation redemption, bidirectional
+send/subscribe, restart, non-transitivity, and revocation. This is one-machine
+coverage. See [gateway verification](gateway.md#verification) for the manual
+two-device LAN/Tailscale checklist and known compatibility limits.

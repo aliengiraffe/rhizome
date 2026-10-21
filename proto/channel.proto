@@ -20,6 +20,8 @@ message Identity {
  string session_name = 10; // Optional label: explicit override, native title, or fallback. Never an address.
  string host = 11; // Short hostname label; never used for routing.
  string cert_fingerprint = 12; // Hex SHA-256 of the gRPC TLS SPKI; set only in LAN mode.
+ uint32 gateway_version = 15; // Local bridge support; 0 means this process must be upgraded for pairing.
+ string gateway_host = 14; // Authenticated remote host represented by a local proxy; never re-export.
  bool observation_only = 13; // Log observer; cannot deliver into an agent.
 }
 message FollowRequest {
@@ -39,6 +41,8 @@ message Event {
  string text = 8;
  string message_id = 9;
  string reply_to = 10;
+ string gateway_host = 11; // Local gateway attribution; stripped before export.
+ string gateway_grant = 12; // Local trust epoch, fences queued delivery after revocation.
 }
 message SendRequest { Identity target = 1; Identity sender = 2; Event event = 3; }
 message Acceptance { bool accepted = 1; string message_id = 2; }

@@ -1,5 +1,9 @@
 # Rhizome
 
+For invitation-based collaboration between laptops with independent local tokens,
+see [host pairing with `rhizome invite` and `rhizome join`](docs/gateway.md).
+Pairing is opt-in, service-owned, and requires upgraded local MCP processes.
+
 Rhizome connects coding agent sessions through MCP. It binds verified session
 identities, collects selected activity, discovers local peers with memberlist,
 and delivers peer activity over authenticated loopback gRPC through each

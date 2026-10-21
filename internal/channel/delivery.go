@@ -63,8 +63,33 @@ func (n *Node) deliver(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
+		// Trust snapshots fence queued gateway events after revocation. Read outside locks.
+		n.mu.Lock()
+		gatewayEvents := map[*pb.Event]bool{}
+		for _, p := range n.incoming {
+			if p.event.GatewayHost != "" {
+				gatewayEvents[p.event] = false
+			}
+		}
+		n.mu.Unlock()
+		if len(gatewayEvents) > 0 {
+			grants := gatewayDeliveryGrants(n.runtime)
+			for e := range gatewayEvents {
+				gatewayEvents[e] = grants[e.GatewayHost] != "" && grants[e.GatewayHost] == e.GatewayGrant
+			}
+		}
 		n.gate.Lock()
 		n.mu.Lock()
+		keptGateway := n.incoming[:0]
+		for _, pending := range n.incoming {
+			e := pending.event
+			if allowed, checked := gatewayEvents[e]; checked && !allowed {
+				n.stats.Dropped++
+				continue
+			}
+			keptGateway = append(keptGateway, pending)
+		}
+		n.incoming = keptGateway
 		if generation != n.identity.Generation {
 			due = map[string]time.Time{}
 			generation = n.identity.Generation
@@ -77,6 +102,9 @@ func (n *Node) deliver(ctx context.Context) {
 		now := time.Now()
 		index := -1
 		for i, p := range n.incoming {
+			if p.event.GatewayHost != "" && !gatewayEvents[p.event] {
+				continue
+			} // validate newly queued events on the next tick
 			if n.paused && !n.rearmed[p.event.SessionId] {
 				continue
 			}
@@ -119,7 +147,7 @@ func (n *Node) deliver(ctx context.Context) {
 		if automatic(e) {
 			for j := index + 1; j < len(n.incoming); j++ {
 				p := n.incoming[j]
-				if p.event.SessionId == e.SessionId && automatic(p.event) {
+				if p.event.SessionId == e.SessionId && p.event.GatewayHost == e.GatewayHost && p.event.GatewayGrant == e.GatewayGrant && (p.event.GatewayHost == "" || gatewayEvents[p.event]) && automatic(p.event) {
 					line := fmt.Sprintf("\n[%s] %s", p.event.Kind, p.event.Text)
 					if len(content)+len(line) > 8*1024 {
 						break
