@@ -25,7 +25,7 @@ Start with [README.md](README.md) for behavior and setup,
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`), and the OpenCode bridge (`opencode*.go`). |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), and the OpenCode bridge (`opencode*.go`). |
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
@@ -320,7 +320,17 @@ See README, [service](docs/service.md#terminal-interface), and
   queues/cursors, contact an agent daemon, or open files outside the configured
   roots (re-confined on every page, symlinks refused). Reads reuse the live
   normalizers through `activitySink` from byte zero so the content policy stays
-  identical; never add a raw-record fallback. Keep the documented bounds
+  identical; never add a raw-record fallback. OpenCode is the one non-file
+  source: its sessions are rows in `opencode.db`, opened only read-only
+  (`mode=ro`, `query_only`, short-lived connection, never written or
+  checkpointed) through the pure-Go `modernc.org/sqlite` driver (the sole SQLite
+  dependency, chosen because it needs no CGO, so cross-platform release builds
+  are unchanged), confined to `opencode.data_dir`, symlinks refused, a catalog
+  refresh being one metadata query rate-limited to once per 2 s and driven by
+  watches on the data directory itself. Only the 2.x `session_v2` and
+  `session_message` tables are read; a schema without the expected columns is
+  reported `unsupported`, never read through a fallback
+  (`internal/channel/history_opencode.go`). Keep the documented bounds
   (4,096 files, 8,192 queued, 4 MiB per tick, 512 tombstones; 8 MiB scan,
   1 MiB response, 2 MiB record, 10 s deadline, 4 concurrent queries, 32
   snapshots for 15 minutes), signed single-use forward-only cursors, and the
@@ -328,10 +338,9 @@ See README, [service](docs/service.md#terminal-interface), and
   discovery; never derive `delivery_capable` from a catalog row.
 - **Peer history is opt-in, serving-host enforced and direct.** File-only keys
   `[gateway.history]` (`enabled` default false, `lookback` default `30d`) and
-  `[claude|codex.peer_history]` overrides resolve to `config.HistoryPolicy`.
+  `[claude|codex|opencode.peer_history]` overrides resolve to `config.HistoryPolicy`.
   The global switch is a master gate, and agent keys refer to the source
-  history's agent; OpenCode history is not cataloged, so `[opencode]` tables
-  are rejected (OpenCode callers may still pass `host_id`). The service reads the policy at start; a restart applies a
+  history's agent (any caller may pass `host_id`). The service reads the policy at start; a restart applies a
   change and expires remote cursors. Tools take an optional exact `host_id`
   (lowercase fingerprint). Omitting it stays local, with no fan-out or second
   hop. The gateway's `/v1/history` serves only trusted, connected peers and checks

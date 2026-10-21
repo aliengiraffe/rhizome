@@ -46,6 +46,12 @@ type historyIndex struct {
 	overflow   bool
 	degraded   func() bool
 	counters   historyCounters
+
+	// OpenCode keeps sessions in one database, so it is refreshed by a metadata
+	// query when the observer reports a change, not by walking files.
+	ocDirty     bool
+	ocNext      time.Time
+	ocSchemaBad bool
 }
 
 func newHistoryIndex(scope historyScope, degraded func() bool) *historyIndex {
@@ -139,6 +145,7 @@ func (h *historyIndex) work(ctx context.Context) {
 	if h.overflow && len(h.queue) == 0 {
 		h.overflow = false // the next reconciliation inventory re-enumerates
 	}
+	h.indexOpenCode(ctx)
 	if h.dirty && (len(h.queue) == 0 || time.Since(h.lastFlush) >= indexFlushEvery) {
 		h.flush()
 	}
@@ -381,6 +388,9 @@ func (h *historyIndex) warnings() []catalogWarning {
 	if h.overflow {
 		out = append(out, catalogWarning{"queue_overflow", "Pending index work overflowed; coverage is reconciled on the next inventory."})
 	}
+	if h.ocSchemaBad {
+		out = append(out, catalogWarning{"opencode_schema", "The OpenCode database does not have the 2.x session tables this build reads; its sessions are marked unsupported."})
+	}
 	if h.counters.ReadFailures > 0 {
 		out = append(out, catalogWarning{"read_failures", "Some log files could not be read completely; affected sessions are marked partial."})
 	}
@@ -426,7 +436,7 @@ func (h *historyIndex) flush() {
 	now := time.Now().UTC()
 	h.generation++
 	h.indexedAt = &now
-	c := catalogFile{Version: catalogVersion, Scope: h.scope.hash(), Roots: map[string]string{"claude": h.scope.ClaudeRoot, "codex": h.scope.CodexRoot}, Generation: h.generation, IndexedAt: &now, Inventory: h.walked && len(h.queue) == 0, Pending: len(h.queue), Degraded: h.degraded != nil && h.degraded(), Warnings: h.warnings(), Files: files}
+	c := catalogFile{Version: catalogVersion, Scope: h.scope.hash(), Roots: map[string]string{"claude": h.scope.ClaudeRoot, "codex": h.scope.CodexRoot, "opencode": h.scope.OpenCodeRoot}, Generation: h.generation, IndexedAt: &now, Inventory: h.walked && len(h.queue) == 0 && !h.ocDirty, Pending: len(h.queue) + h.openCodePending(), Degraded: h.degraded != nil && h.degraded(), Warnings: h.warnings(), Files: files}
 	if c.Warnings == nil {
 		c.Warnings = []catalogWarning{}
 	}
@@ -461,10 +471,10 @@ func (h *historyIndex) health() map[string]any {
 	}
 	state := "indexing"
 	switch {
-	case h.walked && len(h.queue) == 0 && (h.limitHit || h.overflow || (h.degraded != nil && h.degraded())):
+	case h.walked && len(h.queue) == 0 && !h.ocDirty && (h.limitHit || h.overflow || h.ocSchemaBad || (h.degraded != nil && h.degraded())):
 		state = "degraded"
-	case h.walked && len(h.queue) == 0:
+	case h.walked && len(h.queue) == 0 && !h.ocDirty:
 		state = "ready"
 	}
-	return map[string]any{"state": state, "indexed_files": len(h.files), "sessions": sessions, "pending": len(h.queue), "indexed_at": h.indexedAt, "coverage_complete": state == "ready", "generation": h.generation, "warnings": h.warnings(), "counters": h.counters}
+	return map[string]any{"state": state, "indexed_files": len(h.files), "sessions": sessions, "pending": len(h.queue) + h.openCodePending(), "indexed_at": h.indexedAt, "coverage_complete": state == "ready", "generation": h.generation, "warnings": h.warnings(), "counters": h.counters}
 }

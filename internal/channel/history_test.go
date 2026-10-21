@@ -29,7 +29,11 @@ type historyHarness struct {
 func newHistoryHarness(t *testing.T) *historyHarness {
 	t.Helper()
 	o := observerHarness(t)
-	scope := historyScope{Runtime: o.opts.Runtime, ClaudeRoot: o.opts.ClaudeRoot, CodexRoot: o.opts.CodexRoot}
+	o.opts.OpenCodeRoot = filepath.Join(filepath.Dir(o.opts.Runtime), "opencode")
+	if err := os.MkdirAll(o.opts.OpenCodeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	scope := historyScope{Runtime: o.opts.Runtime, ClaudeRoot: o.opts.ClaudeRoot, CodexRoot: o.opts.CodexRoot, OpenCodeRoot: o.opts.OpenCodeRoot}
 	o.index = newHistoryIndex(scope, func() bool { return o.retry })
 	n := newNode(context.Background())
 	t.Cleanup(n.close)
@@ -48,6 +52,8 @@ func (hh *historyHarness) index() {
 	if len(hh.o.index.queue) > 0 {
 		hh.t.Fatal("index queue did not drain")
 	}
+	hh.o.index.ocNext = time.Time{} // tests do not wait out the refresh debounce
+	hh.o.index.work(context.Background())
 	hh.o.index.flush()
 }
 func (hh *historyHarness) search(args string) (map[string]any, *historyError) {

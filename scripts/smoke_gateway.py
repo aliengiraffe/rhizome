@@ -68,10 +68,12 @@ def main():
                 directory.mkdir()
                 config = directory / 'config.toml'
                 run = directory / 'run'
+                # Every root is isolated: a default OpenCode root would serve this machine's sessions.
                 config.write_text('network.mode = "local"\nruntime_dir = %s\nclaude.projects_dir = %s\ncodex.sessions_dir = %s\n'
+                                  'opencode.data_dir = %s\n'
                                   'gateway.mode = "lan"\ngateway.listen = "127.0.0.1:%d"\n' %
                                   (json.dumps(str(run)), json.dumps(str(directory / 'claude')),
-                                   json.dumps(str(directory / 'codex')), port()))
+                                   json.dumps(str(directory / 'codex')), json.dumps(str(directory / 'opencode')), port()))
                 if name == 'a':
                     # Only host A opts in: Claude history for 15 days, Codex history withheld.
                     history_logs(directory)

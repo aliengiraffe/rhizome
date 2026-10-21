@@ -37,6 +37,7 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `codex.bin` | — | mcp `--codex-bin` | `codex` |
 | `codex.home` | `CODEX_HOME` | — | `~/.codex` |
 | `codex.sessions_dir` | — | service `--codex-root` | effective `codex.home` + `/sessions` |
+| `opencode.data_dir` | — | service `--opencode-root` | `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode` |
 | `network.mode` | `RHIZOME_LAN`, `RHIZOME_TAILSCALE` | mcp `--lan`, `--tailscale` | `local` |
 | `network.bind_addr` | `RHIZOME_BIND_ADDR` | mcp `--bind-addr` | LAN: all interfaces; Tailscale: the Tailscale IP |
 | `network.advertise_addr` | `RHIZOME_ADVERTISE_ADDR` | mcp `--advertise-addr` | first private interface; Tailscale: the Tailscale IP |

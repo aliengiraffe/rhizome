@@ -722,7 +722,7 @@ func RunOpenCode(c config.Config, o Options) error {
 	manager.wg.Add(1)
 	go func() { defer manager.wg.Done(); manager.sweepLoop(ctx) }()
 	slog.Info("ready", "agent", "opencode", "binding", "plugin")
-	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir})
+	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
 	session, err := makeServer(manager.resolve, agentOpenCode, func() {}, history).Connect(ctx, &mcp.StdioTransport{}, nil)
 	if err != nil {
 		cancel()

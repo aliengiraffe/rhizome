@@ -29,7 +29,7 @@ type Config struct {
 
 // FromConfig adapts resolved configuration for the observer.
 func FromConfig(c config.Config) Config {
-	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir}}
+	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir}}
 }
 
 type command struct {
@@ -187,6 +187,16 @@ func validate(c *Config) error {
 	}
 	if c.Observer.ClaudeRoot == c.Observer.CodexRoot {
 		return errors.New("Claude and Codex log roots must differ")
+	}
+	// The OpenCode data directory is optional here so older callers keep working.
+	if p := &c.Observer.OpenCodeRoot; *p != "" {
+		if !filepath.IsAbs(*p) {
+			return errors.New("runtime and log roots must be absolute")
+		}
+		*p = filepath.Clean(*p)
+		if *p == c.Observer.ClaudeRoot || *p == c.Observer.CodexRoot {
+			return errors.New("OpenCode data directory must differ from the Claude and Codex log roots")
+		}
 	}
 	return nil
 }

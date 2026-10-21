@@ -498,6 +498,36 @@ worktrees on one device, label mismatches and collisions, gateway proxies,
 paired-host history errors, direct LAN/Tailscale peers, missing metadata,
 conflicting history, ambiguous IDs, stale catalogs, and scope corrections.
 
+## OpenCode history (2026-10-21)
+
+OpenCode sessions are cataloged from OpenCode's SQLite database (see
+[history sources](history.md#sources-identity-titles)). Verified on macOS against
+OpenCode 2.0.32:
+
+- `task build`, `task check` (race) and `git diff --check` pass apart from
+  `TestNotarizeSubmissionRequiresAccepted` in `internal/release`, which also fails
+  on a clean `main` in this environment. Unit tests build a fixture database with
+  the 2.x tables (WAL mode) and cover catalog rows and native titles, child
+  exclusion, content policy (reasoning, prompts, tool inputs/outputs, `execute`
+  and `rhizome_*` calls, peer-only turns), pagination and the seq snapshot
+  boundary, tombstones after deletion, rename and activity refresh, an
+  unsupported schema, a removed database, symlink and path confinement,
+  oversized and malformed rows, the lookback policy on events, the config keys
+  and the observer's event filter.
+- `python3 scripts/smoke_service.py` PASS with a real observer and MCP process
+  over a database created before the service started, including reads while the
+  service is stopped.
+- A read-only pass over the real local database (11 sessions, written by a
+  running `opencode serve`) cataloged every session and read each one to
+  completion with complete coverage and no gaps; only counts and event kinds were
+  inspected, never content.
+
+Not verified: OpenCode versions other than 2.0.32 (the v2 schema is new and may
+change; a mismatch is reported as `unsupported`), Windows, sharing OpenCode
+history with a paired host over the gateway (the policy and bounds are unit
+tested through the shared access code), and databases large enough to stress the
+8 MiB scan bound or the 4,096-session limit.
+
 ## OpenCode 2.0.32 (2026-10-19)
 
 - Spike findings (full detail in

@@ -100,6 +100,7 @@ type snapshot struct {
 	carry            []historyEvent
 	gaps             map[string]int
 	skips            uint64
+	oc               *openCodeCursor // OpenCode sessions page by message seq, not byte offset
 }
 
 type snapshotStore struct {
@@ -262,7 +263,10 @@ func (s historyScope) confine(agent, path string) *historyError {
 }
 
 // openSnapshot fixes the EOF boundary of a session's native log.
-func (h *historyService) openSnapshot(agent, session, query string, src *indexedFile) (*snapshot, *historyError) {
+func (h *historyService) openSnapshot(ctx context.Context, agent, session, query string, src *indexedFile) (*snapshot, *historyError) {
+	if agent == "opencode" {
+		return h.openOpenCodeSnapshot(ctx, session, query, src)
+	}
 	if e := h.scope.confine(agent, src.Path); e != nil {
 		return nil, e
 	}
@@ -291,10 +295,47 @@ func (h *historyService) openSnapshot(agent, session, query string, src *indexed
 	return s, nil
 }
 
+// pager places events into one response page under the count and byte budgets
+// and the serving host's policy, for every agent's reader.
+type pager struct {
+	s      *snapshot
+	limit  int
+	used   int
+	events []historyEvent
+}
+
+// place appends ev when it fits and reports whether it was consumed: withheld
+// and oversized events are counted as gaps and consumed, so a page that is full
+// returns false and the caller carries ev to the next page.
+func (p *pager) place(ev historyEvent) bool {
+	if p.s.access != nil {
+		if code := p.s.access.event(p.s.agent, ev.at); code != "" {
+			p.s.gaps[code]++
+			return true
+		}
+	}
+	raw, _ := json.Marshal(ev)
+	size := len(raw) + 1
+	budget := maxHistoryResponse - historyReserve
+	if size > budget {
+		p.s.gaps["event_too_large"]++
+		return true
+	}
+	if len(p.events) >= p.limit || p.used+size > budget {
+		return false
+	}
+	p.events = append(p.events, ev)
+	p.used += size
+	return true
+}
+
 // readPage emits the next permitted events from the snapshot in source order.
 // It returns whether the snapshot is exhausted. Parser state advances with
 // every consumed record, so events that do not fit are carried, never reparsed.
 func (h *historyService) readPage(ctx context.Context, s *snapshot, limit int) ([]historyEvent, bool, *historyError) {
+	if s.oc != nil {
+		return h.readOpenCodePage(ctx, s, limit)
+	}
 	if e := h.scope.confine(s.agent, s.path); e != nil {
 		return nil, false, e
 	}
@@ -314,29 +355,8 @@ func (h *historyService) readPage(ctx context.Context, s *snapshot, limit int) (
 			return nil, false, changed
 		}
 	}
-	events := []historyEvent{}
-	used := 0
-	budget := maxHistoryResponse - historyReserve
-	place := func(ev historyEvent) bool {
-		if s.access != nil {
-			if code := s.access.event(s.agent, ev.at); code != "" {
-				s.gaps[code]++
-				return true
-			}
-		}
-		raw, _ := json.Marshal(ev)
-		size := len(raw) + 1
-		if size > budget {
-			s.gaps["event_too_large"]++
-			return true
-		}
-		if len(events) >= limit || used+size > budget {
-			return false
-		}
-		events = append(events, ev)
-		used += size
-		return true
-	}
+	pg := &pager{s: s, limit: limit, events: []historyEvent{}}
+	place := pg.place
 	for len(s.carry) > 0 && place(s.carry[0]) {
 		s.carry = s.carry[1:]
 	}
@@ -347,7 +367,7 @@ func (h *historyService) readPage(ctx context.Context, s *snapshot, limit int) (
 		var pending int64
 		scanned := int64(0)
 		dropping := false
-		for scanned < maxHistoryScan && len(events) < limit && len(s.carry) == 0 {
+		for scanned < maxHistoryScan && len(pg.events) < limit && len(s.carry) == 0 {
 			if ctx.Err() != nil {
 				break
 			}
@@ -412,10 +432,10 @@ func (h *historyService) readPage(ctx context.Context, s *snapshot, limit int) (
 		}
 	}
 	s.skips = s.sink.skips
-	if ctx.Err() != nil && len(events) == 0 && s.offset == start {
+	if ctx.Err() != nil && len(pg.events) == 0 && s.offset == start {
 		return nil, false, herr("RESOURCE_LIMIT", "the request deadline or cancellation arrived before a page could be produced; retry", true)
 	}
-	return events, s.offset >= s.eof && len(s.carry) == 0, nil
+	return pg.events, s.offset >= s.eof && len(s.carry) == 0, nil
 }
 
 func (s *snapshot) coverage() map[string]any {

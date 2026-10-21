@@ -10,15 +10,15 @@ import (
 
 // PeerHistory is one level of the opt-in policy that lets directly paired hosts
 // search and read this host's session history. [gateway.history] is the global
-// default and master switch; [claude.peer_history] and [codex.peer_history]
-// override it for history whose source agent is that agent.
+// default and master switch; [claude.peer_history], [codex.peer_history] and
+// [opencode.peer_history] override it for history whose source agent is that agent.
 type PeerHistory struct {
 	Enabled  bool   `toml:"enabled"`
 	Lookback string `toml:"lookback"`
 }
 
 // HistoryAgents lists the source agents a peer-history policy can name.
-var HistoryAgents = []string{"claude", "codex"}
+var HistoryAgents = []string{"claude", "codex", "opencode"}
 
 // DefaultLookback applies when sharing is enabled without an explicit lookback.
 const DefaultLookback = "30d"
@@ -55,8 +55,8 @@ func (a AgentHistory) Cutoff(now time.Time) *time.Time {
 // HistoryPolicy is the serving host's effective peer-history policy. The zero
 // value shares nothing. It is comparable so service configurations stay so.
 type HistoryPolicy struct {
-	Enabled       bool
-	Claude, Codex AgentHistory
+	Enabled                 bool
+	Claude, Codex, OpenCode AgentHistory
 }
 
 // Agent returns the effective policy for a source agent; unknown agents and a
@@ -68,6 +68,8 @@ func (p HistoryPolicy) Agent(agent string) AgentHistory {
 		a = p.Claude
 	case "codex":
 		a = p.Codex
+	case "opencode":
+		a = p.OpenCode
 	default:
 		return AgentHistory{}
 	}
@@ -126,10 +128,13 @@ func historyPolicy(global PeerHistory, agents map[string]PeerHistory, defined fu
 		if defined(table, "enabled") {
 			a.Enabled = p.Enabled && o.Enabled
 		}
-		if agent == "claude" {
+		switch agent {
+		case "claude":
 			p.Claude = a
-		} else {
+		case "codex":
 			p.Codex = a
+		default:
+			p.OpenCode = a
 		}
 	}
 	return p, nil
