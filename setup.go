@@ -43,13 +43,16 @@ var openCodePlugin []byte
 //go:embed plugins/opencode/rhizome-tui.js
 var openCodeTUIPlugin []byte
 
-// agent is a coding agent Rhizome knows how to serve and where it loads skills.
+// agent is a coding agent Rhizome knows how to serve and where its user-scope
+// skill, MCP server registration and hooks live.
 type agent struct {
 	Name     string // CLI/flag identifier: claude, codex, opencode
 	Label    string // human-readable name
 	Skills   string // directory that holds <skill>/SKILL.md
 	Plugin   string // OpenCode plugin destination; empty for other agents
 	TUI      string // OpenCode TUI plugin destination; empty for other agents
+	MCP      string // file holding the user-scope MCP server registration
+	Hooks    string // file holding the user-scope hooks
 	Detected bool
 	Reason   string // why it was (not) detected
 }
@@ -57,11 +60,14 @@ type agent struct {
 // detectAgents reports the agents Rhizome can integrate with. Detection uses the
 // same configuration directories the MCP integration documents, plus the agent
 // binary on PATH. Undetected agents are still returned so --agents can force them.
+// Destinations follow the effective configuration: Claude's config directory
+// (CLAUDE_CONFIG_DIR) and Codex's home (CODEX_HOME).
 func detectAgents(c config.Config, lookPath func(string) (string, error)) []agent {
+	home, _ := os.UserHomeDir()
 	claudeDir, codexDir, openCodeDir := c.Claude.ConfigDir, c.Codex.Home, openCodeConfigDir(os.Getenv, os.UserHomeDir)
 	agents := []agent{
-		{Name: "claude", Label: "Claude Code", Skills: filepath.Join(claudeDir, "skills")},
-		{Name: "codex", Label: "Codex", Skills: filepath.Join(codexDir, "skills")},
+		{Name: "claude", Label: "Claude Code", Skills: filepath.Join(claudeDir, "skills"), MCP: claudeGlobalConfig(claudeDir, home), Hooks: filepath.Join(claudeDir, "settings.json")},
+		{Name: "codex", Label: "Codex", Skills: filepath.Join(codexDir, "skills"), MCP: filepath.Join(codexDir, "config.toml"), Hooks: filepath.Join(codexDir, "hooks.json")},
 		{Name: "opencode", Label: "OpenCode", Skills: filepath.Join(openCodeDir, "skills"), Plugin: filepath.Join(openCodeDir, "plugins", "rhizome.js"), TUI: filepath.Join(openCodeDir, "plugins", "rhizome-tui", "tui.js")},
 	}
 	for i := range agents {
@@ -191,7 +197,7 @@ func pickAgents(in io.Reader, out io.Writer, agents []agent, checked []bool) ([]
 			fmt.Fprintf(out, "\r\x1b[2K%s%s %s  %s%s\r\n", cursor, box, a.Label, a.Skills, note)
 		}
 	}
-	fmt.Fprint(out, "Install the /rhizome-collab skill for which agents?\r\n")
+	fmt.Fprint(out, "Install Rhizome (MCP server, binding hooks and the /rhizome-collab skill) for which agents?\r\n")
 	fmt.Fprint(out, "space: toggle  a: all/none  enter: confirm  q: cancel\r\n")
 	draw()
 	keys := bufio.NewReader(in)
@@ -296,8 +302,9 @@ func parseAgentFlag(value string, agents []agent) ([]bool, error) {
 
 func setup(args []string) error {
 	opts := flag.NewFlagSet("setup", flag.ContinueOnError)
-	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex, opencode) or \"all\"; omit for an interactive picker")
+	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex, opencode) or \"all\": installs the skill, and for Claude and Codex also registers the MCP server and hooks at user scope (OpenCode: skill and plugins; its MCP entry is added by hand, see docs/opencode.md); omit for an interactive picker")
 	config.Bind(opts)
+	plain := opts.Bool("plain", false, "use the original line/picker prompts instead of Bubble Tea")
 	list := opts.Bool("list", false, "print detected agents and exit")
 	hostname := opts.String("hostname", "", "with --network: device label override; blank uses the OS hostname")
 	network := opts.String("network", "", "write the configuration non-interactively: local, lan or tailscale; omit for the interactive questions")
@@ -324,11 +331,11 @@ func setup(args []string) error {
 			}
 		}
 	}
-	c, path, err := resolveForSetup(opts)
+	c, path, explicit, err := resolveForSetup(opts, false)
 	if err != nil {
 		return err
 	}
-	tty := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	tty := usableTerminal()
 	agents := detectAgents(c, exec.LookPath)
 	if *list {
 		for _, a := range agents {
@@ -337,6 +344,9 @@ func setup(args []string) error {
 				state = "detected"
 			}
 			fmt.Printf("%-8s %-12s %s (%s)\n", a.Name, state, a.Skills, a.Reason)
+			if a.MCP != "" {
+				fmt.Printf("%-8s %-12s mcp %s; hooks %s\n", "", "", a.MCP, a.Hooks)
+			}
 		}
 		return nil
 	}
@@ -352,6 +362,21 @@ func setup(args []string) error {
 		answers = &a
 	}
 	var checked []bool
+	if tty && !*plain && (*agentsFlag == "" || answers == nil) {
+		if *agentsFlag != "" {
+			checked, err = parseAgentFlag(*agentsFlag, agents)
+			if err != nil {
+				return err
+			}
+		}
+		m := newSetupModel(c, path, agents, checked, answers, *replaceConfig)
+		m.explicit = explicit
+		m.reload = func() (config.Config, error) {
+			c, _, _, err := resolveForSetup(opts, true)
+			return c, err
+		}
+		return runSetupTUI(m)
+	}
 	configOnly := false
 	switch {
 	case *agentsFlag != "":
@@ -377,47 +402,66 @@ func setup(args []string) error {
 	default:
 		return fmt.Errorf("stdin is not a terminal; pass --agents claude,codex,opencode or --agents all")
 	}
-	any := false
-	for i, a := range agents {
-		if !checked[i] {
-			continue
+	selected := false
+	for _, ok := range checked {
+		selected = selected || ok
+	}
+	if !selected && !configOnly {
+		fmt.Println("nothing selected; no agent installed")
+	}
+	// Configuration first: directory answers decide where agents are installed.
+	wizard, err := setupConfig(c, path, answers, *replaceConfig, tty, os.Stdin, os.Stdout, os.Stderr)
+	if err != nil {
+		return err
+	}
+	if selected {
+		// Re-read the (possibly new) file so the installs see its directories.
+		if c, path, explicit, err = resolveForSetup(opts, true); err != nil {
+			return err
 		}
-		any = true
-		status, err := installSkill(a.Skills)
+		exe, err := os.Executable()
 		if err != nil {
-			return fmt.Errorf("%s: %w", a.Label, err)
+			return err
 		}
-		fmt.Printf("%s: %s %s\n", a.Label, status, filepath.Join(a.Skills, skillName))
-		if a.Plugin != "" {
-			status, err := installPlugin(a.Plugin, openCodePlugin)
-			if err != nil {
-				return fmt.Errorf("%s plugin: %w", a.Label, err)
-			}
-			fmt.Printf("%s: %s %s\n", a.Label, status, a.Plugin)
+		if exe, err = filepath.Abs(exe); err != nil {
+			return err
 		}
-		if a.TUI != "" {
-			status, err := installPlugin(a.TUI, openCodeTUIPlugin)
-			if err != nil {
-				return fmt.Errorf("%s TUI plugin: %w", a.Label, err)
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		in := agentInstaller{exe: exe, home: home, c: c, explicit: explicit, lookPath: exec.LookPath, now: time.Now, out: os.Stdout}
+		for i, a := range detectAgents(c, exec.LookPath) {
+			if !checked[i] {
+				continue
 			}
-			fmt.Printf("%s: %s %s\n", a.Label, status, a.TUI)
+			if err := in.install(a); err != nil {
+				return err
+			}
 		}
 	}
-	if !any && !configOnly {
-		fmt.Println("nothing selected; no skills installed")
+	if !wizard {
+		return nil
 	}
-	return setupConfig(c, path, answers, *replaceConfig, tty, os.Stdin, os.Stdout, os.Stderr)
+	p := prompter{in: bufio.NewReader(os.Stdin), out: os.Stdout}
+	install, err := p.yesNo("Install the background service now", false)
+	if err != nil || !install {
+		return err
+	}
+	return serviceCommand([]string{"install", "--config", path})
 }
 
 // resolveForSetup resolves configuration like every other command, except that
 // an explicitly selected file that does not exist yet is allowed: setup is the
-// command that creates it.
-func resolveForSetup(opts *flag.FlagSet) (config.Config, string, error) {
+// command that creates it. explicit reports a --config/RHIZOME_CONFIG selection.
+// The first resolution logs like other commands; later ones (after the file was
+// written) are quiet.
+func resolveForSetup(opts *flag.FlagSet, quiet bool) (config.Config, string, bool, error) {
 	flags := map[string]string{}
 	opts.Visit(func(f *flag.Flag) { flags[f.Name] = f.Value.String() })
 	path, explicit, err := config.Target(flags, os.Getenv)
 	if err != nil {
-		return config.Config{}, "", err
+		return config.Config{}, "", false, err
 	}
 	if _, statErr := os.Lstat(path); explicit && errors.Is(statErr, fs.ErrNotExist) {
 		delete(flags, "config")
@@ -427,16 +471,21 @@ func resolveForSetup(opts *flag.FlagSet) (config.Config, string, error) {
 			}
 			return os.Getenv(k)
 		})
-		return c, path, err
+		return c, path, explicit, err
+	}
+	if quiet {
+		c, err := config.Resolve(flags, os.Getenv)
+		return c, path, explicit, err
 	}
 	c, err := config.FromFlags(opts)
-	return c, path, err
+	return c, path, explicit, err
 }
 
 // setupConfig creates the configuration file. answers is set by --network;
 // otherwise a terminal gets the interactive questions and anything else leaves
-// configuration alone and says so.
-func setupConfig(c config.Config, path string, answers *configAnswers, replace, tty bool, in io.Reader, out, errOut io.Writer) error {
+// configuration alone and says so. It reports whether the wizard wrote the file,
+// in which case the caller offers the service install afterwards.
+func setupConfig(c config.Config, path string, answers *configAnswers, replace, tty bool, in io.Reader, out, errOut io.Writer) (bool, error) {
 	var err error
 	wizard := answers == nil
 	p := prompter{in: bufio.NewReader(in), out: out}
@@ -445,44 +494,37 @@ func setupConfig(c config.Config, path string, answers *configAnswers, replace, 
 	if answers == nil {
 		if !tty {
 			fmt.Fprintln(errOut, "configuration not written: no terminal for the questions; pass --network local|lan|tailscale")
-			return nil
+			return false, nil
 		}
 		if exists {
 			if replace, err = confirmExisting(p, path); err != nil {
-				return err
+				return false, err
 			}
 			if !replace {
 				fmt.Fprintf(out, "kept existing %s\n", path)
-				return nil
+				return false, nil
 			}
 		}
 		a, err := askConfig(p, c, tailscaleCheck(channel.CheckTailscale))
 		if err != nil {
-			return err
+			return false, err
 		}
 		answers = &a
 	} else if exists && !replace {
 		fmt.Fprintf(errOut, "configuration not written: %s already exists; pass --replace-config to back it up and replace it\n", path)
-		return nil
+		return false, nil
 	}
 	body, err := answers.render()
 	if err != nil {
-		return err
+		return false, err
 	}
 	backup, err := writeConfig(path, body, exists && replace, time.Now())
 	if err != nil {
-		return err
+		return false, err
 	}
 	if backup != "" {
 		fmt.Fprintf(out, "backed up previous configuration to %s\n", backup)
 	}
 	fmt.Fprintf(out, "wrote %s (network mode: %s)\n", path, answers.Network.Mode)
-	if !wizard {
-		return nil
-	}
-	install, err := p.yesNo("Install the background service now", false)
-	if err != nil || !install {
-		return err
-	}
-	return serviceCommand([]string{"install", "--config", path})
+	return wizard, nil
 }

@@ -439,6 +439,25 @@ logged link stop reasons and the short-link dial backoff. This is one-machine
 coverage. See [gateway verification](gateway.md#verification) for the manual
 two-device LAN/Tailscale checklist and known compatibility limits.
 
+## Setup agent installation (#55)
+
+Automated in `setup_agents_test.go`: the installed hook groups equal
+`.claude/settings.json` and `examples/codex/hooks.json`; server entries for
+default and custom homes, explicit configuration (missing file refused) and a
+resolvable Codex executable; merges that keep unrelated servers, hooks, mixed
+hook groups, comments and numbers while removing stale Rhizome entries; backups
+with the same mode, symlinked files edited through the link, malformed JSON/TOML
+and inline Codex tables rejected without replacement, read-only directories
+leaving the original intact; and the real entry point in a subprocess with an
+isolated home containing spaces (`--list` read-only, `--network` alone
+config-only, one agent selected leaves the other untouched, `--agents all` with
+an explicit configuration, idempotent repeat). Live validation is not automated:
+with a throwaway `HOME`, run `rhizome setup --agents all --network local`, start
+Claude Code with the channel flag and Codex from another directory, confirm each
+shows the `rhizome` server and its hooks, and that `list_sessions` reports
+`BOUND` after the first prompt. Cursor is not supported on this base, so no
+Cursor check applies.
+
 ## Collaboration skill device origin (#49)
 
 The skill is prose, so no automated check proves how an agent applies it.
@@ -513,3 +532,39 @@ the session title; then subscribe from a Claude session and confirm activity and
 delivery in both directions, and that each delivery to the OpenCode session shows
 a "Rhizome · <kind> from <id>" toast. Interactive TUI parity with `run`/`serve` is
 otherwise unverified.
+
+## Terminal interfaces (#48, 2026-10-21)
+
+`python3 scripts/smoke_tui.py` passed on macOS using isolated Unix PTYs and a
+fake local gateway. It checks setup back navigation, cancellation without writes,
+review/apply and 0600 config; service stop confirmation/decline and refreshed
+health; read-only status ignoring mutation keys; peers empty/unavailable states,
+exact host identity, refresh, plain JSON, and terminal-control sanitization;
+24-column/8-row resize, `NO_COLOR`, interrupted outstanding gateway requests,
+redirected explicit-TUI rejection, and restored terminal modes/alternate screen.
+BSD's transient `PENDIN` bookkeeping flag is excluded from mode comparison.
+Model tests cover mode-specific answers, defaults, inline validation, keep/backup,
+selected skills only, opt-in service dispatch, partial failure, duplicate actions,
+and worker cancellation. `service run` remains covered by the service smoke.
+
+The UI dependency is pinned to stable Bubble Tea v1.3.10; the only additional
+direct helper is its existing `x/ansi` dependency for terminal-cell wrapping.
+The full vulnerability scan reports 18 existing reachable advisories in the Go
+standard library, `golang.org/x/net`, and gRPC. A baseline scan of the pre-change
+commit with the same toolchain found the same advisory/module/version set;
+this change adds no reachable findings. This is not a clean vulnerability scan.
+
+Manual terminal checklist for releases (not a claim of native lifecycle checks):
+
+- Run setup in an ordinary terminal and a narrow window. Select/deselect agents,
+  enter invalid values, go back, switch LAN/Tailscale/local, review, and cancel.
+  Verify no files changed. Apply in a disposable home and inspect keys/permissions.
+- On a disposable service installation, exercise install/start/stop/uninstall,
+  decline and accept confirmations, refresh, and interrupt a pending action.
+  Verify completed actions remain accurately reported and the shell is usable.
+- Open status and peers views with real paired hosts, navigate/refresh/resize,
+  stop the service, and check visible errors. Exit with q, Esc, and Ctrl-C.
+- Repeat on Linux and Windows, including a no-color terminal. Native service
+  mutation and human visual checks on those platforms were not performed here;
+  the recorded terminal run is automated macOS PTY coverage, not cross-platform
+  visual or native lifecycle verification.

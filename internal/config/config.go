@@ -179,6 +179,21 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 		return c, fmt.Errorf("config %s: %w", path, os.ErrNotExist)
 	}
 	c.Found = found
+	return resolveDocument(c, home, file, flags, getenv)
+}
+
+// Preview validates staged TOML through the resolver without reading or writing a file.
+func Preview(body string) (Config, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return Config{}, err
+	}
+	return resolveDocument(Config{Sources: map[string]string{}}, home, []byte(body), nil, func(string) string { return "" })
+}
+
+func resolveDocument(c Config, home string, file []byte, flags map[string]string, getenv func(string) string) (Config, error) {
+	path := c.Path
+	var err error
 	var raw Config
 	md, err := toml.Decode(string(file), &raw)
 	if err != nil {
