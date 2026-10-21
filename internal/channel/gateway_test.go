@@ -270,10 +270,15 @@ func TestGatewayCorruptStateFailsClosed(t *testing.T) {
 	}
 }
 func TestGatewayIdentityBounds(t *testing.T) {
-	p := &pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: "claude"}
-	if !validGatewayIdentity(p) {
-		t.Fatal("rejected valid identity")
+	for _, agent := range []string{"claude", "codex", "opencode"} {
+		if !validGatewayIdentity(&pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: agent}) {
+			t.Fatalf("rejected valid %s identity", agent)
+		}
 	}
+	if validGatewayIdentity(&pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: "other"}) {
+		t.Fatal("accepted unknown agent type")
+	}
+	p := &pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: "claude"}
 	p.GatewayHost = "other"
 	if validGatewayIdentity(p) {
 		t.Fatal("accepted forwarded identity")

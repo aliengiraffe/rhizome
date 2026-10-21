@@ -341,7 +341,7 @@ func (l *gatewayLink) advertise() {
 	}
 }
 func validGatewayIdentity(p *pb.Identity) bool {
-	return p != nil && p.Protocol == 1 && p.GatewayVersion == 1 && len(p.NodeId) == 32 && p.SessionId != "" && len(p.SessionId) <= 128 && p.Generation > 0 && p.GatewayHost == "" && p.Endpoint == "" && p.GossipEndpoint == "" && p.CertFingerprint == "" && len(p.Host) <= 64 && len(p.SessionName) <= 96 && len(p.Project) <= 180 && len(p.DisplayName) <= 40 && (p.AgentType == "claude" || p.AgentType == "codex")
+	return p != nil && p.Protocol == 1 && p.GatewayVersion == 1 && len(p.NodeId) == 32 && p.SessionId != "" && len(p.SessionId) <= 128 && p.Generation > 0 && p.GatewayHost == "" && p.Endpoint == "" && p.GossipEndpoint == "" && p.CertFingerprint == "" && len(p.Host) <= 64 && len(p.SessionName) <= 96 && len(p.Project) <= 180 && len(p.DisplayName) <= 40 && (p.AgentType == "claude" || p.AgentType == "codex" || p.AgentType == "opencode")
 }
 func (l *gatewayLink) reconcile() {
 	for {
