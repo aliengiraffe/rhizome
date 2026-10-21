@@ -94,7 +94,7 @@ func entry() error {
 		}
 	case "config":
 		fs := flag.NewFlagSet("config", flag.ContinueOnError)
-		config.Bind(fs, "runtime-dir", "codex-bin", "claude-root", "codex-root")
+		config.Bind(fs, "runtime-dir", "codex-bin", "claude-root", "codex-root", "opencode-root")
 		if err := fs.Parse(os.Args[1:]); err != nil {
 			return err
 		}

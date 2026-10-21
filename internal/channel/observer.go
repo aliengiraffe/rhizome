@@ -18,7 +18,7 @@ import (
 
 // ObserverOptions configures read-only discovery. Roots contain agent logs, not
 // arbitrary user files. Runtime must match integrated Rhizome processes.
-type ObserverOptions struct{ Runtime, ClaudeRoot, CodexRoot, Hostname string }
+type ObserverOptions struct{ Runtime, ClaudeRoot, CodexRoot, OpenCodeRoot, Hostname string }
 type observedFile struct {
 	startupBaseline            bool
 	c                          *collector
@@ -42,7 +42,7 @@ type observer struct {
 // may run in a runtime scope. It never starts or modifies an agent.
 func RunObserver(ctx context.Context, opts ObserverOptions) error {
 	var err error
-	for _, root := range []*string{&opts.ClaudeRoot, &opts.CodexRoot} {
+	for _, root := range []*string{&opts.ClaudeRoot, &opts.CodexRoot, &opts.OpenCodeRoot} {
 		if *root != "" {
 			*root, err = filepath.Abs(*root)
 			if err != nil {
@@ -71,7 +71,7 @@ func RunObserver(ctx context.Context, opts ObserverOptions) error {
 	}
 	defer w.Close()
 	o := &observer{ctx: ctx, opts: opts, watch: w, files: map[string]*observedFile{}, dirs: map[string]bool{}}
-	o.index = newHistoryIndex(historyScope{Runtime: opts.Runtime, ClaudeRoot: opts.ClaudeRoot, CodexRoot: opts.CodexRoot}, func() bool { return o.retry })
+	o.index = newHistoryIndex(historyScope{Runtime: opts.Runtime, ClaudeRoot: opts.ClaudeRoot, CodexRoot: opts.CodexRoot, OpenCodeRoot: opts.OpenCodeRoot}, func() bool { return o.retry })
 	defer func() {
 		for _, f := range o.files {
 			if f.n != nil {
@@ -129,6 +129,7 @@ func RunObserver(ctx context.Context, opts ObserverOptions) error {
 						o.addRoot(root, false)
 					}
 				}
+				o.openCodeEvent(event.Name)
 			}
 		case err, ok := <-w.Errors:
 			if !ok {
@@ -196,6 +197,50 @@ func (o *observer) inventory(initial bool) {
 	for _, root := range []string{o.opts.ClaudeRoot, o.opts.CodexRoot} {
 		if root != "" {
 			o.addRoot(root, initial)
+		}
+	}
+	o.addOpenCodeRoot()
+}
+
+// addOpenCodeRoot watches the OpenCode data directory itself, not its subtree:
+// the session database and its write-ahead log live directly inside it, and its
+// other contents (logs, snapshots) must never wake the indexer. It also asks the
+// index to refresh, so a reconciliation inventory re-reads the database.
+func (o *observer) addOpenCodeRoot() {
+	root := o.opts.OpenCodeRoot
+	if root == "" || o.index == nil {
+		return
+	}
+	for parent := filepath.Dir(root); ; {
+		if st, err := os.Stat(parent); err == nil && st.IsDir() {
+			o.addDir(parent) // nearest existing parent, so a missing root can appear later
+			break
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			break
+		}
+		parent = next
+	}
+	if st, err := os.Lstat(root); err == nil && st.IsDir() {
+		o.addDir(root)
+	}
+	o.index.openCodeChanged()
+}
+
+// openCodeEvent reacts to a filesystem event in or around the data directory.
+func (o *observer) openCodeEvent(name string) {
+	root := o.opts.OpenCodeRoot
+	if root == "" || o.index == nil {
+		return
+	}
+	switch {
+	case name == root || strings.HasPrefix(root, name+string(os.PathSeparator)):
+		o.addOpenCodeRoot()
+	case filepath.Dir(name) == root:
+		switch filepath.Base(name) {
+		case openCodeDBName, openCodeDBName + "-wal":
+			o.index.openCodeChanged()
 		}
 	}
 }

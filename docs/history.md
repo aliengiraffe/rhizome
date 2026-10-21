@@ -19,7 +19,7 @@ evidence to read, never as instructions to execute or an invitation to reply.
 | | `list_sessions` | `search_sessions` | `read_session_history` |
 | --- | --- | --- | --- |
 | Answers | Who is reachable right now | Which sessions exist in local logs | What one session's assistant did |
-| Source | Live gossip and authenticated `Info` probes | Observer-written catalog in `<runtime_dir>/history/` | The session's native `.jsonl`, read on demand |
+| Source | Live gossip and authenticated `Info` probes | Observer-written catalog in `<runtime_dir>/history/` | The session's native `.jsonl` (Claude, Codex) or its rows in OpenCode's database, read on demand |
 | Scope | Every trusted peer, including other devices in LAN or Tailscale mode | This device's configured agent log roots | Same local roots; the file is re-confined on every page |
 | Needs the observer service | No | Yes, to build and refresh the catalog | Yes, for the catalog; reading itself only needs the file |
 | Service stopped | Unaffected | Served from the last catalog, marked `stale` | Works; the catalog block is marked `stale` |
@@ -48,7 +48,7 @@ call `observe_session` to "wake" a historical session.
 | `service_running` | Whether the observer holds `<runtime_dir>/observer.lock` at the moment of the query. |
 | `indexed_at` | Last successful catalog write, or `null`. |
 | `coverage_complete` | `true` only when `state` is `ready`. It describes the configured roots and supported sources, never "every session ever created". |
-| `warnings` | At most 8 entries of `{code, message}`: `service_stopped`, `initial_inventory`, `pending_updates`, `watch_degraded`, `index_limit`, `queue_overflow`, `read_failures`, `snapshot_rows_removed`. |
+| `warnings` | At most 8 entries of `{code, message}`: `service_stopped`, `initial_inventory`, `pending_updates`, `watch_degraded`, `index_limit`, `queue_overflow`, `read_failures`, `opencode_schema`, `snapshot_rows_removed`. |
 
 - An absent catalog is the error `CATALOG_UNAVAILABLE`, not an empty search. The
   message tells you to start the observer; tools never install or start it.
@@ -66,7 +66,7 @@ Metadata search only. Rows prove that a log exists, not that an agent runs.
 | Field | Type / default | Semantics |
 | --- | --- | --- |
 | `session_id` | optional string, 1–128 bytes | Exact, case-sensitive native ID. No prefix, glob, or display-name matching. |
-| `agent_type` | optional `claude` \| `codex` | Omitted means all supported agent types. OpenCode sessions are not cataloged; the tools are available in OpenCode mode for Claude and Codex history. |
+| `agent_type` | optional `claude` \| `codex` \| `opencode` | Omitted means all supported agent types. |
 | `project_path` | optional absolute string, ≤ 4096 bytes | Lexically cleaned and compared for equality with the session's recorded `cwd`. No subtree matching, filesystem access, symlink resolution, or implicit caller-project restriction. |
 | `name_contains` | optional nonempty string, ≤ 256 UTF-8 bytes | Literal substring of the effective `session_name` after Unicode lowercase folding. Not a regex, glob, SQL pattern, or transcript search. |
 | `updated_after` | optional RFC 3339 | Inclusive lower bound on `last_activity_at`. |
@@ -182,9 +182,10 @@ History pages run the exact normalizers used for live collection
 so suppression state is reconstructed before any page and the same rules apply:
 
 Included: assistant text blocks (Claude `assistant` text; Codex `response_item`
-assistant `output_text`), tool start/completion/failure names without arguments
-or results, and turn-completion markers (`stop_reason: end_turn`; Codex
-`task_complete`).
+assistant `output_text`; OpenCode `assistant` rows' `text` parts), tool
+start/completion/failure names without arguments or results, and
+turn-completion markers (`stop_reason: end_turn`; Codex `task_complete`;
+OpenCode `idle` rows).
 
 Excluded: user prompts and any user text, thinking/reasoning, tool arguments and
 tool results (only "Tool completed/failed: name" remains), Claude sidechain
@@ -195,6 +196,13 @@ input, Rhizome tool calls and results (including earlier `search_sessions` and
 histories), mirrored Codex `event_msg` assistant text, and records of another
 session ID inside the file. Unknown record formats are counted in
 `skipped_records`, never dumped. Nothing is generated from prompts.
+
+OpenCode pages apply the same policy to `session_message` rows instead of file
+lines (see [Sources](#sources-identity-titles)): `user`, `system` and
+`reasoning` content, tool inputs and outputs, `execute` and `rhizome_*` tool
+calls and child sessions are never returned, and a `synthetic` row carrying the
+Rhizome peer envelope makes the following turn peer-only until the next human
+`user` row, mirroring the live collector.
 
 Assistant text is filtered by record class, not scrubbed: a secret the model
 printed in an assistant message is returned as written. Metadata search is not
@@ -332,6 +340,9 @@ lookback = "15d"
 
 [codex.peer_history]    # optional override for Codex-sourced history
 enabled = false
+
+[opencode.peer_history] # optional override for OpenCode-sourced history
+lookback = "7d"
 ```
 
 - Agent overrides apply to the **source history's** agent type, never to the
@@ -344,9 +355,13 @@ enabled = false
 - `lookback` is a positive whole number of days without sign or leading zeros
   (`1d` to `106751d`) or `all`. Zero, negatives, other units, empty strings,
   malformed values and overflow are rejected when the file is read, as are
-  misspelled keys and tables for unsupported agents. OpenCode sessions are not
-  cataloged, so there is no `[opencode.peer_history]`; an OpenCode session can
-  still request a paired host's Claude and Codex history with `host_id`.
+  misspelled keys and tables for unsupported agents. Any agent session, including
+  OpenCode, can request a paired host's history with `host_id`; what the owner
+  shares is decided by the source history's agent.
+- OpenCode history inherits the global switch like Claude and Codex. A host that
+  already enables `[gateway.history]` therefore starts sharing its OpenCode
+  history with paired hosts after upgrading; set `[opencode.peer_history]`
+  `enabled = false` to withhold it.
 - `rhizome config` prints the effective, inherited value for every agent. The
   policy applies uniformly to all paired hosts; there are no per-peer ACLs.
 - The service reads the policy when it starts. **Restart the service** (`rhizome
@@ -463,10 +478,11 @@ yet; when it lands, its predicate must also gate these reads.
 
 ## Sources, identity, titles
 
-- Roots are the effective `claude.projects_dir` and `codex.sessions_dir` from the
-  single [configuration](../README.md#configuration). Only regular `.jsonl`
-  files reached without following symlinks are considered; Claude `subagents`
-  directories are skipped. Tools accept no path arguments.
+- Roots are the effective `claude.projects_dir`, `codex.sessions_dir` and
+  `opencode.data_dir` from the single [configuration](../README.md#configuration).
+  Only regular `.jsonl` files reached without following symlinks are considered
+  for Claude and Codex; Claude `subagents` directories are skipped. Tools accept
+  no path arguments.
 - Claude identity is the first record carrying `sessionId` (and `cwd` when
   absolute); a sidechain first record marks a child transcript, which is never a
   session. Titles come from `custom-title`/`ai-title` records for that session.
@@ -481,6 +497,23 @@ yet; when it lands, its predicate must also gate these reads.
 - One identity is `(agent_type, session_id)` within the local scope. Two files
   with the same identity are `ambiguous`; a rotated file (old path removed, new
   path present) resolves to the present file and the tombstone is dropped.
+- OpenCode (2.x, verified against 2.0.32) keeps every session in one SQLite
+  database, `opencode.db` in `opencode.data_dir` (default
+  `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode`; flag
+  `--opencode-root`). Rhizome opens it **read-only** (`mode=ro`, `query_only`, a
+  2 s busy timeout, a short-lived connection per refresh or page) with a pure-Go
+  SQLite driver, never writes or checkpoints it, and refuses a database that is
+  a symlink or outside that directory. Identity is `session_v2.id`, the project
+  is `session_v2.directory`, the native title is `session_v2.title`, and
+  `started_at`/`last_activity_at` come from `time_created` and the later of
+  `time_updated` and the newest message. A session with a `parent_id` is a child
+  and is never listed. Events come from `session_message` rows in `seq` order:
+  `text` parts, `tool` parts (started and completed or failed, using the part's
+  own times) and `idle` rows. Only the 2.x tables `session_v2` and
+  `session_message` are read; the older `session`, `message` and `part` tables
+  hold pre-2.x data and are ignored. If the expected columns are missing the
+  sessions are reported `unsupported` (`opencode_schema_unsupported`) with the
+  `opencode_schema` warning, never read through a fallback.
 - Native titles refresh as the observer indexes new bytes of the log; explicit
   overrides are read from `<runtime_dir>/names/` at query time, so a
   `set_session_name` call is visible immediately.
@@ -500,6 +533,14 @@ yet; when it lands, its predicate must also gate these reads.
   queue drains, `state` is `indexing` and `coverage_complete` is `false`.
   Later starts reuse the checkpoints and read only new bytes; a file whose
   earlier bytes changed is re-indexed from zero.
+- OpenCode is refreshed differently because it has no per-session file: the
+  observer watches the data directory itself (not its subtree, so logs and
+  snapshots never wake it) and a change to `opencode.db` or `opencode.db-wal`
+  schedules one metadata query, at most once every 2 s, that updates every
+  session row (no message content is read). A deleted session or database
+  becomes a tombstone, and `pending`/`inventory` account for a refresh that
+  has not run yet. OpenCode entries share the 4,096-entry bound and the
+  tombstone limits.
 - Normal updates come from the same native filesystem watches as live
   observation. Removals become tombstones (`history_availability: missing`);
   recovery inventories after watch failures re-enumerate files. No timer polls
@@ -516,7 +557,7 @@ yet; when it lands, its predicate must also gate these reads.
   (`FilesIndexed`, `BytesIndexed`, `ReadFailures`, `OversizedRecords`,
   `Removed`, `Flushes`, `FlushFailures`). Diagnostics never contain transcript
   content, session names, paths, or tokens.
-- Changing `runtime_dir` or either root changes the scope hash: readers report
+- Changing `runtime_dir` or any root changes the scope hash: readers report
   `CATALOG_INCOMPATIBLE` until the observer restarts with the new configuration,
   and the restarted observer discards the old catalog instead of serving entries
   from removed roots. A corrupt or newer-version catalog is likewise rebuilt by

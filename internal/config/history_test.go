@@ -39,7 +39,10 @@ func TestPeerHistoryPolicy(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("policy %+v, want %+v", got, tc.want)
 			}
-			if p.Agent("opencode").Enabled {
+			if p.Agent("opencode").Enabled != tc.want.enabled && tc.want.enabled {
+				t.Fatalf("opencode inherits the global policy: %+v", p.OpenCode)
+			}
+			if p.Agent("pi").Enabled {
 				t.Fatal("unsupported agent enabled")
 			}
 		})
@@ -71,7 +74,8 @@ func TestPeerHistoryRejectsInvalidValues(t *testing.T) {
 		"[codex.peer_history]\nlookback = \"all \"",
 		"[claude.peer_histroy]\nenabled = true",
 		"[claude.history]\nenabled = true",
-		"[opencode.peer_history]\nenabled = true",
+		"[opencode.peer_history]\nlookback = \"0d\"",
+		"[opencode.peer_histroy]\nenabled = true",
 		"[Claude.peer_history]\nenabled = true",
 		"[gateway.History]\nenabled = true",
 		"[gateway.history.claude]\nenabled = true",
@@ -139,5 +143,55 @@ func TestPeerHistoryFingerprintAndOutput(t *testing.T) {
 	var none bytes.Buffer
 	if err := resolve("").Write(&none); err != nil || !strings.Contains(none.String(), "gateway.history.enabled = false # source: default\n") || !strings.Contains(none.String(), "claude.peer_history.enabled = false") {
 		t.Fatalf("default output %v\n%s", err, none.String())
+	}
+}
+
+func TestOpenCodePeerHistoryOverrides(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	c, err := Resolve(map[string]string{"config": fixture(t, "[gateway.history]\nenabled = true\nlookback = \"7d\"\n[opencode.peer_history]\nlookback = \"all\"\n")}, noenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := c.PeerHistory.Agent("opencode"); !a.Enabled || a.Days != 0 {
+		t.Fatalf("opencode override: %+v", a)
+	}
+	if a := c.PeerHistory.Agent("claude"); a.Days != 7 {
+		t.Fatalf("claude must keep the global window: %+v", a)
+	}
+	c, err = Resolve(map[string]string{"config": fixture(t, "[gateway.history]\nenabled = true\n[opencode.peer_history]\nenabled = false\n")}, noenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.PeerHistory.Agent("opencode").Enabled || !c.PeerHistory.Agent("codex").Enabled {
+		t.Fatalf("disabling opencode must not affect other agents: %+v", c.PeerHistory)
+	}
+	if got := c.PeerHistory.Fingerprint(); !strings.Contains(got, "opencode=false") {
+		t.Fatalf("fingerprint omits opencode: %s", got)
+	}
+}
+
+func TestOpenCodeDataDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		body string
+		want string
+	}{
+		"default":        {nil, "", home + "/.local/share/opencode"},
+		"xdg":            {map[string]string{"XDG_DATA_HOME": "/xdg/data"}, "", "/xdg/data/opencode"},
+		"relative xdg":   {map[string]string{"XDG_DATA_HOME": "relative"}, "", home + "/.local/share/opencode"},
+		"file overrides": {map[string]string{"XDG_DATA_HOME": "/xdg/data"}, "[opencode]\ndata_dir = \"/custom/oc\"\n", "/custom/oc"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			getenv := func(k string) string { return tc.env[k] }
+			c, err := Resolve(map[string]string{"config": fixture(t, tc.body)}, getenv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.OpenCode.DataDir != tc.want {
+				t.Fatalf("data dir %q, want %q", c.OpenCode.DataDir, tc.want)
+			}
+		})
 	}
 }

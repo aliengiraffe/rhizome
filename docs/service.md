@@ -67,7 +67,7 @@ installation refuses to switch away from a running observer's runtime. The
 definition includes runtime metadata solely for this check, not for resolution.
 
 For foreground diagnostics or a custom service manager, use
-`rhizome service run --runtime-dir ... --claude-root ... --codex-root ...`.
+`rhizome service run --runtime-dir ... --claude-root ... --codex-root ... --opencode-root ...`.
 Configuration/root paths are local inputs; peer messages cannot change them.
 Roots must not overlap. Symlink entries and Claude `subagents` directories are
 not followed.

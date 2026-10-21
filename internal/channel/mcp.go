@@ -215,7 +215,7 @@ func Run(c config.Config, o Options) error {
 	defer cancel()
 	n := newNode(ctx)
 	defer n.close()
-	n.archive = newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir})
+	n.archive = newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
 	if err := n.start(o); err != nil {
 		return err
 	}

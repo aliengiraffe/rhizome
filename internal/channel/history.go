@@ -34,10 +34,10 @@ const (
 
 // historyScope binds a catalog and every cursor to the effective runtime and
 // configured log roots. Entries from other roots are never served.
-type historyScope struct{ Runtime, ClaudeRoot, CodexRoot string }
+type historyScope struct{ Runtime, ClaudeRoot, CodexRoot, OpenCodeRoot string }
 
 func (s historyScope) hash() string {
-	sum := sha256.Sum256([]byte(s.Runtime + "\x00" + s.ClaudeRoot + "\x00" + s.CodexRoot))
+	sum := sha256.Sum256([]byte(s.Runtime + "\x00" + s.ClaudeRoot + "\x00" + s.CodexRoot + "\x00" + s.OpenCodeRoot))
 	return hex.EncodeToString(sum[:])
 }
 func (s historyScope) path() string { return filepath.Join(s.Runtime, catalogDir, catalogName) }
@@ -46,7 +46,7 @@ func (s historyScope) path() string { return filepath.Join(s.Runtime, catalogDir
 // the path lies outside every root. Prefix checks are lexical: callers must
 // also refuse symlinks when opening.
 func (s historyScope) root(path string) (agent, root string) {
-	for _, item := range []struct{ root, agent string }{{s.ClaudeRoot, "claude"}, {s.CodexRoot, "codex"}} {
+	for _, item := range []struct{ root, agent string }{{s.ClaudeRoot, "claude"}, {s.CodexRoot, "codex"}, {s.OpenCodeRoot, "opencode"}} {
 		if item.root != "" && strings.HasPrefix(path, item.root+string(os.PathSeparator)) {
 			return item.agent, item.root
 		}

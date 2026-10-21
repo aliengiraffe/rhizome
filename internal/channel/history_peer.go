@@ -28,8 +28,8 @@ const (
 // GatewayHistory is what the service's gateway needs to serve peer history:
 // the observer's log roots and the effective policy read at service start.
 type GatewayHistory struct {
-	ClaudeRoot, CodexRoot string
-	Policy                config.HistoryPolicy
+	ClaudeRoot, CodexRoot, OpenCodeRoot string
+	Policy                              config.HistoryPolicy
 }
 
 // historyAccess narrows one request from an authenticated paired host. now is

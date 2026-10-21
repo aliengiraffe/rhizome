@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"rhizome/internal/config"
 )
 
 const maxHistoryArguments = 8 * 1024
@@ -81,7 +82,7 @@ var (
 	searchSchema = &jsonschema.Schema{Type: "object", AdditionalProperties: falseSchema(), Properties: map[string]*jsonschema.Schema{
 		"host_id":        hostSchema(),
 		"session_id":     {Type: "string", MinLength: intPtr(1), MaxLength: intPtr(128), Description: "Exact, case-sensitive native session ID. No prefix or display-name matching."},
-		"agent_type":     {Type: "string", Enum: []any{"claude", "codex"}, Description: "Filter by agent; omitted means both."},
+		"agent_type":     {Type: "string", Enum: []any{"claude", "codex", "opencode"}, Description: "Filter by agent; omitted means all."},
 		"project_path":   {Type: "string", MinLength: intPtr(1), MaxLength: intPtr(4096), Description: "Exact lexically cleaned absolute project path from session metadata. No subtree matching."},
 		"name_contains":  {Type: "string", MinLength: intPtr(1), MaxLength: intPtr(256), Description: "Case-insensitive literal substring of the effective session_name (at most 256 UTF-8 bytes). No regex, glob or transcript search."},
 		"updated_after":  {Type: "string", Format: "date-time", Description: "RFC 3339 inclusive lower bound on last_activity_at. Sessions without a known timestamp are excluded."},
@@ -92,7 +93,7 @@ var (
 	readSchema = &jsonschema.Schema{Type: "object", AdditionalProperties: falseSchema(), Required: []string{"session_id", "agent_type"}, Properties: map[string]*jsonschema.Schema{
 		"host_id":    hostSchema(),
 		"session_id": {Type: "string", MinLength: intPtr(1), MaxLength: intPtr(128), Description: "Exact session ID returned by search_sessions."},
-		"agent_type": {Type: "string", Enum: []any{"claude", "codex"}, Description: "Historical namespace of the session; not a live routing key."},
+		"agent_type": {Type: "string", Enum: []any{"claude", "codex", "opencode"}, Description: "Historical namespace of the session; not a live routing key."},
 		"limit":      {Type: "integer", Minimum: floatPtr(1), Maximum: floatPtr(200), Default: json.RawMessage("50"), Description: "Maximum permitted events in this page (default 50)."},
 		"cursor":     {Type: "string", MaxLength: intPtr(maxCursorLength), Description: "Opaque continuation of this session's fixed snapshot; repeat the same target and limit."},
 	}}
@@ -165,8 +166,8 @@ func parseSearch(raw json.RawMessage) (searchQuery, string, *historyError) {
 		q.SessionID = *in.SessionID
 	}
 	if in.AgentType != nil {
-		if *in.AgentType != "claude" && *in.AgentType != "codex" {
-			return q, "", herr("INVALID_ARGUMENT", "agent_type must be claude or codex", false)
+		if !validHistoryAgent(*in.AgentType) {
+			return q, "", herr("INVALID_ARGUMENT", "agent_type must be claude, codex or opencode", false)
 		}
 		q.AgentType = *in.AgentType
 	}
@@ -475,8 +476,8 @@ func (h *historyService) readWith(ctx context.Context, live func() liveView, acc
 	if in.SessionID == nil || *in.SessionID == "" || len(*in.SessionID) > 128 {
 		return nil, herr("INVALID_ARGUMENT", "session_id is required: a nonempty exact ID of at most 128 bytes", false)
 	}
-	if in.AgentType == nil || (*in.AgentType != "claude" && *in.AgentType != "codex") {
-		return nil, herr("INVALID_ARGUMENT", "agent_type is required and must be claude or codex", false)
+	if in.AgentType == nil || !validHistoryAgent(*in.AgentType) {
+		return nil, herr("INVALID_ARGUMENT", "agent_type is required and must be claude, codex or opencode", false)
 	}
 	limit := 50
 	if in.Limit != nil {
@@ -540,7 +541,7 @@ func (h *historyService) readWith(ctx context.Context, live func() liveView, acc
 			return nil, herr("SOURCE_CHANGED", "the catalog now records a different native log for this session; run a fresh initial read", false)
 		}
 	} else {
-		if snap, e = h.openSnapshot(agent, session, hash, src); e != nil {
+		if snap, e = h.openSnapshot(ctx, agent, session, hash, src); e != nil {
 			return nil, e
 		}
 		snap.owner = access.owner()
@@ -578,4 +579,14 @@ func (h *historyService) readWith(ctx context.Context, live func() liveView, acc
 		out["policy"] = access.describe()
 	}
 	return out, nil
+}
+
+// validHistoryAgent reports whether agent has a history source.
+func validHistoryAgent(agent string) bool {
+	for _, a := range config.HistoryAgents {
+		if a == agent {
+			return true
+		}
+	}
+	return false
 }

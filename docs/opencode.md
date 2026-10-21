@@ -45,11 +45,12 @@ OpenCode mode exposes twelve tools: the thirteen of Claude and Codex mode minus
 `observe_session`. Every tool resolves the caller from `_meta`, including the
 file-transfer tools (`send_file`, `list_files`, `accept_file`, `cancel_file`;
 paired hosts only, see [file transfers](files.md)) and the read-only history
-tools (`search_sessions`, `read_session_history`), which serve the local Claude
-and Codex catalog, or with `host_id` an opted-in paired host's (see
-[paired-host history](history.md#paired-host-history-opt-in)): OpenCode sessions
-are not indexed by the history catalog or observed by the background service,
-so they are never shared and there is no `[opencode.peer_history]` key. Because every tool needs a bound caller,
+tools (`search_sessions`, `read_session_history`), which serve the local
+catalog, or with `host_id` an opted-in paired host's (see
+[paired-host history](history.md#paired-host-history-opt-in)). The catalog
+includes OpenCode sessions, read from OpenCode's database (see
+[history sources](history.md#sources-identity-titles)); sharing them with paired
+hosts is governed by `[opencode.peer_history]`. Because every tool needs a bound caller,
 the history tools return `CALLER_UNVERIFIED` (`UNBOUND`) until the session's
 first human prompt, unlike Codex mode.
 
@@ -206,9 +207,9 @@ keeps the session's Rhizome node bound. The node goes away when:
 
 To clear a session you no longer use, delete it in OpenCode or stop the OpenCode
 service. To check whether it is actually in use, look at its recorded activity
-rather than its `live` status. OpenCode sessions are not in the history catalog
-(see [history.md](history.md)), so ask the owner, or use the process list on the
-host. Codex behaves the same way: its app-server daemon can keep a thread's node
+rather than its `live` status: search the history catalog
+(`search_sessions` with `agent_type: "opencode"`, see [history.md](history.md))
+for its last recorded activity, or ask the owner. Codex behaves the same way: its app-server daemon can keep a thread's node
 alive after the terminal closes (see [codex.md](codex.md)).
 
 ## Trust boundary

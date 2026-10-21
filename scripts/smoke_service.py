@@ -4,6 +4,7 @@ historical catalog checks (search_sessions / read_session_history)."""
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import tempfile
 from smoke_stdio import Client, ROOT, until
@@ -25,6 +26,7 @@ def historical(path, session, ts, uid, text, role='assistant'):
 
 def history_checks(client, running):
     """Search and read the pre-existing session; the agent process never existed."""
+    opencode_checks(client)
     found = client.tool('search_sessions', {'project_path': '/work/past', 'agent_type': 'claude'})
     catalog = found['catalog']
     assert catalog['service_running'] is running, catalog
@@ -59,6 +61,46 @@ def history_checks(client, running):
                                                         'Tool completed: shell'], codex_page
 
 
+def opencode_database(root):
+    """An OpenCode 2.x database written before the observer existed (WAL, like the real one)."""
+    root.mkdir(parents=True)
+    db = sqlite3.connect(str(root / 'opencode.db'))
+    db.execute('PRAGMA journal_mode=wal')
+    db.execute('CREATE TABLE session_v2 (id text PRIMARY KEY, parent_id text, directory text NOT NULL, title text, time_created integer NOT NULL, time_updated integer NOT NULL)')
+    db.execute('CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL, time_created integer NOT NULL, data text NOT NULL)')
+    db.execute("INSERT INTO session_v2 VALUES ('ses_smoke', NULL, '/work/opencode', 'OpenCode work', 1788256800000, 1788257000000)")
+    db.execute("INSERT INTO session_v2 VALUES ('ses_child', 'ses_smoke', '/work/opencode', 'child', 1788256900000, 1788257000000)")
+    rows = [
+        ('user', 1788256801000, {'text': 'opencode prompt secret'}),
+        ('assistant', 1788256802000, {'content': [
+            {'type': 'reasoning', 'text': 'hidden reasoning'},
+            {'type': 'text', 'text': 'opencode historical answer'},
+            {'type': 'tool', 'name': 'read', 'state': {'status': 'completed', 'input': {'k': 'secret input'}},
+             'time': {'created': 1788256803000, 'completed': 1788256804000}}]}),
+        ('idle', 1788256805000, {'outcome': 'succeeded'}),
+    ]
+    for seq, (kind, ts, data) in enumerate(rows, 1):
+        db.execute('INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?)', ('m%d' % seq, 'ses_smoke', kind, seq, ts, json.dumps(data)))
+    db.execute("INSERT INTO session_message VALUES ('c1', 'ses_child', 'assistant', 1, 1788256900000, ?)",
+               (json.dumps({'content': [{'type': 'text', 'text': 'child secret'}]}),))
+    db.commit()
+    db.close()
+
+
+def opencode_checks(client):
+    found = client.tool('search_sessions', {'agent_type': 'opencode'})['sessions']
+    assert [s['session_id'] for s in found] == ['ses_smoke'], found
+    assert found[0]['project_path'] == '/work/opencode' and found[0]['session_name'] == 'OpenCode work' \
+        and found[0]['name_source'] == 'native' and found[0]['history_availability'] == 'available', found
+    page = client.tool('read_session_history', {'session_id': 'ses_smoke', 'agent_type': 'opencode'})
+    assert [e['kind'] for e in page['events']] == ['assistant_text', 'tool_summary', 'tool_summary', 'turn_completed'], page
+    assert [e['text'] for e in page['events'] if e['text']] == ['opencode historical answer', 'Tool started: read', 'Tool completed: read'], page
+    blob = json.dumps(page)
+    for secret in ('prompt secret', 'hidden reasoning', 'secret input', 'child secret'):
+        assert secret not in blob, secret
+    assert page['coverage']['state'] == 'complete', page
+
+
 def catalog_ready(client):
     """True once the observer has flushed a complete catalog (written on its first tick)."""
     result = client.call('tools/call', {'name': 'search_sessions', 'arguments': {'session_id': 'past'}})
@@ -74,8 +116,10 @@ def main():
         processes, clients = [], []
         # MCP and the observer share runtime and log roots through one TOML file.
         config = directory / 'config.toml'
-        config.write_text('runtime_dir = %s\n[claude]\nprojects_dir = %s\n[codex]\nsessions_dir = %s\n'
-                          % (json.dumps(str(directory / 'run')), json.dumps(str(roots)), json.dumps(str(directory / 'codex'))))
+        config.write_text('runtime_dir = %s\n[claude]\nprojects_dir = %s\n[codex]\nsessions_dir = %s\n[opencode]\ndata_dir = %s\n'
+                          % (json.dumps(str(directory / 'run')), json.dumps(str(roots)), json.dumps(str(directory / 'codex')),
+                             json.dumps(str(directory / 'opencode'))))
+        opencode_database(directory / 'opencode')
         env = {'RHIZOME_CONFIG': str(config)}
         # Logs written before the service ever ran, including a native title.
         past = roots / 'project' / 'past.jsonl'
@@ -117,7 +161,7 @@ def main():
             until(lambda: catalog_ready(subscriber))
             history_checks(subscriber, running=True)
             health = json.loads((directory / 'run' / 'observer-health.json').read_text())
-            assert health['catalog']['state'] == 'ready' and health['catalog']['sessions'] == 2, health
+            assert health['catalog']['state'] == 'ready' and health['catalog']['sessions'] == 3, health
             assert 'historical' not in json.dumps(health) and '/work/past' not in json.dumps(health), health
             # Historical sessions are neither peers nor publishers.
             assert not [s for s in subscriber.tool('list_sessions')['sessions'] if s['identity']['session_id'] == 'past']
