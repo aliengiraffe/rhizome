@@ -72,13 +72,19 @@ otherwise the first absolute workspace root; relative roots cannot bind.
 
 Finding the MCP process: on start, `rhizome mcp --agent cursor` listens on a
 0600 unix socket under `<runtime>/cursor/` and writes a registration with its
-PID and the roots returned by the client's `roots/list` (Cursor supports MCP
-roots). The hook reads the registrations, drops dead PIDs, and keeps those whose
-roots match the payload's `workspace_roots` (equal or nested). Exactly one
-candidate is contacted; zero or several, including two windows on one
-workspace, fail closed: the hook answers with Cursor's own default and logs a
-counter to stderr. A process whose roots are still unknown qualifies only when it
-is the single live registration. No process-tree walking is involved.
+PID, its own working directory, and later the roots returned by the client's
+`roots/list`. The two launchers differ here: the IDE's MCP helper starts the
+process in the home directory and answers `roots/list` with the workspace;
+the Cursor CLI starts it in the workspace and does not answer `roots/list`.
+The hook reads the registrations, drops dead PIDs, and ranks each one against
+the payload's `workspace_roots`: an exact match first, then a payload root
+inside a registered root (the most specific wins; the home directory and `/`
+never claim nested workspaces), then a registered root inside a payload root.
+Exactly one candidate must remain in the best tier; zero or several, including
+two windows or a window plus a CLI session on one workspace, fail closed: the
+hook answers with Cursor's own default and logs a counter to stderr.
+`list_sessions` reports `cursor_processes`, the number of live registrations,
+to make that diagnosable. No process-tree walking is involved.
 
 The hook forwards a minimized message only: event name, conversation ID,
 workspace roots, `cwd`, tool name, assistant text (bounded to 7 KiB), stop

@@ -120,16 +120,21 @@ func TestCanonicalHash(t *testing.T) {
 
 func TestSelectCursorRegistration(t *testing.T) {
 	dir := t.TempDir()
-	write := func(id string, pid int, roots ...string) {
-		raw, _ := json.Marshal(cursorRegistration{ID: id, PID: pid, Socket: filepath.Join(dir, id+".sock"), Roots: roots})
+	home := "/Users/me"
+	write := func(id string, pid int, cwd string, roots ...string) {
+		raw, _ := json.Marshal(cursorRegistration{ID: id, PID: pid, Socket: filepath.Join(dir, id+".sock"), Roots: roots, Cwd: cwd})
 		if err := os.WriteFile(filepath.Join(dir, id+".json"), raw, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	alive := func(pid int) bool { return pid != 99 }
-	write("dead", 99, "/w/a")
-	write("a", 1, "/w/a")
-	write("b", 2, "/w/b", "/w/c")
+	write("dead", 99, "/w/a", "/w/a")
+	write("ide", 1, home, "/w/a") // IDE helper: roots from roots/list, started in the home directory
+	write("multi", 2, home, "/w/b", "/w/c")
+	write("cli", 3, "/w/d")         // Cursor CLI: no roots/list answer, started in the workspace
+	write("cli-parent", 4, "/w")    // a CLI started in the parent of several repos
+	write("cli-sub", 5, "/x/e/pkg") // a CLI started inside a sub-directory of its workspace
+	write("home", 6, home)          // started in home with no roots: never claims nested workspaces
 	if err := os.WriteFile(filepath.Join(dir, "junk.json"), []byte("{"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -139,16 +144,20 @@ func TestSelectCursorRegistration(t *testing.T) {
 		want  string
 		err   string
 	}{
-		{"exact", []string{"/w/a"}, "a", ""},
-		{"second root of a multi-root process", []string{"/w/c"}, "b", ""},
-		{"nested workspace matches its parent", []string{"/w/b/sub"}, "b", ""},
-		{"dead process ignored", []string{"/w/a"}, "a", ""},
-		{"no match", []string{"/elsewhere"}, "", "no live Cursor MCP process"},
+		{"exact client root", []string{"/w/a"}, "ide", ""},
+		{"second root of a multi-root process", []string{"/w/c"}, "multi", ""},
+		{"exact cwd root of a CLI process", []string{"/w/d"}, "cli", ""},
+		{"nested workspace prefers the most specific parent", []string{"/w/b/sub"}, "multi", ""},
+		{"parent-directory CLI serves repos below it", []string{"/w/f"}, "cli-parent", ""},
+		{"process started inside the workspace", []string{"/x/e"}, "cli-sub", ""},
+		{"dead process ignored", []string{"/w/a"}, "ide", ""},
+		{"home cwd never nests", []string{"/Users/me/other"}, "", "no live Cursor MCP process"},
+		{"no relation", []string{"/elsewhere"}, "", "no live Cursor MCP process"},
 		{"ambiguous without roots", nil, "", "refusing to guess"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reg, err := selectCursorRegistration(dir, tc.roots, alive)
+			reg, err := selectCursorRegistration(dir, tc.roots, alive, home)
 			if tc.err != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.err) {
 					t.Fatalf("got %v %v, want error %q", reg, err, tc.err)
@@ -160,16 +169,22 @@ func TestSelectCursorRegistration(t *testing.T) {
 			}
 		})
 	}
-	// Roots are unknown until roots/list answers: a lone process still matches.
-	write("unknown", 3)
-	if reg, err := selectCursorRegistration(dir, []string{"/elsewhere"}, alive); err != nil || reg.ID != "unknown" {
-		t.Fatalf("unknown-roots fallback: %v %v", reg, err)
+	// Two processes on the same workspace tie and fail closed.
+	write("ide2", 7, home, "/w/a")
+	if _, err := selectCursorRegistration(dir, []string{"/w/a"}, alive, home); err == nil || !strings.Contains(err.Error(), "refusing to guess") {
+		t.Fatalf("same-workspace tie: %v", err)
 	}
-	os.Remove(filepath.Join(dir, "a.json"))
-	os.Remove(filepath.Join(dir, "b.json"))
-	os.Remove(filepath.Join(dir, "dead.json"))
-	if reg, err := selectCursorRegistration(dir, nil, alive); err != nil || reg.ID != "unknown" {
-		t.Fatalf("single live process without roots: %v %v", reg, err)
+	// A registration with neither roots nor cwd is a last resort only.
+	write("blank", 8, "")
+	if reg, err := selectCursorRegistration(dir, []string{"/elsewhere"}, alive, home); err != nil || reg.ID != "blank" {
+		t.Fatalf("blank fallback: %v %v", reg, err)
+	}
+	if reg, err := selectCursorRegistration(dir, []string{"/w/d"}, alive, home); err != nil || reg.ID != "cli" {
+		t.Fatalf("blank must not outrank a real match: %v %v", reg, err)
+	}
+	// The home directory still matches exactly.
+	if reg, err := selectCursorRegistration(dir, []string{home}, alive, home); err == nil || !strings.Contains(err.Error(), "refusing to guess") {
+		t.Fatalf("home exact match should tie between ide/multi/home: %v %v", reg, err)
 	}
 }
 
@@ -441,10 +456,16 @@ func TestCursorSocketAndHookProcess(t *testing.T) {
 	if err := m.start(); err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Join(shortTempDir(t), "proj")
+	// Before roots/list answers, the process is found through its own working
+	// directory, which is what the Cursor CLI relies on.
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	registry := cursorRegistry(m.runtime)
-	reg, err := selectCursorRegistration(registry, []string{root}, processAlive)
-	if err != nil || reg.PID != os.Getpid() || len(reg.Roots) != 0 {
+	home, _ := os.UserHomeDir()
+	reg, err := selectCursorRegistration(registry, []string{root}, processAlive, home)
+	if err != nil || reg.PID != os.Getpid() || len(reg.Roots) != 0 || reg.Cwd != root {
 		t.Fatalf("registration: %+v %v", reg, err)
 	}
 	if st, err := os.Stat(reg.Socket); err != nil || st.Mode().Perm()&0077 != 0 {
@@ -456,7 +477,7 @@ func TestCursorSocketAndHookProcess(t *testing.T) {
 	if err := m.register(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := selectCursorRegistration(registry, []string{"/other"}, processAlive); err == nil {
+	if _, err := selectCursorRegistration(registry, []string{"/other"}, processAlive, home); err == nil {
 		t.Fatal("foreign workspace matched a process with known roots")
 	}
 	ctx := context.Background()

@@ -34,7 +34,7 @@ def until(check, what='condition', timeout=10):
 
 
 class Client:
-    def __init__(self, directory, agent, config_body=''):
+    def __init__(self, directory, agent, config_body='', cwd=None):
         self.run = directory / 'run'
         self.config = directory / ('smoke-config-%s.toml' % (agent if not config_body else 'followup'))
         if not self.config.exists():
@@ -42,8 +42,10 @@ class Client:
             self.config.write_text('hostname = "Smoke device"\n' + config_body)
         self.env = {**os.environ, 'RHIZOME_CONFIG': str(self.config), 'RHIZOME_RUNTIME_DIR': str(self.run)}
         self.log = tempfile.TemporaryFile()
+        # Cursor starts MCP servers in the workspace (CLI) or the home directory (IDE); the
+        # registration records that directory so hooks can find the process before roots/list.
         self.proc = subprocess.Popen([BINARY, 'mcp', '--agent', agent], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=self.log, text=True, env=self.env)
+                                     stdout=subprocess.PIPE, stderr=self.log, text=True, env=self.env, cwd=cwd)
         self.messages = queue.Queue()
         self.events = []
         self.number = 0
@@ -145,7 +147,7 @@ def main():
         project = directory / 'proj'
         project.mkdir()
         try:
-            c = Client(directory, 'cursor')
+            c = Client(directory, 'cursor', cwd=str(project))
             clients.append(c)
             tools = {t['name'] for t in c.call('tools/list', {})['tools']}
             assert 'observe_session' not in tools and {'list_sessions', 'send', 'subscribe'} <= tools, tools
@@ -241,12 +243,32 @@ def main():
             assert c.tool('list_sessions')['identity']['session_id'] == 'conv-a'
             until(lambda: len([s for s in p.tool('list_sessions')['sessions'] if s['identity']['agent_type'] == 'cursor']) == 1, 'conv-b gone')
 
+            # A second Cursor process (the CLI case: no roots/list, started in its
+            # workspace) coexists: hooks from each workspace reach their own process.
+            other = directory / 'other'
+            other.mkdir()
+            g = Client(directory, 'cursor', cwd=str(other))
+            clients.append(g)
+            g.hook(payload('sessionStart', 'conv-g', other, session_id='conv-g', is_background_agent=False))
+            assert g.tool('list_sessions')['identity']['session_id'] == 'conv-g'
+            assert g.tool('list_sessions')['cursor_processes'] == 2
+            assert c.tool('list_sessions')['cursor_processes'] == 2
+            assert c.tool('list_sessions')['identity']['session_id'] == 'conv-a'
+            # A workspace neither process serves binds nowhere and leaves both untouched.
+            elsewhere = directory / 'elsewhere'
+            elsewhere.mkdir()
+            assert c.hook(payload('sessionStart', 'conv-x', elsewhere, session_id='conv-x', is_background_agent=False)) == {}
+            until(lambda: sees(p, 'conv-g', 'cursor'), 'claude sees the second process')
+            assert all(s['identity']['session_id'] != 'conv-x' for s in p.tool('list_sessions')['sessions'])
+            g.close()
+            clients.remove(g)
+
             # Followup delivery disabled by configuration: the stop hook never
             # auto-submits and queued events wait for the next tool result.
             c.close()
             clients.remove(c)
             until(lambda: not list((directory / 'run' / 'cursor').glob('*')), 'registration cleanup')
-            f = Client(directory, 'cursor', '[cursor]\nfollowup_delivery = false\n')
+            f = Client(directory, 'cursor', '[cursor]\nfollowup_delivery = false\n', cwd=str(project))
             clients.append(f)
             f.hook(payload('sessionStart', 'conv-f', project, session_id='conv-f', is_background_agent=False))
             until(lambda: sees(p, 'conv-f', 'cursor'), 'claude sees the opt-out process')
@@ -261,7 +283,7 @@ def main():
         assert not list(directory.glob('run/*.json')), 'EOF left registrations'
         assert not list(directory.glob('run/cursor/*')), 'EOF left Cursor registrations or sockets'
     print('PASS: Cursor hook binding, roots-free registration, cross-agent subscriptions, hook-pull delivery, '
-          'tickets with two conversations, peer-turn suppression, default-on followup and its opt-out, sessionEnd and cleanup')
+          'tickets with two conversations, two workspaces on two processes, peer-turn suppression, default-on followup and its opt-out, sessionEnd and cleanup')
 
 
 if __name__ == '__main__':

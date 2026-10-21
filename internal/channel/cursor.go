@@ -70,12 +70,15 @@ type cursorMessage struct {
 }
 
 // cursorRegistration advertises one MCP process to hook processes. Roots come
-// from the MCP client's roots/list; hooks match them against workspace_roots.
+// from the MCP client's roots/list; Cwd is the directory the client started the
+// process in (the workspace for the Cursor CLI, the home directory for the IDE
+// helper). Hooks rank both against the payload's workspace_roots.
 type cursorRegistration struct {
 	ID      string   `json:"id"`
 	PID     int      `json:"pid"`
 	Socket  string   `json:"socket"`
 	Roots   []string `json:"roots,omitempty"`
+	Cwd     string   `json:"cwd,omitempty"`
 	Started int64    `json:"started"`
 }
 
@@ -94,6 +97,7 @@ type cursorNodes struct {
 	runtime   string
 	id        string
 	roots     []string
+	cwd       string
 	listener  net.Listener
 	followup  bool
 	wg        sync.WaitGroup
@@ -106,6 +110,21 @@ func newCursorNodes(ctx context.Context, runtime string, o Options, followup boo
 }
 
 func cursorRegistry(runtime string) string { return filepath.Join(runtime, cursorDir) }
+
+// liveCursorRegistrations counts registrations whose process is alive, so a
+// chat that stays UNBOUND can be diagnosed from list_sessions.
+func liveCursorRegistrations(dir string) int {
+	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	count := 0
+	for _, path := range files {
+		raw, err := os.ReadFile(path)
+		var reg cursorRegistration
+		if err == nil && json.Unmarshal(raw, &reg) == nil && processAlive(reg.PID) {
+			count++
+		}
+	}
+	return count
+}
 
 // pruneCursorRegistrations removes registrations and sockets of dead processes.
 func pruneCursorRegistrations(dir string) {
@@ -126,6 +145,9 @@ func (m *cursorNodes) start() error {
 		return err
 	}
 	pruneCursorRegistrations(dir)
+	if wd, err := os.Getwd(); err == nil && filepath.IsAbs(wd) {
+		m.cwd = canonicalPath(wd)
+	}
 	m.id = id()[:12]
 	socket := filepath.Join(dir, m.id+".sock")
 	_ = os.Remove(socket)
@@ -149,7 +171,7 @@ func (m *cursorNodes) start() error {
 
 func (m *cursorNodes) register() error {
 	m.mu.Lock()
-	reg := cursorRegistration{ID: m.id, PID: os.Getpid(), Socket: m.listener.Addr().String(), Roots: append([]string(nil), m.roots...), Started: time.Now().Unix()}
+	reg := cursorRegistration{ID: m.id, PID: os.Getpid(), Socket: m.listener.Addr().String(), Roots: append([]string(nil), m.roots...), Cwd: m.cwd, Started: time.Now().Unix()}
 	m.mu.Unlock()
 	raw, _ := json.Marshal(reg)
 	path := filepath.Join(cursorRegistry(m.runtime), m.id+".json")
@@ -193,13 +215,13 @@ func (m *cursorNodes) loadRoots(ss *mcp.ServerSession) {
 // rootPath converts a file:// root URI (or a bare absolute path) to a clean path.
 func rootPath(uri string) string {
 	if filepath.IsAbs(uri) {
-		return filepath.Clean(uri)
+		return canonicalPath(uri)
 	}
 	u, err := url.Parse(uri)
 	if err != nil || u.Scheme != "file" || !filepath.IsAbs(u.Path) {
 		return ""
 	}
-	return filepath.Clean(u.Path)
+	return canonicalPath(u.Path)
 }
 
 func (m *cursorNodes) serve() {
@@ -456,6 +478,7 @@ func (m *cursorNodes) bind(msg cursorMessage) *Node {
 		n.ready = true
 		n.hookPull = true
 		n.external = true
+		n.cursorRegistry = cursorRegistry(m.runtime)
 		n.collectionState = "waiting for session hook"
 		n.notify = n.outboxNotify
 		if err := n.start(m.opts); err != nil {

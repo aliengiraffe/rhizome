@@ -90,20 +90,74 @@ func cleanRoots(roots []string) []string {
 	return out
 }
 
-// sameRoot reports whether two workspace roots describe the same tree: equal,
-// or one inside the other (multi-root workspaces).
-func sameRoot(a, b string) bool {
-	return a == b || strings.HasPrefix(a, b+string(os.PathSeparator)) || strings.HasPrefix(b, a+string(os.PathSeparator))
+// canonicalPath cleans an absolute path and resolves symlinks when it exists,
+// so a workspace reported as /var/... and a process started in /private/var/...
+// (macOS) compare equal. Paths that do not exist are only cleaned.
+func canonicalPath(p string) string {
+	p = filepath.Clean(p)
+	if resolved, err := filepath.EvalSymlinks(p); err == nil && filepath.IsAbs(resolved) {
+		return resolved
+	}
+	return p
+}
+
+// broadRoot reports a registered root too wide to claim nested workspaces:
+// the filesystem root or the user's home directory (the IDE helper starts MCP
+// servers there). Such a root still matches exactly.
+func broadRoot(path, home string) bool {
+	return path == string(os.PathSeparator) || path == filepath.VolumeName(path)+string(os.PathSeparator) || (home != "" && path == filepath.Clean(home))
+}
+
+// rankRegistration scores how well a registration's roots (client-reported
+// roots plus its working directory) fit the payload's workspace roots. Tier 1
+// is an exact match, tier 2 a payload root inside a registered root, tier 3 a
+// registered root inside a payload root; specificity is the matched registered
+// root's length. Tier 0 means no relation; tier 4 a registration that reported
+// nothing at all.
+func rankRegistration(reg *cursorRegistration, roots []string, home string) (tier, specificity int) {
+	var have []string
+	for _, r := range cleanRoots(reg.Roots) {
+		have = append(have, canonicalPath(r))
+	}
+	if filepath.IsAbs(reg.Cwd) {
+		have = append(have, canonicalPath(reg.Cwd))
+	}
+	if len(have) == 0 {
+		return 4, 0
+	}
+	for _, h := range have {
+		for _, r := range roots {
+			want := canonicalPath(r)
+			t := 0
+			switch {
+			case h == want:
+				t = 1
+			case strings.HasPrefix(want, h+string(os.PathSeparator)) && !broadRoot(h, home):
+				t = 2
+			case strings.HasPrefix(h, want+string(os.PathSeparator)):
+				t = 3
+			}
+			if t == 0 {
+				continue
+			}
+			if tier == 0 || t < tier || (t == tier && len(h) > specificity) {
+				tier, specificity = t, len(h)
+			}
+		}
+	}
+	return tier, specificity
 }
 
 // selectCursorRegistration picks the one MCP process serving these workspace
-// roots. Zero or several candidates fail closed: the hook then changes nothing.
-func selectCursorRegistration(dir string, roots []string, alive func(int) bool) (*cursorRegistration, error) {
+// roots: the best tier wins, the most specific root within it, and exactly one
+// candidate must remain. Zero or several candidates fail closed: the hook then
+// changes nothing. Without payload roots only a single live process qualifies.
+func selectCursorRegistration(dir string, roots []string, alive func(int) bool, home string) (*cursorRegistration, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil {
 		return nil, err
 	}
-	var live, matched, unknown []*cursorRegistration
+	var live []*cursorRegistration
 	for _, path := range files {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -115,28 +169,24 @@ func selectCursorRegistration(dir string, roots []string, alive func(int) bool) 
 		}
 		r := reg
 		live = append(live, &r)
-		if len(r.Roots) == 0 {
-			unknown = append(unknown, &r)
-			continue
-		}
-		for _, have := range r.Roots {
-			for _, want := range roots {
-				if sameRoot(filepath.Clean(have), want) {
-					matched = append(matched, &r)
-					have = ""
-					break
-				}
-			}
-			if have == "" {
-				break
-			}
-		}
 	}
 	candidates := live
 	if len(roots) > 0 {
-		candidates = matched
-		if len(candidates) == 0 {
-			candidates = unknown
+		bestTier, bestSpec := 0, 0
+		for _, r := range live {
+			tier, spec := rankRegistration(r, roots, home)
+			if tier == 0 {
+				continue
+			}
+			if bestTier == 0 || tier < bestTier || (tier == bestTier && spec > bestSpec) {
+				bestTier, bestSpec = tier, spec
+			}
+		}
+		candidates = nil
+		for _, r := range live {
+			if tier, spec := rankRegistration(r, roots, home); tier == bestTier && tier != 0 && (tier == 1 || tier == 4 || spec == bestSpec) {
+				candidates = append(candidates, r)
+			}
 		}
 	}
 	switch len(candidates) {
@@ -183,7 +233,8 @@ func cursorHookResponse(ctx context.Context, runtime string, stdin io.Reader) ma
 		slog.Warn("cursor_hook_skip", "event", p.Event, "reason", "configuration unavailable")
 		return fallback
 	}
-	reg, err := selectCursorRegistration(cursorRegistry(runtime), msg.WorkspaceRoots, processAlive)
+	home, _ := os.UserHomeDir()
+	reg, err := selectCursorRegistration(cursorRegistry(runtime), msg.WorkspaceRoots, processAlive, home)
 	if err != nil {
 		slog.Warn("cursor_hook_skip", "event", p.Event, "reason", err.Error())
 		return fallback
