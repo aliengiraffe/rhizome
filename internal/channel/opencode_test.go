@@ -475,6 +475,47 @@ func TestOpenCodeHistoryHostID(t *testing.T) {
 	}
 }
 
+// OpenCode session nodes take the registry's per-node lock like every other
+// node, and registry bootstrap never touches the OpenCode socket or binding
+// store, whose names never match <node_id>.json or <node_id>.lock.
+func TestOpenCodeRegistryCoexistence(t *testing.T) {
+	m, runtime := openCodeManager(t)
+	dir := shortDir(t)
+	sock := filepath.Join(runtime, "opencode-123-0123456789ab.sock")
+	store := filepath.Join(runtime, "opencode-bindings")
+	if err := os.MkdirAll(store, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	files := []string{sock, filepath.Join(store, "opencode-123-0123456789ab.json"), filepath.Join(store, "opencode-123-0123456789ab.lock")}
+	for _, f := range files {
+		if err := os.WriteFile(f, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.handle(bindFrame("ses_a", "", dir, ""))
+	s := m.sessions["ses_a"]
+	if s == nil {
+		t.Fatal("bind failed")
+	}
+	nodeID := s.node.local().NodeId
+	if !exists(registrationPath(runtime, nodeID)) || !exists(registrationLockPath(runtime, nodeID)) {
+		t.Fatal("OpenCode node has no registration or registration lock")
+	}
+	if _, err := localstate.Lock(registrationLockPath(runtime, nodeID), false); err == nil {
+		t.Fatal("registration lock not held by the live OpenCode node")
+	}
+	bootstrapIn(t, runtime)
+	for _, f := range files {
+		if !exists(f) {
+			t.Fatalf("bootstrap removed %s", filepath.Base(f))
+		}
+	}
+	m.handle(bridgeFrame{Type: "forget", SessionID: "ses_a"})
+	if exists(registrationPath(runtime, nodeID)) || exists(registrationLockPath(runtime, nodeID)) {
+		t.Fatal("forgotten OpenCode node left its registration")
+	}
+}
+
 func TestOpenCodeDeliveryThroughBridge(t *testing.T) {
 	m, runtime := openCodeManager(t)
 	path := filepath.Join(runtime, "p.sock")
