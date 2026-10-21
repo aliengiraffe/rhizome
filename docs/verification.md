@@ -449,3 +449,39 @@ agent's answers against [collab-skill-evals.md](collab-skill-evals.md): local
 worktrees on one device, label mismatches and collisions, gateway proxies,
 paired-host history errors, direct LAN/Tailscale peers, missing metadata,
 conflicting history, ambiguous IDs, stale catalogs, and scope corrections.
+
+## Terminal interfaces (#48, 2026-10-21)
+
+`python3 scripts/smoke_tui.py` passed on macOS using isolated Unix PTYs and a
+fake local gateway. It checks setup back navigation, cancellation without writes,
+review/apply and 0600 config; service stop confirmation/decline and refreshed
+health; read-only status ignoring mutation keys; peers empty/unavailable states,
+exact host identity, refresh, plain JSON, and terminal-control sanitization;
+24-column/8-row resize, `NO_COLOR`, interrupted outstanding gateway requests,
+redirected explicit-TUI rejection, and restored terminal modes/alternate screen.
+BSD's transient `PENDIN` bookkeeping flag is excluded from mode comparison.
+Model tests cover mode-specific answers, defaults, inline validation, keep/backup,
+selected skills only, opt-in service dispatch, partial failure, duplicate actions,
+and worker cancellation. `service run` remains covered by the service smoke.
+
+The UI dependency is pinned to stable Bubble Tea v1.3.10; the only additional
+direct helper is its existing `x/ansi` dependency for terminal-cell wrapping.
+The full vulnerability scan reports 18 existing reachable advisories in the Go
+standard library, `golang.org/x/net`, and gRPC. A baseline scan of the pre-change
+commit with the same toolchain found the same advisory/module/version set;
+this change adds no reachable findings. This is not a clean vulnerability scan.
+
+Manual terminal checklist for releases (not a claim of native lifecycle checks):
+
+- Run setup in an ordinary terminal and a narrow window. Select/deselect agents,
+  enter invalid values, go back, switch LAN/Tailscale/local, review, and cancel.
+  Verify no files changed. Apply in a disposable home and inspect keys/permissions.
+- On a disposable service installation, exercise install/start/stop/uninstall,
+  decline and accept confirmations, refresh, and interrupt a pending action.
+  Verify completed actions remain accurately reported and the shell is usable.
+- Open status and peers views with real paired hosts, navigate/refresh/resize,
+  stop the service, and check visible errors. Exit with q, Esc, and Ctrl-C.
+- Repeat on Linux and Windows, including a no-color terminal. Native service
+  mutation and human visual checks on those platforms were not performed here;
+  the recorded terminal run is automated macOS PTY coverage, not cross-platform
+  visual or native lifecycle verification.

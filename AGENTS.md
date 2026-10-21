@@ -41,6 +41,7 @@ task build                         # Build the rhizome executable.
 task check                         # go vet ./... and go test -race ./...
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
 python3 scripts/smoke_service.py    # Separate observer/MCP processes, handoffs, history catalog.
+python3 scripts/smoke_tui.py        # Unix PTYs; isolated setup/service/peers UI and restoration.
 python3 scripts/smoke_stdio.py --lan # Same scenario in LAN mode: pinned TLS, separate registries.
 git diff --check                   # Check whitespace errors.
 task proto                         # Requires protoc; installs pinned generators in .bin.
@@ -69,6 +70,22 @@ on loopback through an injected daemon view (beacon port, peer enumeration,
 same-device mode isolation, wrong-token peers). Nothing in `make check` talks to
 a real tailnet; the two-device Tailscale checklist in
 [docs/verification.md](docs/verification.md) is manual.
+
+## Terminal interfaces
+
+`setup` uses Bubble Tea on usable stdin/stdout terminals when input is needed;
+`--plain` retains legacy prompts. Stage all answers until review/apply; cancellation
+before apply must not write skills, config, or service state. Use `config.Preview`
+for resolver-backed validation without disk writes. Filter network fields by the
+selected mode. Bare terminal `service` manages lifecycle (confirm stop/uninstall),
+`service status --tui` is read-only, and `peers list --tui` browses paired hosts
+with exact host IDs. Plain peers stays JSON; explicit service commands, help/list,
+redirected streams, `TERM=dumb`, and `service run` never auto-start a UI.
+Keep models (`tui*.go`) separate from operations; bound/cancel requests, join
+workers on exit, suppress native subprocess output inside screens, sanitize
+untrusted display text, and report partial apply without implying rollback.
+See README, [service](docs/service.md#terminal-interface), and
+[gateway](docs/gateway.md#paired-host-terminal-view) for keys and terminal checks.
 
 ## Go engineering principles
 

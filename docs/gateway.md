@@ -215,3 +215,18 @@ Paired hosts can offer files to exact live sessions through the authenticated
 `/v1/files` TLS endpoint. Older gateways return an unsupported-endpoint error;
 normal messaging remains compatible. File bytes do not enter WebSocket frames,
 gossip, or activity notifications. See [file transfers](files.md).
+
+## Paired-host terminal view
+
+`rhizome peers list --tui` opens a read-only Bubble Tea view on terminal
+stdin/stdout with `TERM` other than `dumb`. Up/down (or j/k) select hosts;
+PgUp/PgDn scroll details, `r` refreshes, and `q`/Esc/Ctrl+C exits. The view
+shows the exact `host_id`, `endpoint`, `connected`, and `pending` fields from
+the local gateway API. These are paired hosts, not discovered agent sessions.
+Display text is sanitized to prevent terminal control injection. Empty results,
+unavailable service, and request errors are shown explicitly. Refresh is manual,
+bounded, and cancellable; there are no pairing or revocation actions.
+
+Plain `rhizome peers list` continues to print JSON, including on terminals.
+Explicit `--tui` fails for redirected input/output or `TERM=dumb`. No tokens or
+invitation secrets are fetched by this view.
