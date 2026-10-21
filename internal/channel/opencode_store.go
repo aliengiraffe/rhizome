@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sys/unix"
+	"rhizome/internal/localstate"
 )
 
 // resolveLocation returns the symlink-resolved absolute directory and its
@@ -108,12 +107,6 @@ func removeDeadStores(base string, self int) {
 	}
 }
 
-// processAlive reports whether pid exists; EPERM means it exists as another user.
-func processAlive(pid int) bool {
-	err := unix.Kill(pid, 0)
-	return err == nil || errors.Is(err, unix.EPERM)
-}
-
 // touch records that sid is bound with the given last-activity time.
 func (s *openCodeStore) touch(sid string, last time.Time) {
 	if s == nil {
@@ -147,16 +140,13 @@ func (s *openCodeStore) dirty() bool {
 	return len(s.upsert)+len(s.remove) > 0
 }
 
-func (s *openCodeStore) locked(how int, f func() error) error {
-	l, err := os.OpenFile(s.lock, os.O_CREATE|os.O_RDWR, 0600)
+// locked runs f while holding the store's exclusive cross-process lock.
+func (s *openCodeStore) locked(f func() error) error {
+	l, err := localstate.Lock(s.lock, true)
 	if err != nil {
 		return err
 	}
 	defer l.Close()
-	if err := unix.Flock(int(l.Fd()), how); err != nil {
-		return err
-	}
-	defer unix.Flock(int(l.Fd()), unix.LOCK_UN)
 	return f()
 }
 
@@ -207,7 +197,7 @@ func (s *openCodeStore) load() ([]storedBinding, error) {
 		return nil, nil
 	}
 	var out []storedBinding
-	err := s.locked(unix.LOCK_SH, func() error { out = s.bounded(s.read()); return nil })
+	err := s.locked(func() error { out = s.bounded(s.read()); return nil })
 	return out, err
 }
 
@@ -227,7 +217,7 @@ func (s *openCodeStore) flush() error {
 	if len(up)+len(rm) == 0 {
 		return nil
 	}
-	err := s.locked(unix.LOCK_EX, func() error {
+	err := s.locked(func() error {
 		m := s.read()
 		for sid := range rm {
 			delete(m, sid)
