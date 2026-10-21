@@ -348,8 +348,10 @@ RHIZOME_TOKEN=<token> RHIZOME_TAILSCALE=1 ./rhizome mcp     # or env, for .mcp.j
 | `--join host:port` | none | Still works, with MagicDNS names: `--join desktop.<tailnet>.ts.net:7946`. |
 
 At startup Rhizome runs `tailscale status --json` (the CLI is looked up on `PATH`,
-then at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`; verified with the
-standalone macOS build 1.104) and binds gRPC and gossip to this device's Tailscale
+then on macOS at `/usr/local/bin/tailscale`, `/opt/homebrew/bin/tailscale` and
+`/Applications/Tailscale.app/Contents/MacOS/Tailscale`, with `TERM` set when unset
+so the app binary acts as the CLI under launchd; verified with the standalone
+macOS build 1.104) and binds gRPC and gossip to this device's Tailscale
 IPv4, so nothing is exposed on the physical LAN. The `host` label uses the
 configured `hostname` or OS hostname, independently of MagicDNS. Every discovery
 interval it enumerates online peers and, for each device not yet in the cluster,
