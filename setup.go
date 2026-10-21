@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -304,10 +305,14 @@ func parseAgentFlag(value string, agents []agent) ([]bool, error) {
 func setup(args []string) error {
 	opts := flag.NewFlagSet("setup", flag.ContinueOnError)
 	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex, opencode) or \"all\": installs the skill, and for Claude and Codex also registers the MCP server and hooks at user scope (OpenCode: skill and plugins; its MCP entry is added by hand, see docs/opencode.md); omit for an interactive picker")
-	config.Bind(opts)
+	config.Bind(opts, "runtime-dir", "gateway-mode", "gateway-listen", "gateway-advertise")
+	opts.Lookup("gateway-mode").Usage = "configure service-owned gateway pairing: off, lan or tailscale; requires local MCP networking"
+	opts.Lookup("gateway-listen").Usage = "gateway concrete listen IP:port; blank selects automatically"
+	opts.Lookup("gateway-advertise").Usage = "gateway reachable IP:port; blank uses listen endpoint"
+	opts.Lookup("runtime-dir").Usage = "persist runtime directory (changing it selects different token, host identity and pairing state)"
 	plain := opts.Bool("plain", false, "use the original line/picker prompts instead of Bubble Tea")
 	list := opts.Bool("list", false, "print detected agents and exit")
-	hostname := opts.String("hostname", "", "with --network: device label override; blank uses the OS hostname")
+	hostname := opts.String("hostname", "", "with --network or --gateway-mode: device label override; blank uses the OS hostname")
 	network := opts.String("network", "", "write the configuration non-interactively: local, lan or tailscale; omit for the interactive questions")
 	var join listFlag
 	opts.Var(&join, "join", "with --network lan|tailscale: gossip host:port seed to join; repeatable")
@@ -316,7 +321,7 @@ func setup(args []string) error {
 	mdns := opts.Bool("mdns", true, "with --network lan: set false to disable mDNS")
 	gossipPort := opts.Int("gossip-port", 0, "with --network tailscale: well-known gossip port (default 7946)")
 	discovery := opts.String("discovery-interval", "", "with --network tailscale: peer discovery interval (default 20s)")
-	replaceConfig := opts.Bool("replace-config", false, "with --network: replace an existing configuration file (the old one is backed up)")
+	replaceConfig := opts.Bool("replace-config", false, "with --network or --gateway-mode: update selected settings, preserving others (old file backed up)")
 	if err := opts.Parse(args); err != nil {
 		return err
 	}
@@ -325,10 +330,11 @@ func setup(args []string) error {
 	}
 	visited := map[string]bool{}
 	opts.Visit(func(f *flag.Flag) { visited[f.Name] = true })
-	if *network == "" {
-		for _, name := range []string{"hostname", "join", "bind-addr", "advertise-addr", "mdns", "gossip-port", "discovery-interval", "replace-config"} {
+	noninteractive := visited["network"] || visited["gateway-mode"]
+	if !noninteractive {
+		for _, name := range []string{"hostname", "join", "bind-addr", "advertise-addr", "mdns", "gossip-port", "discovery-interval", "replace-config", "gateway-listen", "gateway-advertise", "runtime-dir"} {
 			if visited[name] {
-				return fmt.Errorf("--%s requires --network", name)
+				return fmt.Errorf("--%s requires --network or --gateway-mode", name)
 			}
 		}
 	}
@@ -352,8 +358,13 @@ func setup(args []string) error {
 		return nil
 	}
 	var answers *configAnswers
-	if *network != "" {
-		a := configAnswers{Hostname: *hostname, Network: config.Network{Mode: *network, BindAddr: *bindAddr, AdvertiseAddr: *advertiseAddr, Join: join, GossipPort: *gossipPort, DiscoveryInterval: *discovery}}
+	if noninteractive {
+		a := configAnswers{
+			Selected:   visited,
+			Gateway:    config.Gateway{Mode: opts.Lookup("gateway-mode").Value.String(), Listen: opts.Lookup("gateway-listen").Value.String(), Advertise: opts.Lookup("gateway-advertise").Value.String()},
+			RuntimeDir: opts.Lookup("runtime-dir").Value.String(),
+			Hostname:   *hostname,
+			Network:    config.Network{Mode: *network, BindAddr: *bindAddr, AdvertiseAddr: *advertiseAddr, Join: join, GossipPort: *gossipPort, DiscoveryInterval: *discovery}}
 		if visited["mdns"] {
 			a.Network.MDNS = mdns
 		}
@@ -384,7 +395,7 @@ func setup(args []string) error {
 		if checked, err = parseAgentFlag(*agentsFlag, agents); err != nil {
 			return err
 		}
-	case *network != "" && !tty:
+	case noninteractive && !tty:
 		checked, configOnly = make([]bool, len(agents)), true
 	case tty:
 		checked = make([]bool, len(agents))
@@ -454,7 +465,9 @@ func setup(args []string) error {
 // an explicitly selected file that does not exist yet is allowed: setup is the
 // command that creates it. explicit reports a --config/RHIZOME_CONFIG selection.
 // The first resolution logs like other commands; later ones (after the file was
-// written) are quiet.
+// written) are quiet. The result selects agent installation directories only:
+// setupConfig reloads the stored file for editor defaults, so shell overrides
+// are never persisted.
 func resolveForSetup(opts *flag.FlagSet, quiet bool) (config.Config, string, bool, error) {
 	flags := map[string]string{}
 	opts.Visit(func(f *flag.Flag) { flags[f.Name] = f.Value.String() })
@@ -462,38 +475,46 @@ func resolveForSetup(opts *flag.FlagSet, quiet bool) (config.Config, string, boo
 	if err != nil {
 		return config.Config{}, "", false, err
 	}
-	if _, statErr := os.Lstat(path); explicit && errors.Is(statErr, fs.ErrNotExist) {
-		delete(flags, "config")
-		c, err := config.Resolve(flags, func(k string) string {
-			if k == "RHIZOME_CONFIG" {
-				return ""
-			}
-			return os.Getenv(k)
-		})
-		return c, path, explicit, err
+	// Only the selected file is read, so a new destination ignores the default
+	// file, and a missing explicit one is allowed.
+	c, err := config.LoadForSetup(path, func(key string) string {
+		// Agent installation honors native agent directory overrides; no other
+		// shell override may reach the stored editor defaults.
+		if key == "CLAUDE_CONFIG_DIR" || key == "CODEX_HOME" {
+			return os.Getenv(key)
+		}
+		return ""
+	})
+	if err == nil && !quiet {
+		slog.Info("configuration", "path", c.Path, "found", c.Found)
 	}
-	if quiet {
-		c, err := config.Resolve(flags, os.Getenv)
-		return c, path, explicit, err
-	}
-	c, err := config.FromFlags(opts)
 	return c, path, explicit, err
 }
 
-// setupConfig establishes the configuration file. answers is set by --network;
+// setupConfig edits the configuration file. answers is set by setup flags;
 // otherwise a terminal gets the interactive questions and anything else leaves
 // configuration alone and says so. It reports whether the interactive questions
 // ran and a valid file exists at path, whether created, replaced, or kept; the
 // caller then offers the background service once agents are installed.
 func setupConfig(c config.Config, path string, answers *configAnswers, replace, tty bool, in io.Reader, out, errOut io.Writer) (bool, error) {
-	var err error
+	c, err := config.LoadForSetup(path, func(string) string { return "" })
+	if err != nil {
+		return false, err
+	}
 	wizard := answers == nil
 	p := prompter{in: bufio.NewReader(in), out: out}
 	_, statErr := os.Lstat(path)
 	exists := statErr == nil
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return false, statErr
+	}
+	stored, err := storedConfig(path)
+	if err != nil {
+		return false, err
+	}
 	if wizard {
 		if !tty {
-			fmt.Fprintln(errOut, "configuration not written: no terminal for the questions; pass --network local|lan|tailscale")
+			fmt.Fprintln(errOut, "configuration not written: no terminal for the questions; pass --network local|lan|tailscale or --gateway-mode off|lan|tailscale")
 			return false, nil
 		}
 		if exists {
@@ -512,21 +533,33 @@ func setupConfig(c config.Config, path string, answers *configAnswers, replace, 
 		fmt.Fprintf(errOut, "configuration not written: %s already exists; pass --replace-config to back it up and replace it\n", path)
 		return false, nil
 	}
-	if answers != nil {
-		body, err := answers.render()
-		if err != nil {
-			return false, err
-		}
-		backup, err := writeConfig(path, body, exists && replace, time.Now())
-		if err != nil {
-			return false, err
-		}
-		if backup != "" {
-			fmt.Fprintf(out, "backed up previous configuration to %s\n", backup)
-		}
-		fmt.Fprintf(out, "wrote %s (network mode: %s)\n", path, answers.Network.Mode)
-	} else {
+	if answers == nil {
 		fmt.Fprintf(out, "kept existing %s\n", path)
+		return wizard, nil
+	}
+	answers.Stored = stored
+	body, err := answers.render()
+	if err != nil {
+		return false, err
+	}
+	backup, err := writeConfig(path, body, exists && replace, time.Now())
+	if err != nil {
+		return false, err
+	}
+	if backup != "" {
+		fmt.Fprintf(out, "backed up previous configuration to %s\n", backup)
+	}
+	saved, err := config.Resolve(map[string]string{"config": path}, func(string) string { return "" })
+	if err != nil {
+		return false, err
+	}
+	fmt.Fprintf(out, "wrote %s (network mode: %s; gateway mode: %s)\n", path, defaultString(saved.Network.Mode, "local"), saved.Gateway.Mode)
+	fmt.Fprintln(out, "Restart the service and MCP processes to apply changes. Configuration saved; peer connectivity has not been verified. History policy is unchanged.")
+	if answers.RuntimeDir != "" && answers.RuntimeDir != c.RuntimeDir {
+		fmt.Fprintln(out, "Runtime directory changed: existing tokens, host identity and pairings remain in the old directory; keep service and MCP runtime scopes aligned.")
+	}
+	if !wizard && (saved.Gateway.Mode == "tailscale" || saved.Network.Mode == "tailscale") {
+		fmt.Fprintln(out, "Tailscale requires a running CLI/daemon with an IP; startup fails closed if unavailable.")
 	}
 	return wizard, nil
 }

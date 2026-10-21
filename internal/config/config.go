@@ -160,6 +160,16 @@ func Target(flags map[string]string, getenv func(string) string) (string, bool, 
 
 // Resolve reads settings once. getenv may be replaced to resolve without an environment.
 func Resolve(flags map[string]string, getenv func(string) string) (Config, error) {
+	return resolve(flags, getenv, false)
+}
+
+// LoadForSetup uses the shared resolver while allowing a new destination.
+// The editor must supply an empty environment to avoid persisting shell overrides.
+func LoadForSetup(path string, getenv func(string) string) (Config, error) {
+	return resolve(map[string]string{"config": path}, getenv, true)
+}
+
+func resolve(flags map[string]string, getenv func(string) string, allowMissing bool) (Config, error) {
 	var c Config
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -175,7 +185,7 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	if err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
-	if !found && explicit {
+	if !found && explicit && !allowMissing {
 		return c, fmt.Errorf("config %s: %w", path, os.ErrNotExist)
 	}
 	c.Found = found
