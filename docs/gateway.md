@@ -3,8 +3,9 @@
 Host pairing connects two per-user Rhizome services without sharing or replacing
 local cluster tokens. Each service bridges its local MCP/observer sessions over
 one bidirectional TLS connection. Trust is pairwise: A–B and B–C do not expose A
-to C. Local history, agent logs, configuration, and administrative commands are
-never available to a remote host.
+to C. Agent logs, configuration, and administrative commands are never available
+to a remote host. Session history is served only when the owner opts in through
+[`[gateway.history]`](#session-history-sharing); pairing alone grants no history access.
 
 ## Configure and run
 
@@ -169,6 +170,10 @@ non-transitivity, collisions, atomic redemption, expiry, and revocation.
 on loopback with distinct tokens. It exercises the CLI, actual TLS connections,
 normalization, service restart, and non-transitive discovery.
 
+`go test -race ./internal/channel -run PeerHistory` covers history sharing
+across three isolated gateways: default denial, per-agent policy, cursor binding
+across hosts, restart and revocation, second-hop and unsupported peers.
+
 These do not establish cross-device or live-agent coverage. For a manual check,
 configure two machines in LAN or Tailscale mode, pair them, list their verified
 sessions, explicitly send/subscribe, restart a service, and revoke the peer.
@@ -176,6 +181,26 @@ Verify private addressing, unchanged local token files, reconnect, withdrawal,
 and failed post-revocation sends. Follow [Codex live smoke prerequisites](codex.md)
 when validating actual Codex delivery; synthetic MCP tests do not substitute for
 that opt-in workflow.
+
+## Session history sharing
+
+A host owner can let paired hosts search and read its session-history catalog
+through `search_sessions`/`read_session_history` with an exact `host_id`. This
+is off unless the serving host's file sets `gateway.history.enabled = true`. A
+global `lookback` (default `30d`, or `all`) and per-source-agent
+`[claude.peer_history]`/`[codex.peer_history]` overrides limit what is shared.
+The serving service reads the policy at startup, so restart it after a change;
+the restart also expires every outstanding remote cursor.
+
+Requests use the pinned-TLS `/v1/history` endpoint. They are accepted only from
+currently trusted, connected peers, are never forwarded, and are authorized on
+the serving host before catalog enumeration and on every page. The serving
+gateway reads the observer's catalog and native logs with the same confinement
+and content filters as local reads, and it never exposes paths or the admin API.
+It admits 4 concurrent history requests, 2 per peer. Older gateways answer
+`REMOTE_HISTORY_UNSUPPORTED`. Messaging and local history are unaffected. Exact
+semantics, outputs and error codes are in
+[paired-host history](history.md#paired-host-history-opt-in).
 
 ## File attachments
 

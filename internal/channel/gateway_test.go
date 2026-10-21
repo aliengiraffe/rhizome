@@ -41,11 +41,18 @@ func gatewayUntil(t *testing.T, check func() bool) {
 type gatewayHarness struct {
 	runtime string
 	cfg     config.Gateway
+	history GatewayHistory
 	cancel  context.CancelFunc
 	done    chan error
 }
 
 func startGatewayHarness(t *testing.T) *gatewayHarness {
+	t.Helper()
+	return startGatewayHarnessWith(t, "", GatewayHistory{})
+}
+
+// startGatewayHarnessWith serves history from runtime (a fresh one when empty).
+func startGatewayHarnessWith(t *testing.T, runtime string, history GatewayHistory) *gatewayHarness {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -53,7 +60,10 @@ func startGatewayHarness(t *testing.T) *gatewayHarness {
 	}
 	address := listener.Addr().String()
 	listener.Close()
-	h := &gatewayHarness{runtime: filepath.Join(t.TempDir(), "run"), cfg: config.Gateway{Mode: "lan", Listen: address}}
+	if runtime == "" {
+		runtime = filepath.Join(t.TempDir(), "run")
+	}
+	h := &gatewayHarness{runtime: runtime, cfg: config.Gateway{Mode: "lan", Listen: address}, history: history}
 	h.start(t)
 	t.Cleanup(func() { h.stop(t) })
 	return h
@@ -63,7 +73,7 @@ func (h *gatewayHarness) start(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
 	h.done = make(chan error, 1)
-	go func() { h.done <- RunGateway(ctx, h.runtime, h.cfg) }()
+	go func() { h.done <- RunGateway(ctx, h.runtime, h.cfg, h.history) }()
 	gatewayUntil(t, func() bool {
 		select {
 		case err := <-h.done:

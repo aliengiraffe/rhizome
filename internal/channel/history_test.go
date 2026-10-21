@@ -914,14 +914,14 @@ func TestHistoryDocsMatchImplementation(t *testing.T) {
 		}
 	}
 	source := ""
-	for _, name := range []string{"history.go", "history_read.go", "history_mcp.go"} {
+	for _, name := range []string{"history.go", "history_read.go", "history_mcp.go", "history_peer.go"} {
 		b, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		source += string(b)
 	}
-	for _, code := range []string{"INVALID_ARGUMENT", "CATALOG_UNAVAILABLE", "CATALOG_INCOMPATIBLE", "SESSION_NOT_FOUND", "SESSION_AMBIGUOUS", "HISTORY_UNAVAILABLE", "INVALID_CURSOR", "CURSOR_EXPIRED", "SOURCE_CHANGED", "RESOURCE_LIMIT", "CALLER_UNVERIFIED"} {
+	for _, code := range []string{"INVALID_ARGUMENT", "CATALOG_UNAVAILABLE", "CATALOG_INCOMPATIBLE", "SESSION_NOT_FOUND", "SESSION_AMBIGUOUS", "HISTORY_UNAVAILABLE", "INVALID_CURSOR", "CURSOR_EXPIRED", "SOURCE_CHANGED", "RESOURCE_LIMIT", "CALLER_UNVERIFIED", "REMOTE_HISTORY_DISABLED", "POLICY_DENIED", "REMOTE_HISTORY_UNSUPPORTED", "PEER_UNAVAILABLE", "GATEWAY_UNAVAILABLE"} {
 		if !strings.Contains(string(doc), "`"+code+"`") || !strings.Contains(source, `"`+code+`"`) {
 			t.Fatalf("error code %s is not both documented and emitted", code)
 		}

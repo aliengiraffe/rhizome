@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,10 @@ type gatewayRetry struct {
 }
 type gateway struct {
 	files                              *gatewayFiles
+	history                            *historyService // serves paired hosts; separate from MCP processes
+	historyPolicy                      config.HistoryPolicy
+	historyMu                          sync.Mutex
+	historyActive                      map[string]int // in-flight peer history requests per host
 	retry                              map[string]gatewayRetry
 	proxySlots                         chan struct{}
 	enrollmentRate                     *rate.Limiter
@@ -48,20 +53,27 @@ type gateway struct {
 }
 type gatewayControl struct{ Endpoint, Secret string }
 
+// gatewayServesHistory is a test hook that simulates releases without /v1/history.
+var gatewayServesHistory = true
+
 // GatewayCommand is the local service administration request. Secrets are never logged.
 type GatewayCommand struct {
-	Action  string `json:"action"`
-	Code    string `json:"code,omitempty"`
-	ID      string `json:"id,omitempty"`
-	Expires string `json:"expires,omitempty"`
-	Session string `json:"session,omitempty"`
-	Target  string `json:"target,omitempty"`
-	Path    string `json:"path,omitempty"`
+	Action  string          `json:"action"`
+	Code    string          `json:"code,omitempty"`
+	ID      string          `json:"id,omitempty"`
+	Expires string          `json:"expires,omitempty"`
+	Session string          `json:"session,omitempty"`
+	Target  string          `json:"target,omitempty"`
+	Path    string          `json:"path,omitempty"`
+	Host    string          `json:"host,omitempty"` // exact paired host for history-* actions
+	Args    json.RawMessage `json:"args,omitempty"`
 }
 type gatewayEnrollment struct{ ID, Secret, Endpoint, Mode string }
 
-// RunGateway runs the optional host gateway until canceled. It does not collect transcripts.
-func RunGateway(ctx context.Context, runtime string, cfg config.Gateway) error {
+// RunGateway runs the optional host gateway until canceled. It does not collect
+// transcripts; it serves the observer's history catalog to paired hosts only
+// when history.Policy enables sharing.
+func RunGateway(ctx context.Context, runtime string, cfg config.Gateway, history GatewayHistory) error {
 	if cfg.Mode == "" || cfg.Mode == "off" {
 		<-ctx.Done()
 		return nil
@@ -101,7 +113,7 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	g := &gateway{retry: map[string]gatewayRetry{}, proxySlots: make(chan struct{}, 128), enrollmentRate: rate.NewLimiter(4, 8), ctx: ctx, cancel: cancel, cfg: cfg, runtime: runtime, host: host, endpoint: endpoint, cert: cert, statePath: statePath, state: state, links: map[string]*gatewayLink{}, dialing: map[string]bool{}}
+	g := &gateway{history: newHistoryService(historyScope{Runtime: runtime, ClaudeRoot: history.ClaudeRoot, CodexRoot: history.CodexRoot}), historyPolicy: history.Policy, historyActive: map[string]int{}, retry: map[string]gatewayRetry{}, proxySlots: make(chan struct{}, 128), enrollmentRate: rate.NewLimiter(4, 8), ctx: ctx, cancel: cancel, cfg: cfg, runtime: runtime, host: host, endpoint: endpoint, cert: cert, statePath: statePath, state: state, links: map[string]*gatewayLink{}, dialing: map[string]bool{}}
 	g.files, err = newGatewayFiles(runtime)
 	if err != nil {
 		return err
@@ -121,6 +133,9 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway) error {
 	mux.HandleFunc("/v1/enroll", g.enroll)
 	mux.HandleFunc("/v1/connect", g.connect)
 	mux.HandleFunc("/v1/files", g.fileHTTP)
+	if gatewayServesHistory {
+		mux.HandleFunc("/v1/history", g.historyHTTP)
+	}
 	slots := make(chan struct{}, 32)
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -165,7 +180,7 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway) error {
 			return
 		}
 		var cmd GatewayCommand
-		if r.Method != "POST" || json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&cmd) != nil {
+		if r.Method != "POST" || json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPeerHistoryBody)).Decode(&cmd) != nil {
 			http.Error(w, "invalid request", 400)
 			return
 		}
@@ -234,11 +249,15 @@ func GatewayAdmin(ctx context.Context, runtime string, cmd GatewayCommand) (json
 		return nil, errors.New("gateway service unavailable")
 	}
 	defer res.Body.Close()
-	out, err := io.ReadAll(io.LimitReader(res.Body, 64*1024+1))
+	limit := int64(64 * 1024)
+	if strings.HasPrefix(cmd.Action, "history-") {
+		limit = maxPeerHistoryReply + 64*1024 // origin and host qualifiers added to a peer reply
+	}
+	out, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(out) > 64*1024 {
+	if int64(len(out)) > limit {
 		return nil, errors.New("oversized gateway response")
 	}
 	if res.StatusCode != 200 {
@@ -323,6 +342,8 @@ func (g *gateway) command(ctx context.Context, cmd GatewayCommand) (any, error) 
 		return g.fileCommand(ctx, cmd)
 	}
 	switch cmd.Action {
+	case "history-search", "history-read":
+		return g.historyCommand(ctx, cmd), nil
 	case "invite":
 		d, err := time.ParseDuration(cmd.Expires)
 		if err != nil || d < time.Minute || d > 24*time.Hour {

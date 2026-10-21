@@ -29,7 +29,11 @@ for the installation type; see the README's
 (an empty file selects defaults), or select an existing file with `--config`.
 The observer does not peer, so the `[network]` table has no effect on the service.
 The service can also run an opt-in [host gateway](gateway.md) via `[gateway]`;
-that gateway bridges local sessions without changing observer collection or history. See the README's
+that gateway bridges local sessions without changing observer collection or history.
+With `[gateway.history]` enabled, the same gateway also serves this catalog
+read-only to directly paired hosts under the owner's lookback policy. The policy
+is read when the service starts, so restart the service after changing it. See
+[paired-host history](history.md#paired-host-history-opt-in). See the README's
 [configuration table](../README.md#configuration) for keys and precedence.
 Installation rejects path overrides that differ from the file: put persistent
 paths in TOML so a service launched without the installing shell's environment

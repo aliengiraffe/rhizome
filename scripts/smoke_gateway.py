@@ -6,8 +6,27 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+from datetime import datetime, timedelta, timezone
 
 from smoke_stdio import Client, ROOT, until
+
+
+def stamp(age):
+    return (datetime.now(timezone.utc) - age).isoformat().replace('+00:00', 'Z')
+
+
+def history_logs(directory):
+    """Host A's pre-existing logs: one Claude session spanning its 15-day window, one Codex session."""
+    claude = directory / 'claude' / '-work-hist'
+    claude.mkdir(parents=True)
+    with (claude / 'hist-a.jsonl').open('w') as f:
+        for uid, age, text in (('h1', timedelta(days=40), 'history too old to share'), ('h2', timedelta(hours=1), 'history shared with peers')):
+            f.write(json.dumps({'type': 'assistant', 'uuid': uid, 'sessionId': 'hist-a', 'timestamp': stamp(age), 'cwd': '/work/hist',
+                                'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}) + '\n')
+    codex = directory / 'codex' / '2026'
+    codex.mkdir(parents=True)
+    with (codex / 'rollout-hist.jsonl').open('w') as f:
+        f.write(json.dumps({'timestamp': stamp(timedelta(hours=1)), 'type': 'session_meta', 'payload': {'id': 'hist-codex', 'cwd': '/work/hist', 'source': 'cli'}}) + '\n')
 
 
 def port():
@@ -53,6 +72,12 @@ def main():
                                   'gateway.mode = "lan"\ngateway.listen = "127.0.0.1:%d"\n' %
                                   (json.dumps(str(run)), json.dumps(str(directory / 'claude')),
                                    json.dumps(str(directory / 'codex')), port()))
+                if name == 'a':
+                    # Only host A opts in: Claude history for 15 days, Codex history withheld.
+                    history_logs(directory)
+                    with config.open('a') as f:
+                        f.write('gateway.history.enabled = true\nclaude.peer_history.lookback = "15d"\n'
+                                'codex.peer_history.enabled = false\n')
                 host = {'config': config, 'run': run, 'name': name}
                 hosts.append(host)
                 start(host)
@@ -85,6 +110,21 @@ def main():
             assert json.loads(command(b, 'files', 'list', '--session', 'gateway-b'))[0]['id'] == offer['id']
             cb.tool('cancel_file', {'transfer_id': offer['id']})
             assert not Path(received['path']).exists()
+            # Opt-in history: B reads A's catalog within A's policy; A cannot read B's.
+            host_a = paired['host_id']
+            until(lambda: 'hist-a' in cb.call('tools/call', {'name': 'search_sessions', 'arguments': {'host_id': host_a}})['content'][0]['text'])
+            found = cb.tool('search_sessions', {'host_id': host_a})
+            assert [r['session_id'] for r in found['sessions']] == ['hist-a'], found
+            assert found['sessions'][0]['host_id'] == host_a and found['sessions'][0]['live_status'] == 'not_reported'
+            assert found['origin']['host_id'] == host_a and not found['policy']['agents']['codex']['enabled']
+            page = cb.tool('read_session_history', {'host_id': host_a, 'agent_type': 'claude', 'session_id': 'hist-a'})
+            assert [e['text'] for e in page['events']] == ['history shared with peers'], page
+            assert {g['code'] for g in page['coverage']['gaps']} == {'outside_lookback'}
+            assert cb.error('read_session_history', {'host_id': host_a, 'agent_type': 'codex', 'session_id': 'hist-codex'})['code'] == 'POLICY_DENIED'
+            local = cb.call('tools/call', {'name': 'search_sessions', 'arguments': {}})
+            assert 'hist-a' not in local['content'][0]['text'], local  # never replicated into B's catalog
+            assert ca.error('search_sessions', {'host_id': json.loads(command(a, 'peers', 'list'))[0]['host_id']})['code'] == 'REMOTE_HISTORY_DISABLED'
+            assert 'history shared' not in json.dumps(cb.events) and 'history shared' not in json.dumps(ca.events)
             ca.tool('send', {'session_id': 'gateway-b', 'text': 'gateway forward'})
             cb.event('gateway forward')
             cb.tool('send', {'session_id': 'gateway-a', 'text': 'gateway reverse'})
@@ -109,11 +149,13 @@ def main():
             until(lambda: 'gateway-b' in sessions(cc) and 'gateway-c' in sessions(cb))
             assert 'gateway-a' not in sessions(cc)
             assert 'gateway-c' not in sessions(ca)
+            # History selection is direct only: C reaches B but never A through B.
+            assert cc.error('search_sessions', {'host_id': host_a})['code'] == 'PEER_UNAVAILABLE'
             command(b, 'peers', 'revoke', paired['host_id'])
             until(lambda: 'gateway-a' not in sessions(cb))
             assert cb.call('tools/call', {'name': 'send', 'arguments': {'session_id': 'gateway-a', 'text': 'must fail'}}).get('isError')
             assert [(h['run'] / 'token').read_bytes() for h in hosts] == tokens
-            print('gateway smoke: PASS (pairing, distinct tokens, bidirectional routing, file transfers, activity, restart, non-transitivity, revocation)')
+            print('gateway smoke: PASS (pairing, distinct tokens, bidirectional routing, file transfers, opt-in history, activity, restart, non-transitivity, revocation)')
         finally:
             for client in clients:
                 client.close()

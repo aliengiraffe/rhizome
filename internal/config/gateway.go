@@ -11,6 +11,9 @@ type Gateway struct {
 	Mode      string `toml:"mode"`
 	Listen    string `toml:"listen"`
 	Advertise string `toml:"advertise"`
+	// History is the global peer-history policy. It is read only from the file
+	// and is inert while mode is off.
+	History PeerHistory `toml:"history"`
 }
 
 // Validate rejects invalid gateway configuration before opening listeners.
