@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"embed"
 	"errors"
 	"flag"
@@ -350,7 +351,10 @@ func setup(args []string) error {
 		fmt.Println("nothing selected; no agent installed")
 	}
 	// Configuration first: directory answers decide where agents are installed.
-	wizard, err := setupConfig(c, path, answers, *replaceConfig, tty, os.Stdin, os.Stdout, os.Stderr)
+	// One buffered reader serves the configuration questions and the service
+	// question so no answer is lost between them.
+	stdin := bufio.NewReader(os.Stdin)
+	wizard, err := setupConfig(c, path, answers, *replaceConfig, tty, stdin, os.Stdout, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -383,12 +387,7 @@ func setup(args []string) error {
 	if !wizard {
 		return nil
 	}
-	p := prompter{in: bufio.NewReader(os.Stdin), out: os.Stdout}
-	install, err := p.yesNo("Install the background service now", false)
-	if err != nil || !install {
-		return err
-	}
-	return serviceCommand([]string{"install", "--config", path})
+	return offerService(prompter{in: stdin, out: os.Stdout}, path, os.Stdout, plainServiceInstaller)
 }
 
 // resolveForSetup resolves configuration like every other command, except that
@@ -421,17 +420,18 @@ func resolveForSetup(opts *flag.FlagSet, quiet bool) (config.Config, string, boo
 	return c, path, explicit, err
 }
 
-// setupConfig creates the configuration file. answers is set by --network;
+// setupConfig establishes the configuration file. answers is set by --network;
 // otherwise a terminal gets the interactive questions and anything else leaves
-// configuration alone and says so. It reports whether the wizard wrote the file,
-// in which case the caller offers the service install afterwards.
+// configuration alone and says so. It reports whether the interactive questions
+// ran and a valid file exists at path, whether created, replaced, or kept; the
+// caller then offers the background service once agents are installed.
 func setupConfig(c config.Config, path string, answers *configAnswers, replace, tty bool, in io.Reader, out, errOut io.Writer) (bool, error) {
 	var err error
 	wizard := answers == nil
 	p := prompter{in: bufio.NewReader(in), out: out}
 	_, statErr := os.Lstat(path)
 	exists := statErr == nil
-	if answers == nil {
+	if wizard {
 		if !tty {
 			fmt.Fprintln(errOut, "configuration not written: no terminal for the questions; pass --network local|lan|tailscale")
 			return false, nil
@@ -440,31 +440,53 @@ func setupConfig(c config.Config, path string, answers *configAnswers, replace, 
 			if replace, err = confirmExisting(p, path); err != nil {
 				return false, err
 			}
-			if !replace {
-				fmt.Fprintf(out, "kept existing %s\n", path)
-				return false, nil
+		}
+		if !exists || replace {
+			a, err := askConfig(p, c, tailscaleCheck(channel.CheckTailscale))
+			if err != nil {
+				return false, err
 			}
+			answers = &a
 		}
-		a, err := askConfig(p, c, tailscaleCheck(channel.CheckTailscale))
-		if err != nil {
-			return false, err
-		}
-		answers = &a
 	} else if exists && !replace {
 		fmt.Fprintf(errOut, "configuration not written: %s already exists; pass --replace-config to back it up and replace it\n", path)
 		return false, nil
 	}
-	body, err := answers.render()
-	if err != nil {
-		return false, err
+	if answers != nil {
+		body, err := answers.render()
+		if err != nil {
+			return false, err
+		}
+		backup, err := writeConfig(path, body, exists && replace, time.Now())
+		if err != nil {
+			return false, err
+		}
+		if backup != "" {
+			fmt.Fprintf(out, "backed up previous configuration to %s\n", backup)
+		}
+		fmt.Fprintf(out, "wrote %s (network mode: %s)\n", path, answers.Network.Mode)
+	} else {
+		fmt.Fprintf(out, "kept existing %s\n", path)
 	}
-	backup, err := writeConfig(path, body, exists && replace, time.Now())
-	if err != nil {
-		return false, err
-	}
-	if backup != "" {
-		fmt.Fprintf(out, "backed up previous configuration to %s\n", backup)
-	}
-	fmt.Fprintf(out, "wrote %s (network mode: %s)\n", path, answers.Network.Mode)
 	return wizard, nil
+}
+
+// offerService asks the opt-in service question after a valid configuration
+// exists at path. Declining leaves the service untouched; accepting installs
+// and starts it and reports success only once the observer is running.
+func offerService(p prompter, path string, out io.Writer, install serviceInstaller) error {
+	accept, err := p.yesNo("Install and start the background service now", false)
+	if err != nil {
+		return err
+	}
+	if !accept {
+		fmt.Fprintf(out, "background service unchanged; run `rhizome service install --config %s` later\n", path)
+		return nil
+	}
+	outcome, err := install(context.Background(), path)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "background service installed and running (configuration %s, runtime %s)\n", path, outcome.Runtime)
+	return nil
 }

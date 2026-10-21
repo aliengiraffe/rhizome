@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -200,6 +201,20 @@ func TestAskConfig(t *testing.T) {
 	})
 }
 
+// fakeInstaller records service step calls without touching a service manager.
+type fakeInstaller struct {
+	paths []string
+	err   error
+}
+
+func (f *fakeInstaller) install(_ context.Context, path string) (serviceOutcome, error) {
+	f.paths = append(f.paths, path)
+	if f.err != nil {
+		return serviceOutcome{}, f.err
+	}
+	return serviceOutcome{Installed: true, Running: true, Runtime: "/run"}, nil
+}
+
 func TestSetupConfig(t *testing.T) {
 	lan := func() *configAnswers {
 		return &configAnswers{Network: config.Network{Mode: "lan", Join: []string{"a:7946"}}}
@@ -208,10 +223,25 @@ func TestSetupConfig(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 		return filepath.Join(t.TempDir(), "config.toml")
 	}
+	never := func(context.Context, string) (serviceOutcome, error) {
+		t.Error("service step ran implicitly")
+		return serviceOutcome{}, nil
+	}
+	// run drives the plain flow like setup: the configuration step, then the
+	// service question on the same reader when the interactive questions ran.
+	run := func(t *testing.T, c config.Config, p string, answers *configAnswers, replace, tty bool, input string, out, errOut *bytes.Buffer, install serviceInstaller) error {
+		t.Helper()
+		in := bufioReader(input)
+		wizard, err := setupConfig(c, p, answers, replace, tty, in, out, errOut)
+		if err != nil || !wizard {
+			return err
+		}
+		return offerService(prompter{in: in, out: out}, p, out, install)
+	}
 	t.Run("flags write without a terminal", func(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
-		if _, err := setupConfig(resolved(t), p, lan(), false, false, strings.NewReader(""), &out, &errOut); err != nil {
+		if err := run(t, resolved(t), p, lan(), false, false, "", &out, &errOut, never); err != nil {
 			t.Fatal(err)
 		}
 		b, err := os.ReadFile(p)
@@ -222,7 +252,7 @@ func TestSetupConfig(t *testing.T) {
 	t.Run("no terminal and no network writes nothing", func(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
-		if _, err := setupConfig(resolved(t), p, nil, false, false, strings.NewReader(""), &out, &errOut); err != nil {
+		if err := run(t, resolved(t), p, nil, false, false, "", &out, &errOut, never); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) || !strings.Contains(errOut.String(), "--network") || out.Len() != 0 {
@@ -233,7 +263,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		os.WriteFile(p, []byte("# mine\n"), 0o600)
 		var out, errOut bytes.Buffer
-		if _, err := setupConfig(resolved(t), p, lan(), false, false, strings.NewReader(""), &out, &errOut); err != nil {
+		if err := run(t, resolved(t), p, lan(), false, false, "", &out, &errOut, never); err != nil {
 			t.Fatal(err)
 		}
 		if b, _ := os.ReadFile(p); string(b) != "# mine\n" || !strings.Contains(errOut.String(), "--replace-config") {
@@ -244,7 +274,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		os.WriteFile(p, []byte("# mine\n"), 0o600)
 		var out, errOut bytes.Buffer
-		if _, err := setupConfig(resolved(t), p, lan(), true, false, strings.NewReader(""), &out, &errOut); err != nil {
+		if err := run(t, resolved(t), p, lan(), true, false, "", &out, &errOut, never); err != nil {
 			t.Fatal(err)
 		}
 		matches, _ := filepath.Glob(p + ".bak-*")
@@ -256,22 +286,102 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		os.WriteFile(p, []byte("# mine\n"), 0o600)
 		var out, errOut bytes.Buffer
-		if _, err := setupConfig(resolved(t), p, nil, false, true, strings.NewReader("\n"), &out, &errOut); err != nil {
+		if err := run(t, resolved(t), p, nil, false, true, "\n\n", &out, &errOut, never); err != nil {
 			t.Fatal(err)
 		}
 		if b, _ := os.ReadFile(p); string(b) != "# mine\n" || !strings.Contains(out.String(), "# mine") {
 			t.Fatalf("%q %q", b, out.String())
+		}
+		if o := out.String(); !strings.Contains(o, "kept existing "+p) || !strings.Contains(o, "Install and start the background service") || !strings.Contains(o, "service unchanged") {
+			t.Fatalf("%q", o)
+		}
+	})
+	t.Run("interactive keep then install and start", func(t *testing.T) {
+		p := path(t)
+		os.WriteFile(p, []byte("# mine\n"), 0o600)
+		var out, errOut bytes.Buffer
+		f := &fakeInstaller{}
+		if err := run(t, resolved(t), p, nil, false, true, "keep\ny\n", &out, &errOut, f.install); err != nil {
+			t.Fatal(err)
+		}
+		if len(f.paths) != 1 || f.paths[0] != p {
+			t.Fatalf("installer calls %v", f.paths)
+		}
+		if b, _ := os.ReadFile(p); string(b) != "# mine\n" {
+			t.Fatalf("kept file changed: %q", b)
+		}
+		if backups, _ := filepath.Glob(p + ".bak-*"); len(backups) != 0 {
+			t.Fatalf("keep created backups %v", backups)
+		}
+		if o := out.String(); !strings.Contains(o, "installed and running (configuration "+p+", runtime /run)") {
+			t.Fatalf("%q", o)
+		}
+	})
+	t.Run("interactive replace then install and start", func(t *testing.T) {
+		p := path(t)
+		os.WriteFile(p, []byte("# mine\n"), 0o600)
+		var out, errOut bytes.Buffer
+		f := &fakeInstaller{}
+		// replace, local, no hostname, no custom paths, install service.
+		if err := run(t, resolved(t), p, nil, false, true, "replace\n1\n\nn\ny\n", &out, &errOut, f.install); err != nil {
+			t.Fatal(err)
+		}
+		backups, _ := filepath.Glob(p + ".bak-*")
+		if b, _ := os.ReadFile(p); len(backups) != 1 || !strings.Contains(string(b), `mode = "local"`) || len(f.paths) != 1 || f.paths[0] != p {
+			t.Fatalf("%v %s %v", backups, b, f.paths)
+		}
+		if o := out.String(); !strings.Contains(o, "wrote "+p) || !strings.Contains(o, "installed and running") {
+			t.Fatalf("%q", o)
+		}
+	})
+	t.Run("service failure keeps written configuration", func(t *testing.T) {
+		p := path(t)
+		var out, errOut bytes.Buffer
+		f := &fakeInstaller{err: errors.New("observer did not acquire its runtime lock")}
+		err := run(t, resolved(t), p, nil, false, true, "1\n\nn\ny\n", &out, &errOut, f.install)
+		if err == nil || !errors.Is(err, f.err) {
+			t.Fatalf("got %v", err)
+		}
+		if b, _ := os.ReadFile(p); !strings.Contains(string(b), `mode = "local"`) {
+			t.Fatalf("configuration lost on service failure: %s", b)
+		}
+		if o := out.String(); !strings.Contains(o, "wrote "+p) || strings.Contains(o, "running") {
+			t.Fatalf("%q", o)
+		}
+	})
+	t.Run("input ends at service question", func(t *testing.T) {
+		p := path(t)
+		os.WriteFile(p, []byte("# mine\n"), 0o600)
+		var out, errOut bytes.Buffer
+		if err := run(t, resolved(t), p, nil, false, true, "\n", &out, &errOut, never); err == nil {
+			t.Fatal("EOF at the service question accepted")
+		}
+		if b, _ := os.ReadFile(p); string(b) != "# mine\n" {
+			t.Fatalf("kept file changed: %q", b)
+		}
+	})
+	t.Run("flags with a terminal never ask", func(t *testing.T) {
+		p := path(t)
+		var out, errOut bytes.Buffer
+		if err := run(t, resolved(t), p, lan(), false, true, "y\n", &out, &errOut, never); err != nil {
+			t.Fatal(err)
+		}
+		if o := out.String(); !strings.Contains(o, "wrote "+p) || strings.Contains(o, "service") {
+			t.Fatalf("%q", o)
 		}
 	})
 	t.Run("interactive wizard creates file", func(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
 		// local, no custom paths, no service install.
-		if _, err := setupConfig(resolved(t), p, nil, false, true, strings.NewReader("1\n\nn\nn\n"), &out, &errOut); err != nil {
+		if err := run(t, resolved(t), p, nil, false, true, "1\n\nn\nn\n", &out, &errOut, never); err != nil {
 			t.Fatal(err)
 		}
 		if b, _ := os.ReadFile(p); !strings.Contains(string(b), `mode = "local"`) {
 			t.Fatalf("%s", b)
+		}
+		if o := out.String(); !strings.Contains(o, "Install and start the background service now (y/N)") {
+			t.Fatalf("%q", o)
 		}
 	})
 }

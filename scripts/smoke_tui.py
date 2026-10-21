@@ -89,7 +89,7 @@ def main():
 
         ui = Terminal(["setup", "--agents", ","], env)
         ui.expect("Network mode")
-        for expected in ("Hostname override", "Customize directories", "Install background", "Enter applies"):
+        for expected in ("Hostname override", "Customize directories", "Install and start", "Enter applies"):
             ui.send(b"\r"); ui.expect(expected)
         ui.send(b"\r"); ui.expect("Setup completed")
         ui.send(b"\r"); ui.finish()
