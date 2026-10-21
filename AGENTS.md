@@ -192,11 +192,13 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   skill, the MCP registration and the binding hooks: Claude in
   `~/.claude.json` (`<CLAUDE_CONFIG_DIR>/.claude.json` for a non-default
   directory) plus `<config dir>/settings.json`, Codex in `<CODEX_HOME>/config.toml`
-  plus `hooks.json`. The entry is the absolute executable with `mcp --agent
+  plus `hooks.json`, Cursor in `<cursor dir>/mcp.json` plus `hooks.json`
+  (`version: 1`; command entries `<exe> hook --agent cursor`, shell-quoted,
+  identified on merge by that command). The entry is the absolute executable with `mcp --agent
   <name>`, `--config` only for an explicit existing file, `--codex-bin` when
   resolvable, and the agent home in `env` only when non-default; never a token.
-  Hook templates in `setup_agents.go` must equal `.claude/settings.json` and
-  `examples/codex/hooks.json` (tested). Merges touch only Rhizome entries,
+  Hook templates in `setup_agents.go` must equal `.claude/settings.json`,
+  `examples/codex/hooks.json` and `examples/cursor/hooks.json` (tested). Merges touch only Rhizome entries,
   keep everything else, back up changed files as `<file>.bak-<timestamp>`,
   follow symlinks, reject malformed files without replacing them and skip
   unchanged files. OpenCode gets the skill and its two plugins only (no hooks;
@@ -259,8 +261,9 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   outbox (32 entries, 64 KiB, 8 KiB per injection): `postToolUse*`
   `additional_context` always, `stop` `followup_message` only with
   `[cursor] followup_delivery = true` (file-only, default false, `loop_count`
-  0, completed turns). Setup never writes Cursor's `mcp.json`/`hooks.json`;
-  `examples/cursor/` is merged by the user. Live Cursor behavior is unverified:
+  0, completed turns). `rhizome setup --agents cursor` installs the skill, the
+  MCP entry and the hooks (see the setup invariant); `examples/cursor/` holds
+  the same definitions for manual or project-scope merges. Live Cursor behavior is unverified:
   keep `docs/cursor.md` and the checklist in `docs/verification.md` honest.
 - **Never manually invoke `observe_session` or invent an ID.** Trusted hooks,
   verified transport identity, and authoritative log metadata own binding;

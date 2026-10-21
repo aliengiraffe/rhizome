@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -678,27 +677,136 @@ func TestSetupCLIInstallsGlobalRegistration(t *testing.T) {
 	}
 }
 
-// Cursor setup installs the skill and prints the manual merge note; it never
-// writes Cursor's mcp.json or hooks.json.
-func TestInstallCursorSkillOnly(t *testing.T) {
+// Cursor setup writes mcp.json and hooks.json at user scope like the other
+// agents: fresh, repeated (unchanged), stale entries replaced, foreign hooks and
+// servers preserved, --config threaded into the hook command, paths quoted.
+func TestInstallCursor(t *testing.T) {
 	c, home := installEnv(t, nil)
+	exe := filepath.Join(home, "Rhizome App", "rhizome")
 	var out bytes.Buffer
-	in := agentInstaller{exe: "/bin/rhizome", home: home, c: c, lookPath: noPath, now: fixedNow, out: &out}
+	in := agentInstaller{exe: exe, home: home, c: c, lookPath: noPath, now: fixedNow, out: &out}
 	cursor := detectAgents(c, noPath)[3]
-	if cursor.Name != "cursor" {
-		t.Fatalf("fourth agent = %q", cursor.Name)
+	if cursor.Name != "cursor" || cursor.MCP != filepath.Join(home, ".cursor", "mcp.json") || cursor.Hooks != filepath.Join(home, ".cursor", "hooks.json") {
+		t.Fatalf("cursor destinations: %+v", cursor)
 	}
 	if err := in.install(cursor); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"skill: installed", "examples/cursor/mcp.json"} {
+	servers := readJSON(t, cursor.MCP)["mcpServers"].(map[string]any)
+	want := map[string]any{"type": "stdio", "command": exe, "args": []any{"mcp", "--agent", "cursor"}}
+	if !reflect.DeepEqual(servers["rhizome"], want) {
+		t.Fatalf("cursor server: %v", servers["rhizome"])
+	}
+	hooks := readJSON(t, cursor.Hooks)
+	command := "'" + exe + "' hook --agent cursor"
+	wantHooks, _ := decodeJSON(mustJSON(t, cursorHookTemplate(command)))
+	if hooks["version"] != json.Number("1") || !reflect.DeepEqual(hooks["hooks"], wantHooks) {
+		t.Fatalf("cursor hooks: %v", hooks)
+	}
+	for _, want := range []string{"skill: installed", "mcp:   created", "hooks: created", "approve the rhizome MCP server"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
 		}
 	}
-	for _, name := range []string{"mcp.json", "hooks.json"} {
-		if _, err := os.Stat(filepath.Join(c.Cursor.ConfigDir, name)); !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("%s written: %v", name, err)
+	// Repeating changes nothing and makes no backup.
+	out.Reset()
+	if err := in.install(cursor); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "mcp:   unchanged") || !strings.Contains(out.String(), "hooks: unchanged") {
+		t.Fatalf("repeat run: %s", out.String())
+	}
+	// Foreign entries survive; stale Rhizome entries (old path, extra event) are replaced.
+	stale := map[string]any{"version": json.Number("2"), "hooks": map[string]any{
+		"stop":          []any{map[string]any{"command": "/old/rhizome hook --agent cursor"}, map[string]any{"command": "./mine.sh"}},
+		"afterFileEdit": []any{map[string]any{"command": "/old/rhizome hook --agent cursor"}},
+		"preToolUse":    []any{map[string]any{"command": "./audit.sh", "matcher": "Shell"}},
+	}}
+	if err := os.WriteFile(cursor.Hooks, mustJSON(t, stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mcpDoc := map[string]any{"mcpServers": map[string]any{"github": map[string]any{"url": "https://example.invalid"}, "rhizome": map[string]any{"command": "/old/rhizome", "args": []any{"mcp"}, "env": map[string]any{"KEEP": "1"}}}}
+	if err := os.WriteFile(cursor.MCP, mustJSON(t, mcpDoc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.install(cursor); err != nil {
+		t.Fatal(err)
+	}
+	hooks = readJSON(t, cursor.Hooks)
+	got := hooks["hooks"].(map[string]any)
+	if hooks["version"] != json.Number("2") || got["afterFileEdit"] != nil || len(got["preToolUse"].([]any)) != 1 || len(got["stop"].([]any)) != 2 || got["stop"].([]any)[0].(map[string]any)["command"] != "./mine.sh" {
+		t.Fatalf("stale merge: %v", hooks)
+	}
+	for _, event := range cursorHookEvents {
+		entries := got[event].([]any)
+		if last := entries[len(entries)-1].(map[string]any); last["command"] != command {
+			t.Fatalf("%s: %v", event, entries)
 		}
 	}
+	servers = readJSON(t, cursor.MCP)["mcpServers"].(map[string]any)
+	if servers["github"] == nil || !reflect.DeepEqual(servers["rhizome"], map[string]any{"type": "stdio", "command": exe, "args": []any{"mcp", "--agent", "cursor"}, "env": map[string]any{"KEEP": "1"}}) {
+		t.Fatalf("stale server merge: %v", servers)
+	}
+	if backups, _ := filepath.Glob(cursor.Hooks + ".bak-*"); len(backups) != 1 {
+		t.Fatalf("hooks backup: %v", backups)
+	}
+	// An explicit configuration file reaches both the server entry and the hook command.
+	cfg := filepath.Join(home, "rz dir", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte("[network]\nmode = \"local\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ec := c
+	ec.Path = cfg
+	explicit := agentInstaller{exe: exe, home: home, c: ec, explicit: true, lookPath: noPath, now: fixedNow, out: &out}
+	if err := explicit.install(cursor); err != nil {
+		t.Fatal(err)
+	}
+	args := readJSON(t, cursor.MCP)["mcpServers"].(map[string]any)["rhizome"].(map[string]any)["args"]
+	if !reflect.DeepEqual(args, []any{"mcp", "--agent", "cursor", "--config", cfg}) {
+		t.Fatalf("explicit args: %v", args)
+	}
+	stop := readJSON(t, cursor.Hooks)["hooks"].(map[string]any)["stop"].([]any)
+	if stop[len(stop)-1].(map[string]any)["command"] != command+" --config '"+cfg+"'" {
+		t.Fatalf("explicit hook command: %v", stop)
+	}
+	// A malformed hooks file is reported, not replaced.
+	if err := os.WriteFile(cursor.Hooks, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.install(cursor); err == nil || !strings.Contains(err.Error(), "hooks") {
+		t.Fatalf("malformed hooks: %v", err)
+	}
+	if b, _ := os.ReadFile(cursor.Hooks); string(b) != "{" {
+		t.Fatal("malformed hooks file was replaced")
+	}
+}
+
+// The Cursor template must not drift from the checked-in example; the example
+// uses a placeholder path and a shell string per entry.
+func TestCursorHookTemplateMatchesExample(t *testing.T) {
+	want := readJSON(t, "examples/cursor/hooks.json")
+	got, err := decodeJSON(mustJSON(t, cursorHookTemplate("/absolute/path/to/rhizome/rhizome hook --agent cursor")))
+	if err != nil || want["version"] != json.Number("1") || !reflect.DeepEqual(got, want["hooks"]) {
+		t.Fatalf("cursor template differs from examples/cursor/hooks.json:\n got %v\nwant %v (%v)", got, want["hooks"], err)
+	}
+	for _, in := range []string{"/plain/path", "/with space/x", "it's", "a$b"} {
+		if q := shellQuote(in); (strings.ContainsAny(in, " '$") && !strings.HasPrefix(q, "'")) || (!strings.ContainsAny(in, " '$") && q != in) {
+			t.Fatalf("shellQuote(%q) = %q", in, q)
+		}
+	}
+	if shellQuote("it's") != `'it'\''s'` {
+		t.Fatalf("single quote escaping: %q", shellQuote("it's"))
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
