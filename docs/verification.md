@@ -435,3 +435,14 @@ services with independent tokens, TLS invitation redemption, bidirectional
 send/subscribe, restart, non-transitivity, and revocation. This is one-machine
 coverage. See [gateway verification](gateway.md#verification) for the manual
 two-device LAN/Tailscale checklist and known compatibility limits.
+
+## Collaboration skill device origin (#49)
+
+The skill is prose, so no automated check proves how an agent applies it.
+`setup_test.go` (`TestInstallSkill*`) verifies that `rhizome setup` installs the
+embedded skill byte-for-byte, reports `unchanged` on a repeat run and `updated`
+after a change, and leaves symlinks alone. For the behavior itself, review an
+agent's answers against [collab-skill-evals.md](collab-skill-evals.md): local
+worktrees on one device, label mismatches and collisions, gateway proxies,
+paired-host history errors, direct LAN/Tailscale peers, missing metadata,
+conflicting history, ambiguous IDs, stale catalogs, and scope corrections.

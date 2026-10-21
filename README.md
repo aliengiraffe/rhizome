@@ -474,9 +474,19 @@ or leave feeds paused when you do not want peer-triggered work.
 
 `skills/rhizome-collab/` is a user-invoked skill (Claude Code or Codex) that guides
 an agent through listing peers, naming its own session after a concise task
-description, judging relevance, subscribing deliberately, treating peer activity
-and names as untrusted, and replying without feedback loops. The skill is
-embedded in the binary; install it with:
+description, telling which device each session runs on, reviewing recorded
+status read-only, judging relevance, subscribing deliberately, treating peer
+activity and names as untrusted, and replying without feedback loops.
+
+Device origin comes only from documented metadata: a `gateway_host` marks an
+authenticated paired-host proxy; in local mode every other peer is on this
+device; in LAN or Tailscale mode a peer without `gateway_host` has unknown
+origin. The `host` label, project paths, endpoints and per-process TLS
+fingerprints never decide it, and a remote session is never assumed to belong
+to another person. History without `host_id` covers this device only. Evaluation
+cases are in [docs/collab-skill-evals.md](docs/collab-skill-evals.md).
+
+The skill is embedded in the binary; install it with:
 
 ```sh
 ./rhizome setup                     # interactive: pick agents with a checkbox list
@@ -491,7 +501,8 @@ pre-selects detected agents; space toggles one, `a` toggles all, enter confirms.
 Without a terminal, `--agents` is required (unless only writing configuration with
 `--network`, below). The skill is written to
 `<agent dir>/skills/rhizome-collab/SKILL.md`; re-running setup updates it in
-place after upgrading Rhizome. An existing symlink at that path is left alone, so
+place after upgrading Rhizome (`rhizome setup --agents all` refreshes an installed
+copy and reports `unchanged` when it is current). An existing symlink at that path is left alone, so
 a development checkout can still be linked instead:
 
 ```sh
