@@ -232,6 +232,18 @@ a real tailnet; the two-device Tailscale checklist in
   `live_status: not_reported`. Bounds: 4 concurrent, 2 per peer, 8 snapshots
   per peer (`internal/channel/history_peer.go`, `internal/config/history.go`,
   `docs/history.md`).
+- **Device origin is evidence-based; labels never decide it.** The bundled
+  `skills/rhizome-collab/SKILL.md` (embedded and installed by `rhizome setup`)
+  classifies sessions as this session, this device (own identity has no
+  `cert_fingerprint`, i.e. local mode, and the peer has no `gateway_host`),
+  paired remote host (`gateway_host`, equal to the `rhizome peers` `host_id`),
+  or unknown origin (direct LAN/Tailscale peers, missing metadata). `host`,
+  project, endpoints, node IDs and per-process `cert_fingerprint` are labels;
+  remote presence never implies a different person. History without `host_id`
+  is this device only; remote history keeps one exact `host_id` across search,
+  read and pages and reports policy errors instead of substituting local data.
+  Status review is read-only. Keep the skill, README and
+  [docs/collab-skill-evals.md](docs/collab-skill-evals.md) consistent.
 
 ## Git and PR conventions
 
