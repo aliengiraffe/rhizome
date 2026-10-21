@@ -556,3 +556,8 @@ see only live identities. Per-call
 work is bounded as listed above, catalog memory is bounded by the file limits,
 and per-process pagination state is bounded by 32 snapshots that expire after
 15 minutes or at process exit.
+
+Setup updates preserve `[gateway.history]` and each agent's `[peer_history]`
+overrides, including explicit false values and lookback windows. Enabling gateway
+pairing through setup never enables history sharing. These policies remain
+file-only; restart the service to apply deliberate policy edits.

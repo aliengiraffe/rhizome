@@ -82,7 +82,8 @@ The `[network]` table selects how `rhizome mcp` peers; see [LAN mode](#lan-mode)
 and [Tailscale mode](#tailscale-mode) for what each option means. Options that
 the chosen mode would refuse at startup (`join` in local mode, `gossip_port` outside
 Tailscale mode, an unknown `mode`) are rejected when the file is read. The
-background service does not peer, so it ignores `[network]`. `rhizome setup`
+background service uses `[gateway]` for paired-host networking; `[network]`
+controls MCP gossip and must be local when pairing is enabled. `rhizome setup`
 can write this file for you ([Collaboration skill](#collaboration-skill)).
 
 Settings are grouped by the agent they describe. Which agent a process serves is
@@ -612,18 +613,21 @@ Setup asks how Rhizome will be used and writes
 `~/.rhizome/config.toml` (or the file selected with `--config`/`RHIZOME_CONFIG`,
 which setup may create):
 
-1. **Installation type**: `local` (default; loopback only), `lan`, or `tailscale`.
-   LAN and Tailscale make the device reachable by peers holding the cluster token.
-2. **Mode options**: LAN asks for listen/advertise addresses, `join` seeds and
-   mDNS; Tailscale checks that the daemon is running (a warning, never a
-   failure), then asks for the gossip port, discovery interval and `join` seeds.
-3. **Hostname override**: an optional device label. Blank uses the OS hostname
-   and clears any previous override when replacing configuration.
-4. **Directories**: optionally `runtime_dir`, the Claude config directory, Codex
-   home and the Codex executable. Only values that differ from the defaults are written.
+1. **Gateway pairing**: `off` (default), `lan`, or `tailscale`, with optional
+   concrete listen/advertise IP:port endpoints. This connects per-user services
+   through explicit invite/join, independently of the local cluster token.
+2. **MCP network**: `local` (default), or legacy shared-token `lan`/`tailscale`
+   gossip. Pairing requires local MCP networking; incompatible choices fail.
+   Legacy mode options retain their existing meaning. Tailscale probing is
+   advisory in the wizard; startup still fails closed if the daemon is unavailable.
+3. **Hostname override**: Enter keeps the stored label; `-` clears it to use the
+   OS hostname. Optional gateway endpoints also accept `-` for automatic selection.
+4. **Directories**: optionally change runtime scope, Claude config directory,
+   Codex home or executable. Changing runtime scope selects different token,
+   host identity and pairing state; the old state remains in the old directory.
 5. **Service**: asks whether to install and start the background service
    (default no). The question follows the configuration step whether the file
-   was created, replaced, or kept, and runs the same lifecycle as
+   was created, updated, or kept, and runs the same lifecycle as
    `rhizome service install --config <path>`: a missing service is installed
    and started, a stopped compatible one is started, and a running one counts
    as success without a restart. Setup reports success only after the observer
@@ -631,26 +635,46 @@ which setup may create):
    configuration and any installed definition stay in place for diagnosis;
    declining leaves the service untouched.
 
-Enter always takes the safe default. Only answered keys are written, the file is
-created 0600 under a 0700 directory, and the token is never written. An existing
-file is kept unless you choose to replace it, in which case it is
-backed up first (`config.toml.bak-<timestamp>`); keeping it still offers the
-service step. Without a terminal, pass the type:
+Prompts default to stored choices, without persisting shell overrides. Keeping
+an existing file leaves it byte-identical (the service step is still offered). Updating merges selected settings and
+preserves all other supported keys, including history policies, agent options,
+and runtime scope. Switching MCP transport resets that transport's options;
+explicit gateway `off` clears gateway endpoints but preserves history policy.
+Updates normalize TOML formatting/comments, validate before replacement, and
+save a private recoverable `config.toml.bak-<timestamp>` backup (with a suffix
+on collisions). New files are 0600 under a 0700 directory. Setup never writes
+tokens or changes host keys, trust, invitations, or revocations.
+
+Without a terminal, use `--network` or `--gateway-mode`:
 
 ```sh
+./rhizome setup --config /absolute/path/config.toml --gateway-mode lan --gateway-listen 192.168.1.10:7947
+./rhizome setup --gateway-mode tailscale --network local --replace-config
+./rhizome setup --gateway-mode off --replace-config
 ./rhizome setup --network local --hostname "Work laptop"
 ./rhizome setup --network local --hostname "" --replace-config # restore OS hostname
-./rhizome setup --network lan --join 192.168.1.20:7946 [--bind-addr IP] [--advertise-addr IP] [--mdns=false]
-./rhizome setup --network tailscale [--join host:7946] [--gossip-port 7950] [--discovery-interval 45s]
-./rhizome setup --network lan --replace-config   # back up and replace an existing file
+./rhizome setup --network lan --join 192.168.1.20:7946 --mdns=false
+./rhizome setup --network tailscale --gossip-port 7950 --discovery-interval 45s
 ```
 
+`--gateway-advertise IP:port` sets a separate reachable endpoint; an explicit
+empty gateway endpoint restores automatic selection. `--runtime-dir /absolute/path`
+changes stored runtime scope. Omitted flags preserve stored values. To switch an
+existing legacy network to pairing, explicitly pass `--network local`; to switch
+back, pass `--gateway-mode off` with the desired `--network`. History sharing is
+never enabled by setup; its policies remain file-only.
+
+Restart the service and MCP processes to apply changes. Saved configuration is
+not proof of connectivity; use [gateway pairing and verification](docs/gateway.md).
 Combine with `--agents` to also install the selected agents; the configuration
-is written first so its directories decide the destinations. `--network` and
-`--list` never install or start the service. Without a terminal and without
-`--network`, setup installs the selected agents, leaves configuration untouched
-and says so on stderr; it refuses to register an explicit `--config` file that
-does not exist yet.
+is written first so its directories decide the destinations. `--network`,
+`--gateway-mode` and `--list` never install or start the service. Without a
+terminal and without `--network` or `--gateway-mode`, setup installs the selected
+agents, leaves configuration untouched and says so on stderr; it refuses to
+register an explicit `--config` file that does not exist yet. The terminal screen
+replaces a file by merging its answers into the stored one, so settings it does
+not ask about (gateway pairing, history policy, agent options) survive; use the
+flags or `--plain` to change gateway pairing.
 
 Bare `rhizome service` opens [service management](docs/service.md#terminal-interface)
 on usable terminals. `rhizome service status --tui` and

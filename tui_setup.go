@@ -92,13 +92,20 @@ func (m *setupModel) fields() []wizardField {
 	return append(f, wizardField{"review", "Review / Apply", nil})
 }
 func (m *setupModel) answers() (*configAnswers, error) {
+	stored, err := storedConfig(m.path)
+	if err != nil {
+		return nil, err
+	}
 	if m.fixedAnswers != nil {
+		m.fixedAnswers.Stored = stored
 		return m.fixedAnswers, nil
 	}
 	if m.exists && m.values["existing"] == "keep" {
 		return nil, nil
 	}
-	a := &configAnswers{Hostname: m.values["hostname"], Network: config.Network{Mode: m.values["mode"]}}
+	// Replacing merges these answers into the stored file: unanswered settings
+	// (gateway, history, agent options) survive, and a blank hostname clears.
+	a := &configAnswers{Stored: stored, Selected: map[string]bool{"hostname": true, "network": true}, Hostname: m.values["hostname"], Network: config.Network{Mode: m.values["mode"]}}
 	n := &a.Network
 	if n.Mode == "lan" || n.Mode == "tailscale" {
 		for _, seed := range strings.Split(m.values["join_"+n.Mode], ",") {
@@ -136,6 +143,13 @@ func (m *setupModel) answers() (*configAnswers, error) {
 				*v.dest = value
 			}
 		}
+	}
+	for flag, set := range map[string]bool{
+		"bind-addr": n.BindAddr != "", "advertise-addr": n.AdvertiseAddr != "", "join": len(n.Join) > 0,
+		"gossip-port": n.GossipPort != 0, "discovery-interval": n.DiscoveryInterval != "", "mdns": n.MDNS != nil,
+		"runtime-dir": a.RuntimeDir != "", "claude-dir": a.ClaudeDir != "", "codex-home": a.CodexHome != "", "codex-bin": a.CodexBin != "",
+	} {
+		a.Selected[flag] = set
 	}
 	return a, nil
 }

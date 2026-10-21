@@ -188,7 +188,7 @@ func TestAskConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := resolved(t)
 			var out bytes.Buffer
-			a, err := askConfig(prompter{in: bufioReader(tc.input), out: &out}, c, tc.ts)
+			a, err := askConfig(prompter{in: bufioReader("off\n" + tc.input), out: &out}, c, tc.ts)
 			if err != nil || !tc.check(a) || !strings.Contains(out.String(), tc.wantOut) {
 				t.Fatalf("%+v %v\n%s", a, err, out.String())
 			}
@@ -245,7 +245,7 @@ func TestSetupConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 		b, err := os.ReadFile(p)
-		if err != nil || !strings.Contains(string(b), `mode = "lan"`) || strings.Contains(out.String(), "service") {
+		if err != nil || !strings.Contains(string(b), `mode = "lan"`) || !strings.Contains(out.String(), "Restart the service") {
 			t.Fatalf("%v %s %s", err, b, out.String())
 		}
 	})
@@ -323,7 +323,7 @@ func TestSetupConfig(t *testing.T) {
 		var out, errOut bytes.Buffer
 		f := &fakeInstaller{}
 		// replace, local, no hostname, no custom paths, install service.
-		if err := run(t, resolved(t), p, nil, false, true, "replace\n1\n\nn\ny\n", &out, &errOut, f.install); err != nil {
+		if err := run(t, resolved(t), p, nil, false, true, "replace\noff\n1\n\nn\ny\n", &out, &errOut, f.install); err != nil {
 			t.Fatal(err)
 		}
 		backups, _ := filepath.Glob(p + ".bak-*")
@@ -338,7 +338,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
 		f := &fakeInstaller{err: errors.New("observer did not acquire its runtime lock")}
-		err := run(t, resolved(t), p, nil, false, true, "1\n\nn\ny\n", &out, &errOut, f.install)
+		err := run(t, resolved(t), p, nil, false, true, "off\n1\n\nn\ny\n", &out, &errOut, f.install)
 		if err == nil || !errors.Is(err, f.err) {
 			t.Fatalf("got %v", err)
 		}
@@ -366,7 +366,7 @@ func TestSetupConfig(t *testing.T) {
 		if err := run(t, resolved(t), p, lan(), false, true, "y\n", &out, &errOut, never); err != nil {
 			t.Fatal(err)
 		}
-		if o := out.String(); !strings.Contains(o, "wrote "+p) || strings.Contains(o, "service") {
+		if o := out.String(); !strings.Contains(o, "wrote "+p) || strings.Contains(o, "Install and start") {
 			t.Fatalf("%q", o)
 		}
 	})
@@ -374,7 +374,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
 		// local, no custom paths, no service install.
-		if err := run(t, resolved(t), p, nil, false, true, "1\n\nn\nn\n", &out, &errOut, never); err != nil {
+		if err := run(t, resolved(t), p, nil, false, true, "off\n1\n\nn\nn\n", &out, &errOut, never); err != nil {
 			t.Fatal(err)
 		}
 		if b, _ := os.ReadFile(p); !strings.Contains(string(b), `mode = "local"`) {
@@ -389,16 +389,20 @@ func TestSetupConfig(t *testing.T) {
 func bufioReader(s string) *bufio.Reader { return bufio.NewReader(strings.NewReader(s)) }
 
 func TestSetupHostname(t *testing.T) {
-	for _, hostname := range []string{"  My workstation  ", "   "} {
+	for _, hostname := range []string{"  My workstation  ", "-"} {
 		t.Run(hostname, func(t *testing.T) {
 			c := resolved(t)
 			c.Hostname = "previous"
 			var out bytes.Buffer
-			a, err := askConfig(prompter{in: bufioReader("local\n" + hostname + "\nn\n"), out: &out}, c, func() error { return nil })
+			a, err := askConfig(prompter{in: bufioReader("off\nlocal\n" + hostname + "\nn\n"), out: &out}, c, func() error { return nil })
 			if err != nil {
 				t.Fatal(err)
 			}
-			if a.Hostname != strings.TrimSpace(hostname) || !strings.Contains(out.String(), "clears any previous override") {
+			want := strings.TrimSpace(hostname)
+			if want == "-" {
+				want = ""
+			}
+			if a.Hostname != want || !strings.Contains(out.String(), "clears any previous override") {
 				t.Fatalf("%+v %s", a, &out)
 			}
 			path := filepath.Join(t.TempDir(), "config.toml")
@@ -427,7 +431,7 @@ func TestSetupHostname(t *testing.T) {
 		})
 	}
 	var out bytes.Buffer
-	a, err := askConfig(prompter{in: bufioReader("local\nbad\x00label\ngood\nn\n"), out: &out}, resolved(t), func() error { return nil })
+	a, err := askConfig(prompter{in: bufioReader("off\nlocal\nbad\x00label\ngood\nn\n"), out: &out}, resolved(t), func() error { return nil })
 	if err != nil || a.Hostname != "good" || !strings.Contains(out.String(), "control characters") {
 		t.Fatalf("%+v %v %s", a, err, &out)
 	}

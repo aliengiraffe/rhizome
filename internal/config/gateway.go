@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"strconv"
 )
 
@@ -31,11 +32,32 @@ func (g Gateway) Validate() error {
 		if address == "" {
 			continue
 		}
-		host, port, err := net.SplitHostPort(address)
-		n, e := strconv.Atoi(port)
-		if err != nil || e != nil || n < 1 || n > 65535 || net.ParseIP(host) == nil || net.ParseIP(host).IsUnspecified() {
-			return errors.New("gateway addresses must be concrete IP:port endpoints (1-65535)")
+		if err := ValidateGatewayEndpoint(address, g.Mode); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// ValidateGatewayEndpoint enforces the same concrete endpoint policy at file
+// validation and at the gateway transport boundary.
+func ValidateGatewayEndpoint(address, mode string) error {
+	host, port, err := net.SplitHostPort(address)
+	n, e := strconv.Atoi(port)
+	ip := net.ParseIP(host)
+	if err != nil || e != nil || n < 1 || n > 65535 || ip == nil || ip.IsUnspecified() || len(address) > 128 {
+		return errors.New("gateway addresses must be concrete IP:port endpoints (1-65535)")
+	}
+	allowed := false
+	switch mode {
+	case "lan":
+		allowed = ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	case "tailscale":
+		addr, err := netip.ParseAddr(host)
+		allowed = err == nil && (ip.IsLoopback() || netip.MustParsePrefix("100.64.0.0/10").Contains(addr.Unmap()) || netip.MustParsePrefix("fd7a:115c:a1e0::/48").Contains(addr))
+	}
+	if !allowed {
+		return errors.New("gateway endpoint outside selected address policy")
 	}
 	return nil
 }

@@ -14,10 +14,9 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"net"
 	"os"
 	"path/filepath"
-	"strconv"
+	"rhizome/internal/config"
 	"strings"
 	"time"
 
@@ -70,21 +69,7 @@ func gatewayRandom() (string, error) {
 }
 func gatewayDigest(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 func gatewayEndpoint(address, modeName string) error {
-	h, p, err := net.SplitHostPort(address)
-	if err != nil || len(address) > 128 {
-		return errors.New("invalid gateway endpoint")
-	}
-	port, err := strconv.Atoi(p)
-	m := modeLAN
-	if modeName == "tailscale" {
-		m = modeTailscale
-	} else if modeName != "lan" {
-		return errors.New("invalid gateway mode")
-	}
-	if err != nil || port < 1 || port > 65535 || !allowedIP(net.ParseIP(h), m) || net.ParseIP(h).IsUnspecified() {
-		return errors.New("gateway endpoint outside selected address policy")
-	}
-	return nil
+	return config.ValidateGatewayEndpoint(address, modeName)
 }
 func parseGatewayInvitation(code string) (gatewayInvitation, error) {
 	var in gatewayInvitation
