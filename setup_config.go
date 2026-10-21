@@ -28,6 +28,7 @@ type configAnswers struct {
 	ClaudeDir  string
 	CodexHome  string
 	CodexBin   string
+	CursorDir  string
 }
 
 // storedConfig reads the TOML document at path as the base for edits. A
@@ -84,6 +85,7 @@ func (a configAnswers) render() (string, error) {
 		{"claude", "config_dir", "claude-dir", a.ClaudeDir},
 		{"codex", "home", "codex-home", a.CodexHome},
 		{"codex", "bin", "codex-bin", a.CodexBin},
+		{"cursor", "config_dir", "cursor-dir", a.CursorDir},
 	} {
 		if selected(f.flag, f.value != "") {
 			set(f.table, f.key, f.value)
@@ -439,6 +441,7 @@ How will Rhizome be used on this device?
 		{"Claude config directory", c.Claude.ConfigDir, &a.ClaudeDir},
 		{"Codex home", c.Codex.Home, &a.CodexHome},
 		{"Codex executable", c.Codex.Bin, &a.CodexBin},
+		{"Cursor config directory", c.Cursor.ConfigDir, &a.CursorDir},
 	} {
 		v, err := p.ask(f.question, f.def)
 		if err != nil {
@@ -452,6 +455,7 @@ How will Rhizome be used on this device?
 	a.Selected["claude-dir"] = a.ClaudeDir != ""
 	a.Selected["codex-home"] = a.CodexHome != ""
 	a.Selected["codex-bin"] = a.CodexBin != ""
+	a.Selected["cursor-dir"] = a.CursorDir != ""
 	if a.RuntimeDir != "" {
 		fmt.Fprintln(p.out, "Changing runtime directory selects different tokens, host identity and trust state; existing pairings remain in the old directory. Reinstall the service only with matching configuration.")
 	}

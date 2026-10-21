@@ -12,6 +12,7 @@ All passed:
 - `task build`
 - `python3 scripts/smoke_stdio.py`
 - `python3 scripts/smoke_stdio.py --lan`
+- `python3 scripts/smoke_cursor.py`
 - `git diff --check`
 
 The Go suite exercises concurrent registry bootstrap, lock-gated registration
@@ -484,8 +485,8 @@ an explicit configuration, idempotent repeat). Live validation is not automated:
 with a throwaway `HOME`, run `rhizome setup --agents all --network local`, start
 Claude Code with the channel flag and Codex from another directory, confirm each
 shows the `rhizome` server and its hooks, and that `list_sessions` reports
-`BOUND` after the first prompt. Cursor is not supported on this base, so no
-Cursor check applies.
+`BOUND` after the first prompt. For Cursor, setup installs only the skill and
+prints the manual merge note; the live Cursor checks are in the section below.
 
 ## Collaboration skill device origin (#49)
 
@@ -671,3 +672,51 @@ ID signing, notarization `Accepted`, stapling, Gatekeeper assessment, draft
 staging and publication, and release downloads. Run a `v0.1.0-rc.1`
 prerelease and record the results here
 ([releasing.md](releasing.md#validating-before-a-stable-release)).
+
+## Cursor (#31, 2026-10-21)
+
+Automated, all passed: `task check`, `task build`, both stdio smokes, the service
+smoke and `python3 scripts/smoke_cursor.py`. Unit tests cover hook payload
+minimization (subagent, child, background and unknown events ignored; prompt
+reduced to the envelope flag; tool bodies and email never forwarded; text
+bounds), canonical argument hashing, registration selection (dead PIDs, exact
+and nested roots, unknown roots, ambiguity), binding and label refresh,
+hook-pushed activity and tool markers, peer-turn suppression and counters,
+outbox drain into `additional_context`, default-off and opt-in `followup_message`
+(loop count, aborted turns, peer-only marking), full-outbox retention, ticket
+resolution (single-conversation shortcut, hash mismatch, single use, duplicate
+tickets, expiry, name-only tickets, retired conversations, cap), the private
+socket and the `rhizome hook` process (one stdout line, defaults on failure,
+oversized input, cleanup, stale-registration pruning), and the MCP server in
+Cursor mode (no `claude/channel`, no `observe_session`, UNBOUND and
+`identity_ambiguous` errors, ticketed `set_session_name`). The smoke drives real
+`rhizome hook --agent cursor` subprocesses against a Cursor-mode process and a
+Claude-mode peer with synthetic payloads; it launches no model.
+
+Not verified live. Cursor is installed on the development machine but no model
+turn was driven from the automated session. Run after installing or upgrading
+Cursor, and record the Cursor version:
+
+1. Merge `examples/cursor/{mcp.json,hooks.json}` with absolute paths, approve
+   the server, open one chat, submit a prompt, ask for `list_sessions`: expect
+   `BOUND`, `agent_type: cursor`, `collection_state: hooks`,
+   `delivery_mode: hook_pull`. Check `~/.rhizome/run/cursor/` holds one
+   registration whose `roots` match the workspace after `roots/list`.
+2. From a Claude or Codex session on the same machine, `subscribe` to the Cursor
+   conversation, have Cursor run a shell tool and answer: expect
+   `Tool completed: <name>` and the assistant text, no prompt text.
+3. `send` a direct message to the Cursor conversation, then have Cursor run any
+   tool: expect the `<rhizome-peer-event>` block after that tool result and
+   Cursor treating it as informational.
+4. Enable `[cursor] followup_delivery = true`, restart the MCP server, queue a
+   peer message, finish a turn: expect exactly one auto-submitted follow-up and
+   no second one; confirm the follow-up reply is not collected by subscribers.
+5. Open a second chat in the same window: expect `identity_ambiguous` for tool
+   calls until the `beforeMCPExecution` hook runs; record whether the `matcher`
+   scoped the hook, how MCP tools appear in `tool_name`, and whether
+   `{"permission": "allow"}` suppressed Cursor's approval prompt.
+6. Repeat step 1 in the Cursor CLI (`agent`) and note the process layout.
+7. With the third-party Claude Code config option enabled, confirm Cursor ignores
+   Rhizome's `mcp_tool` hooks in `~/.claude/settings.json` and does not spawn a
+   Claude-mode `rhizome mcp`.
+8. LAN or Tailscale: repeat step 2 from a second device.

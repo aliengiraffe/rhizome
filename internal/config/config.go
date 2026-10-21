@@ -39,6 +39,10 @@ type Config struct {
 		DataDir     string      `toml:"data_dir"`     // Directory holding opencode.db; default $XDG_DATA_HOME/opencode or ~/.local/share/opencode.
 		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for OpenCode-sourced history.
 	} `toml:"opencode"`
+	Cursor struct {
+		ConfigDir        string `toml:"config_dir"`        // Cursor user directory; skills live under it. Default ~/.cursor.
+		FollowupDelivery bool   `toml:"followup_delivery"` // Let the stop hook auto-submit queued peer events as the next turn. Off by default.
+	} `toml:"cursor"`
 	Gateway     Gateway           `toml:"gateway"`
 	Network     Network           `toml:"network"`
 	PeerHistory HistoryPolicy     `toml:"-"` // Effective policy for paired hosts reading local history.
@@ -115,6 +119,7 @@ func (c *Config) settings() []setting {
 		{"codex.home", "CODEX_HOME", "", &c.Codex.Home, true},
 		{"codex.sessions_dir", "", "codex-root", &c.Codex.SessionsDir, true},
 		{"opencode.data_dir", "", "opencode-root", &c.OpenCode.DataDir, true},
+		{"cursor.config_dir", "", "", &c.Cursor.ConfigDir, true},
 	}
 }
 
@@ -219,7 +224,7 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	}
 	// TOML keys are case-sensitive even though the decoder can match Go fields
 	// case-insensitively. Reject alternate spellings instead of losing their source.
-	known := map[string]bool{"claude": true, "codex": true, "opencode": true, "network": true, "gateway": true}
+	known := map[string]bool{"claude": true, "codex": true, "opencode": true, "cursor": true, "cursor.followup_delivery": true, "network": true, "gateway": true}
 	for _, k := range networkKeys {
 		known["network."+k] = true
 	}
@@ -268,6 +273,11 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 		}
 	}
 	c.Network = raw.Network
+	c.Cursor.FollowupDelivery = raw.Cursor.FollowupDelivery
+	c.Sources["cursor.followup_delivery"] = "default"
+	if md.IsDefined("cursor", "followup_delivery") {
+		c.Sources["cursor.followup_delivery"] = "file"
+	}
 	for _, k := range networkKeys {
 		source := "default"
 		if md.IsDefined("network", k) {
@@ -284,6 +294,7 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 		dataHome = filepath.Join(home, ".local", "share")
 	}
 	c.OpenCode.DataDir = filepath.Join(dataHome, "opencode")
+	c.Cursor.ConfigDir = filepath.Join(home, ".cursor")
 	rawSettings := raw.settings()
 	for i, s := range c.settings() {
 		source := "default"
@@ -427,6 +438,9 @@ func (c Config) Write(w io.Writer) error {
 		if _, err := fmt.Fprintf(w, "%s = %s # source: %s\n", l.key, l.value, c.Sources[l.key]); err != nil {
 			return err
 		}
+	}
+	if _, err := fmt.Fprintf(w, "cursor.followup_delivery = %t # source: %s\n", c.Cursor.FollowupDelivery, c.Sources["cursor.followup_delivery"]); err != nil {
+		return err
 	}
 	// Peer history shows the effective, inherited policy, not only file values.
 	if _, err := fmt.Fprintf(w, "gateway.history.enabled = %t # source: %s\n", c.PeerHistory.Enabled, c.Sources["gateway.history.enabled"]); err != nil {

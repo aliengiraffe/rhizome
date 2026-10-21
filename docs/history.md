@@ -66,7 +66,7 @@ Metadata search only. Rows prove that a log exists, not that an agent runs.
 | Field | Type / default | Semantics |
 | --- | --- | --- |
 | `session_id` | optional string, 1–128 bytes | Exact, case-sensitive native ID. No prefix, glob, or display-name matching. |
-| `agent_type` | optional `claude` \| `codex` \| `opencode` | Omitted means all supported agent types. |
+| `agent_type` | optional `claude` \| `codex` \| `opencode` | Omitted means all supported agent types. Cursor logs are not cataloged (see [cursor.md](cursor.md)), so `cursor` is not accepted; the tools are available in Cursor mode for the cataloged agent types. |
 | `project_path` | optional absolute string, ≤ 4096 bytes | Lexically cleaned and compared for equality with the session's recorded `cwd`. No subtree matching, filesystem access, symlink resolution, or implicit caller-project restriction. |
 | `name_contains` | optional nonempty string, ≤ 256 UTF-8 bytes | Literal substring of the effective `session_name` after Unicode lowercase folding. Not a regex, glob, SQL pattern, or transcript search. |
 | `updated_after` | optional RFC 3339 | Inclusive lower bound on `last_activity_at`. |
