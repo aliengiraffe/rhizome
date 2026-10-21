@@ -119,6 +119,11 @@ type Node struct {
 	rpc                          *grpc.Server
 	mdns                         *mdns.Server
 	token, runtime, registration string
+	// registryLock is held from registration until close; its release (also
+	// by process death) is what lets other nodes prune the registration.
+	registryLock *os.File
+	// registrationRefresh overrides defaultRegistrationRefresh in tests.
+	registrationRefresh time.Duration
 	// opts, mode, bind, advertiseAddr, gossipAddr, beaconPort, ts and cert are
 	// fixed by start before any goroutine reads them.
 	opts                            Options

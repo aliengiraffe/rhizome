@@ -135,8 +135,15 @@ atomic replacement. The CLI uses a private random control credential over
 loopback; remote listeners expose no administration. This is not a boundary
 against another program running as the same OS user.
 
-Both hosts attempt reconnect with bounded exponential backoff and jitter. A
-single surviving connection carries both directions; if both connect, the
+Both hosts attempt reconnect with bounded exponential backoff and jitter
+(2–32 s). A connection that ends within five seconds counts as a failure
+whichever host dialed it, so a connect-then-drop loop backs off instead of
+rebuilding every proxy each second; a longer-lived connection resets the
+backoff. The service logs each connection's end with a stable `reason` (for
+example `stale_snapshot`, `invalid_snapshot`, `read_error`, `replaced`,
+`shutdown`), a host ID prefix, uptime and the backoff, and logs rejected
+connections (`duplicate`, `pending`, `untrusted`); these lines carry no session
+data. A single surviving connection carries both directions; if both connect, the
 lexicographically smaller host ID's outgoing connection wins. Disconnects cancel
 requests and remove proxies. Snapshots refresh each second; ten seconds without
 a snapshot invalidates the connection, even if other frames continue arriving.

@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -408,7 +407,7 @@ func (g *gateway) offerFile(ctx context.Context, cmd GatewayCommand, local *pb.I
 	if err != nil || !st.Mode().IsRegular() {
 		return nil, errors.New("source must be a regular file, not a symlink")
 	}
-	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	f, err := root.OpenFile(name, os.O_RDONLY|sourceOpenFlags, 0)
 	if err != nil {
 		return nil, err
 	}

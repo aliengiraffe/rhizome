@@ -6,8 +6,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"golang.org/x/time/rate"
+	"log/slog"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -16,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"rhizome/internal/config"
 	pb "rhizome/proto"
 )
@@ -435,5 +439,178 @@ func TestGatewayProtocolCompatibility(t *testing.T) {
 	local.Protocol = 2
 	if !validChannelProtocol(local) || gatewayExportable(local) {
 		t.Fatal("proxy protocol policy")
+	}
+}
+
+// TestGatewayShortLinksBackOff proves that links ending within the short-link
+// window count as failures with exponential backoff, a long-lived link resets
+// it, and shutdown, replacement and revocation are neutral.
+func TestGatewayShortLinksBackOff(t *testing.T) {
+	host := strings.Repeat("b", 64)
+	short := 5 * time.Second
+	steps := []struct {
+		lifetime time.Duration
+		reason   string
+		trusted  bool
+		failures int
+	}{
+		{time.Second, "read_error", true, 1},
+		{time.Second, "stale_snapshot", true, 2},
+		{0, "remote_closed", true, 3},
+		{time.Second, "shutdown", true, 3},
+		{time.Second, "replaced", true, 3},
+		{time.Second, "revoked", true, 3},
+		{time.Second, "invalid_snapshot", true, 4},
+		{time.Second, "read_error", true, 5},
+		{time.Second, "read_error", true, 5}, // capped
+		{short, "read_error", true, 0},       // a long-lived link resets
+		{time.Second, "read_error", true, 1},
+		{time.Second, "revoked", false, 0}, // revocation drops retry state
+		{time.Second, "read_error", true, 1},
+		{time.Second, "read_error", false, 0}, // untrusted hosts keep no state
+	}
+	g := &gateway{retry: map[string]gatewayRetry{}, shortLink: short, state: gatewayState{Peers: map[string]gatewayPeer{}}}
+	for i, s := range steps {
+		if s.trusted {
+			g.state.Peers[host] = gatewayPeer{Host: host}
+		} else {
+			delete(g.state.Peers, host)
+		}
+		before := time.Now()
+		failures, backoff := g.linkEndedLocked(host, s.lifetime, s.reason)
+		retry := g.retry[host]
+		if failures != s.failures || retry.failures != s.failures {
+			t.Fatalf("step %d (%s): failures %d/%d, want %d", i, s.reason, failures, retry.failures, s.failures)
+		}
+		counted := s.lifetime < short && s.trusted && s.reason != "shutdown" && s.reason != "replaced" && s.reason != "revoked"
+		if !counted {
+			if backoff != 0 {
+				t.Fatalf("step %d: neutral outcome scheduled backoff %v", i, backoff)
+			}
+			continue
+		}
+		minimum := time.Second * time.Duration(1<<s.failures)
+		if wait := retry.next.Sub(before); wait < minimum || wait > minimum+time.Second+time.Millisecond*100 {
+			t.Fatalf("step %d: backoff %v, want %v plus jitter", i, wait, minimum)
+		}
+	}
+	if _, ok := g.retry[host]; ok {
+		t.Fatal("untrusted host retained retry state")
+	}
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+func (l *lockedBuffer) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
+
+// TestGatewayLinkStopReasons drives a real link through misbehaving peers and
+// checks that the stop reason is logged without session data and that the
+// short link counts toward the dial backoff.
+func TestGatewayLinkStopReasons(t *testing.T) {
+	cases := []struct {
+		reason string
+		peer   func(*websocket.Conn) error
+	}{
+		{"invalid_snapshot", func(c *websocket.Conn) error {
+			return c.WriteJSON(gatewayFrame{Type: "snapshot", Sessions: []*pb.Identity{{NodeId: "short", SessionId: "secret-session"}}})
+		}},
+		{"stale_snapshot", func(*websocket.Conn) error { return nil }},
+		{"unknown_frame", func(c *websocket.Conn) error { return c.WriteJSON(gatewayFrame{Type: "bogus"}) }},
+		{"remote_closed", func(c *websocket.Conn) error {
+			return c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.reason, func(t *testing.T) {
+			remote := strings.Repeat("c", 64)
+			logs := &lockedBuffer{}
+			ctx, cancel := context.WithCancel(context.Background())
+			runtime := filepath.Join(t.TempDir(), "run")
+			g := &gateway{retry: map[string]gatewayRetry{}, proxySlots: make(chan struct{}, 128), ctx: ctx, cancel: cancel, runtime: runtime, host: strings.Repeat("a", 64), state: gatewayState{Peers: map[string]gatewayPeer{remote: {Host: remote, Grant: "grant"}}}, links: map[string]*gatewayLink{}, dialing: map[string]bool{}, log: slog.New(slog.NewJSONHandler(logs, nil)), staleAfter: 50 * time.Millisecond}
+			g.base = newNode(ctx)
+			if err := g.base.start(Options{Runtime: runtime}); err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil); err == nil {
+					g.attach(remote, c, false)
+				}
+			}))
+			defer func() {
+				cancel()
+				g.mu.Lock()
+				for _, l := range g.links {
+					l.stop("shutdown")
+				}
+				g.mu.Unlock()
+				g.wg.Wait()
+				g.base.close()
+				srv.Close()
+			}()
+			client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			gatewayUntil(t, func() bool { g.mu.Lock(); defer g.mu.Unlock(); return g.links[remote] != nil })
+			if err := tc.peer(client); err != nil {
+				t.Fatal(err)
+			}
+			gatewayUntil(t, func() bool { return strings.Contains(logs.String(), `"msg":"gateway_link_stop"`) })
+			var stop map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var m map[string]any
+				if json.Unmarshal([]byte(line), &m) == nil && m["msg"] == "gateway_link_stop" {
+					stop = m
+				}
+			}
+			if stop["reason"] != tc.reason || stop["host"] != remote[:12] || stop["failures"] != float64(1) {
+				t.Fatalf("stop log: %v", stop)
+			}
+			if out := logs.String(); strings.Contains(out, "secret-session") || strings.Contains(out, remote) || strings.Contains(out, "grant") {
+				t.Fatalf("link log leaked identifiers: %s", out)
+			}
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			if g.links[remote] != nil || g.retry[remote].failures != 1 || !g.retry[remote].next.After(time.Now()) {
+				t.Fatalf("short link not counted: %+v", g.retry[remote])
+			}
+		})
+	}
+}
+
+// TestGatewayFailureClassification pins the stop reasons for transport errors.
+// A write after the peer's close frame was answered is a remote close, so the
+// reason does not depend on whether the reader or the writer notices first.
+func TestGatewayFailureClassification(t *testing.T) {
+	for _, tc := range []struct {
+		err   error
+		read  bool
+		label string
+	}{
+		{websocket.ErrCloseSent, false, "remote_closed"},
+		{fmt.Errorf("wrapped: %w", websocket.ErrCloseSent), false, "remote_closed"},
+		{net.ErrClosed, false, "write_error"},
+		{&websocket.CloseError{Code: websocket.CloseNormalClosure}, true, "remote_closed"},
+		{websocket.ErrReadLimit, true, "frame_too_large"},
+		{&json.SyntaxError{}, true, "invalid_frame"},
+		{os.ErrDeadlineExceeded, true, "read_timeout"},
+		{net.ErrClosed, true, "read_error"},
+	} {
+		got := writeFailure(tc.err)
+		if tc.read {
+			got = readFailure(tc.err)
+		}
+		if got != tc.label {
+			t.Errorf("%v (read=%v): %s, want %s", tc.err, tc.read, got, tc.label)
+		}
 	}
 }

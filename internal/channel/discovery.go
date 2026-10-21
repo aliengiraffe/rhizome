@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/memberlist"
@@ -194,7 +195,10 @@ func (n *Node) start(o Options) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	// The registry lock covers token loading and the registry's file-system
+	// decisions only; probing peers happens after it is released.
+	release := sync.OnceFunc(func() { _ = lock.Close() })
+	defer release()
 	if n.token, err = loadToken(runtime, o); err != nil {
 		return err
 	}
@@ -284,39 +288,18 @@ func (n *Node) start(o Options) error {
 	if err = n.members.UpdateNode(time.Second); err != nil {
 		return err
 	}
-	files, err := filepath.Glob(filepath.Join(runtime, "*.json"))
+	var counts bootstrapCounts
+	candidates, err := n.scanRegistry(runtime, &counts)
 	if err != nil {
 		return err
 	}
-	for _, path := range files {
-		base := filepath.Base(path)
-		if len(base) != 37 {
-			continue
-		}
-		if _, err := hex.DecodeString(base[:32]); err != nil {
-			continue
-		}
-		raw, e := os.ReadFile(path)
-		var peer pb.Identity
-		if e != nil || json.Unmarshal(raw, &peer) != nil {
-			_ = os.Remove(path)
-			continue
-		}
-		if !n.allowed(peer.Endpoint) || (peer.CertFingerprint != "") != (n.mode != modeLocal) {
-			// A registration from the other discovery mode may be live; it is
-			// unreachable for us but not stale, so leave it in place.
-			slog.Info("bootstrap_skip", "path", filepath.Base(path), "reason", "discovery mode mismatch")
-			continue
-		}
-		actual, e := n.probe(n.ctx, &peer)
-		if e != nil {
-			_ = os.Remove(path)
-			continue
-		}
-		if _, e = n.members.Join([]string{actual.GossipEndpoint}); e != nil {
-			slog.Warn("bootstrap_join", "error", e)
-		}
+	if err = n.register(runtime); err != nil {
+		releaseCandidates(candidates)
+		return err
 	}
+	release()
+	n.joinRegistered(runtime, candidates, &counts)
+	counts.log()
 	if n.mode != modeLocal {
 		for _, seed := range o.Join {
 			if err := n.join("join", seed); err != nil {
@@ -329,11 +312,6 @@ func (n *Node) start(o Options) error {
 				slog.Warn("mdns_unavailable", "error", err)
 			}
 		}
-	}
-	n.registration = filepath.Join(runtime, n.identity.NodeId+".json")
-	raw, _ := json.Marshal(n.local())
-	if err = os.WriteFile(n.registration, raw, 0600); err != nil {
-		return err
 	}
 	attrs := []any{"binding", "UNBOUND", "node_id", n.identity.NodeId, "mode", n.mode.String(), "bind", bind, "advertise", advertise, "endpoint", n.identity.Endpoint, "gossip_endpoint", n.local().GossipEndpoint, "join", o.Join, "mdns", n.mode != modeLocal && o.MDNS}
 	switch n.mode {
@@ -387,12 +365,6 @@ func (n *Node) gossipConfig() (*memberlist.Config, error) {
 	config.Logger = log.New(gossipLog{"gossip"}, "", 0)
 	config.SecretKey = key
 	return config, nil
-}
-
-func (n *Node) unregister() {
-	if n.registration != "" {
-		_ = os.Remove(n.registration)
-	}
 }
 
 // memberlist owns mutable Node pointers. Copy metadata inside callbacks,
