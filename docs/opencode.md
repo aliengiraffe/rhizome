@@ -82,9 +82,11 @@ first human prompt, unlike Codex mode.
   [service.md](service.md)) for its lifetime, so a second Rhizome process cannot
   collect the same session. During an instance reload the predecessor retires
   its sessions (keeping store entries) as soon as its plugin is gone and a
-  successor owns the socket path; the successor retries a bind that finds the
-  lease busy with doubling delays for up to 10 s, then fails closed and keeps the
-  store entry for the next prompt or reload.
+  successor owns the socket path (checked every 500 ms for 10 s after the
+  disconnect, then every 5 s until a reconnect or exit); the successor retries a
+  bind that finds the lease busy with doubling delays for 10 s, then every 5 s up
+  to 60 s, then fails closed and keeps the store entry for the next prompt or
+  reload.
 - There is no `observe_session` in OpenCode mode; never invent an ID.
 - Without the plugin (or before the first prompt) tools return `UNBOUND` with a
   setup hint.

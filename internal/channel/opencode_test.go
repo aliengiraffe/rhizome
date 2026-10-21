@@ -181,6 +181,35 @@ func boundIn(m *openCodeNodes, sid string) bool {
 	return m.sessions[sid] != nil
 }
 
+// retryEvents reports each retry state change of m: a scheduled retry, or nil
+// when none is pending any more.
+func retryEvents(m *openCodeNodes) chan *bindRetry {
+	ch := make(chan *bindRetry, 256)
+	m.onRetry = func(_ string, r *bindRetry) {
+		select {
+		case ch <- r:
+		default:
+		}
+	}
+	return ch
+}
+
+// successor returns a second manager on runtime, as after an instance reload.
+func successor(t *testing.T, runtime, dir string) *openCodeNodes {
+	t.Helper()
+	now := time.Now()
+	next := newOpenCodeNodes(context.Background(), runtime)
+	next.store = testStore(t, runtime, dir, &now)
+	t.Cleanup(next.close)
+	return next
+}
+
+func releaseLease(m *openCodeNodes, sid string) {
+	m.frameMu.Lock()
+	m.retire(sid, "shutdown")
+	m.frameMu.Unlock()
+}
+
 // An instance reload's successor restores a session while the predecessor
 // still holds its collection lease: the bind retries until the lease is free.
 func TestOpenCodeRestoreBindWaitsForLease(t *testing.T) {
@@ -190,23 +219,37 @@ func TestOpenCodeRestoreBindWaitsForLease(t *testing.T) {
 	if !boundIn(old, "ses_a") {
 		t.Fatal("predecessor did not bind")
 	}
-	now := time.Now()
-	next := newOpenCodeNodes(context.Background(), runtime)
-	next.store = testStore(t, runtime, dir, &now)
+	next := successor(t, runtime, dir)
 	next.retryBase = 5 * time.Millisecond
-	t.Cleanup(next.close)
+	events := retryEvents(next)
 	next.frame(bindFrame("ses_a", "", dir, "")) // restore answer from the fresh plugin
-	eventually(t, func() bool { return pendingRetry(next, "ses_a") })
-	if boundIn(next, "ses_a") {
+	if r := recv(t, events); r == nil || boundIn(next, "ses_a") {
 		t.Fatal("bound while the predecessor held the lease")
 	}
-	old.frameMu.Lock()
-	old.retire("ses_a", "shutdown")
-	old.frameMu.Unlock()
+	releaseLease(old, "ses_a")
 	eventually(t, func() bool { return boundIn(next, "ses_a") })
 	if pendingRetry(next, "ses_a") {
 		t.Fatal("retry left pending after bind")
 	}
+}
+
+// A predecessor that holds the lease past the doubling window is still
+// waited for at the slow cadence.
+func TestOpenCodeRestoreBindSlowTier(t *testing.T) {
+	old, runtime := openCodeManager(t)
+	dir := shortDir(t)
+	old.handle(bindFrame("ses_a", "", dir, ""))
+	next := successor(t, runtime, dir)
+	next.retryBase, next.retryFast, next.retrySlow, next.retryLimit = time.Millisecond, 10*time.Millisecond, 10*time.Millisecond, time.Minute
+	events := retryEvents(next)
+	next.frame(bindFrame("ses_a", "", dir, ""))
+	for r := recv(t, events); r == nil || !r.slow; r = recv(t, events) {
+		if r == nil {
+			t.Fatal("retry gave up inside the slow tier")
+		}
+	}
+	releaseLease(old, "ses_a")
+	eventually(t, func() bool { return boundIn(next, "ses_a") })
 }
 
 // When the lease never frees, the bind fails closed within the bound and the
@@ -215,20 +258,20 @@ func TestOpenCodeRestoreBindGivesUp(t *testing.T) {
 	old, runtime := openCodeManager(t)
 	dir := shortDir(t)
 	old.handle(bindFrame("ses_a", "", dir, ""))
-	now := time.Now()
-	next := newOpenCodeNodes(context.Background(), runtime)
-	next.store = testStore(t, runtime, dir, &now)
-	next.store.touch("ses_a", now)
+	next := successor(t, runtime, dir)
+	next.store.touch("ses_a", time.Now())
 	if err := next.store.flush(); err != nil {
 		t.Fatal(err)
 	}
-	next.retryBase, next.retryMax = 5*time.Millisecond, 40*time.Millisecond
-	t.Cleanup(next.close)
+	next.retryBase, next.retryFast, next.retrySlow, next.retryLimit = 5*time.Millisecond, 20*time.Millisecond, 10*time.Millisecond, 60*time.Millisecond
+	events := retryEvents(next)
 	next.frame(bindFrame("ses_a", "", dir, ""))
-	eventually(t, func() bool { return pendingRetry(next, "ses_a") })
-	eventually(t, func() bool { return !pendingRetry(next, "ses_a") })
-	if boundIn(next, "ses_a") {
-		t.Fatal("bound a session another process still collects")
+	scheduled := 0
+	for r := recv(t, events); r != nil; r = recv(t, events) {
+		scheduled++
+	}
+	if scheduled == 0 || pendingRetry(next, "ses_a") || boundIn(next, "ses_a") {
+		t.Fatalf("retries %d, pending %v, bound %v", scheduled, pendingRetry(next, "ses_a"), boundIn(next, "ses_a"))
 	}
 	if ids := storedIDs(t, next.store); strings.Join(ids, ",") != "ses_a" {
 		t.Fatalf("store entry lost after failed restore: %v", ids)
@@ -239,8 +282,14 @@ func TestOpenCodeRestoreBindGivesUp(t *testing.T) {
 // once a successor owns the socket path; a same-instance reconnect keeps them.
 func TestOpenCodeHandoverReleasesLeases(t *testing.T) {
 	m, runtime := openCodeManager(t)
-	checks := make(chan bool, 64)
-	m.onHandover = func(retired bool) { checks <- retired }
+	checks := make(chan bool, 256)
+	m.onHandover = func(retired bool) {
+		select {
+		case checks <- retired:
+		default:
+		}
+	}
+	m.handoverFast, m.handoverBurst, m.handoverSlow = 5*time.Millisecond, 2, 20*time.Millisecond
 	path := filepath.Join(runtime, "h.sock")
 	b, err := listenBridge(path, m)
 	if err != nil {
@@ -261,17 +310,30 @@ func TestOpenCodeHandoverReleasesLeases(t *testing.T) {
 	}
 	p2 := dialPlugin(t, path, true)
 	eventually(t, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.pluginUp })
+	for drained := false; !drained; { // checks while connected return without reporting
+		select {
+		case <-checks:
+		default:
+			drained = true
+		}
+	}
 
-	// Reload: a successor replaces the socket path, then the plugin goes away.
+	// Reload: the plugin goes away, and only after the fast recheck window
+	// does a successor replace the socket path.
+	p2.c.Close()
+	for i := 0; i <= m.handoverBurst+1; i++ {
+		if recv(t, checks) {
+			t.Fatal("retired before the socket was replaced")
+		}
+	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	successor, err := net.Listen("unix", path)
+	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { successor.Close() })
-	p2.c.Close()
+	t.Cleanup(func() { ln.Close() })
 	for retired := false; !retired; {
 		retired = recv(t, checks)
 	}

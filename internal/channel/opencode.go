@@ -72,14 +72,20 @@ type openCodeNodes struct {
 	closed    bool // set under frameMu and mu; bind refuses afterwards
 	// retries maps a session waiting for another process to release its
 	// collection lease to the bind attempt in flight. Guarded by frameMu.
-	retries   map[string]*bindRetry
-	retryBase time.Duration // first lease retry delay; doubles per attempt
-	retryMax  time.Duration // total lease wait before failing closed
+	retries    map[string]*bindRetry
+	retryBase  time.Duration // first lease retry delay; doubles per attempt
+	retryFast  time.Duration // doubling window, measured from the first failure
+	retrySlow  time.Duration // fixed delay after the doubling window
+	retryLimit time.Duration // total lease wait before failing closed
 	// handoverChecks counts socket-ownership rechecks while disconnected;
 	// handoverTimer schedules the next one. Both guarded by frameMu.
 	handoverChecks int
 	handoverTimer  *time.Timer
-	onHandover     func(retired bool) // test hook, called by the worker
+	handoverFast   time.Duration // recheck delay for the first handoverBurst checks
+	handoverBurst  int
+	handoverSlow   time.Duration                  // recheck delay afterwards, until reconnect or close
+	onHandover     func(retired bool)             // test hook, called by the worker
+	onRetry        func(sid string, r *bindRetry) // test hook: nil r means no retry pending
 	queue          chan workItem
 	dropped        atomic.Uint64
 	stop           chan struct{}
@@ -102,16 +108,20 @@ type workItem struct {
 // bindRetry is one pending bind waiting for another process's collection
 // lease; deadline bounds the total wait.
 type bindRetry struct {
-	frame    bridgeFrame
-	attempt  int
-	deadline time.Time
+	frame   bridgeFrame
+	attempt int
+	first   time.Time // first busy attempt
+	slow    bool      // this retry waits at the slow cadence
 }
 
 const (
-	openCodeLeaseRetryBase = 100 * time.Millisecond
-	openCodeLeaseRetryMax  = 10 * time.Second
-	openCodeHandoverEvery  = 500 * time.Millisecond
-	openCodeHandoverChecks = 20
+	openCodeLeaseRetryBase  = 100 * time.Millisecond
+	openCodeLeaseRetryFast  = 10 * time.Second
+	openCodeLeaseRetrySlow  = 5 * time.Second
+	openCodeLeaseRetryLimit = 60 * time.Second
+	openCodeHandoverFast    = 500 * time.Millisecond
+	openCodeHandoverBurst   = 20
+	openCodeHandoverSlow    = 5 * time.Second
 )
 
 const openCodeQueueSize = 512
@@ -119,7 +129,9 @@ const openCodeQueueSize = 512
 func newOpenCodeNodes(ctx context.Context, runtime string) *openCodeNodes {
 	m := &openCodeNodes{ctx: ctx, runtime: runtime, limit: maxOpenCodeNodes, now: time.Now,
 		sessions: map[string]*openCodeSessionState{}, queue: make(chan workItem, openCodeQueueSize), stop: make(chan struct{}),
-		retries: map[string]*bindRetry{}, retryBase: openCodeLeaseRetryBase, retryMax: openCodeLeaseRetryMax}
+		retries: map[string]*bindRetry{}, retryBase: openCodeLeaseRetryBase, retryFast: openCodeLeaseRetryFast,
+		retrySlow: openCodeLeaseRetrySlow, retryLimit: openCodeLeaseRetryLimit,
+		handoverFast: openCodeHandoverFast, handoverBurst: openCodeHandoverBurst, handoverSlow: openCodeHandoverSlow}
 	m.wg.Add(1)
 	go func() { defer m.wg.Done(); m.worker() }()
 	return m
@@ -188,8 +200,8 @@ func (m *openCodeNodes) process(w workItem) {
 // path, this process will not get the plugin back: retire every session as a
 // shutdown, keeping store entries, so the successor can claim the collection
 // leases without waiting for this process to exit. While the socket is still
-// ours a reconnect keeps the sessions; recheck a bounded number of times.
-// Requires frameMu.
+// ours a reconnect keeps the sessions; recheck quickly at first, then slowly
+// until the plugin reconnects or the manager closes. Requires frameMu.
 func (m *openCodeNodes) checkHandover() {
 	m.stopHandoverLocked() // at most one recheck is ever scheduled
 	m.mu.Lock()
@@ -199,10 +211,12 @@ func (m *openCodeNodes) checkHandover() {
 		return
 	}
 	if m.bridge.owned() {
-		if m.handoverChecks < openCodeHandoverChecks {
-			m.handoverChecks++
-			m.handoverTimer = time.AfterFunc(openCodeHandoverEvery, func() { m.enqueue(workItem{handover: true}) })
+		delay := m.handoverSlow
+		if m.handoverChecks < m.handoverBurst {
+			delay = m.handoverFast
 		}
+		m.handoverChecks++
+		m.handoverTimer = time.AfterFunc(delay, func() { m.enqueue(workItem{handover: true}) })
 		if m.onHandover != nil {
 			m.onHandover(false)
 		}
@@ -214,6 +228,7 @@ func (m *openCodeNodes) checkHandover() {
 		ids = append(ids, sid)
 	}
 	m.mu.Unlock()
+	clear(m.retries) // this process no longer serves the location
 	for _, sid := range ids {
 		m.retire(sid, "shutdown")
 	}
@@ -235,9 +250,10 @@ func (m *openCodeNodes) stopHandoverLocked() {
 
 // bindWithRetry binds r.frame. When another process still holds the session's
 // collection lease (typically the predecessor during an instance reload), it
-// retries with doubling delays until r.deadline, then fails closed and keeps
-// the store entry so the next prompt or reload can restore it. Requires frameMu;
-// the wait runs in a manager-owned goroutine that holds no lock.
+// retries with doubling delays during retryFast, then every retrySlow until
+// retryLimit, then fails closed and keeps the store entry so the next prompt or
+// reload can restore it. Requires frameMu; each wait runs in a manager-owned
+// goroutine that holds no lock.
 func (m *openCodeNodes) bindWithRetry(r *bindRetry) {
 	sid := r.frame.SessionID
 	err := m.bind(r.frame)
@@ -246,19 +262,27 @@ func (m *openCodeNodes) bindWithRetry(r *bindRetry) {
 		if err != nil {
 			slog.Warn("opencode_bind", "error", err)
 		}
+		m.retryHook(sid, nil)
 		return
 	}
-	delay := m.retryBase << min(r.attempt, 6)
-	if now := m.now(); r.attempt > 0 && !now.Add(delay).Before(r.deadline) {
+	now := m.now()
+	first := r.first
+	if r.attempt == 0 {
+		first = now
+	}
+	delay, slow := m.retryBase<<min(r.attempt, 6), false
+	if now.Add(delay).After(first.Add(m.retryFast)) {
+		delay, slow = m.retrySlow, true
+	}
+	if !now.Add(delay).Before(first.Add(m.retryLimit)) {
 		delete(m.retries, sid)
 		slog.Warn("opencode_bind", "error", err, "attempts", r.attempt+1)
+		m.retryHook(sid, nil)
 		return
 	}
-	next := &bindRetry{frame: r.frame, attempt: r.attempt + 1, deadline: r.deadline}
-	if r.attempt == 0 {
-		next.deadline = m.now().Add(m.retryMax)
-	}
+	next := &bindRetry{frame: r.frame, attempt: r.attempt + 1, first: first, slow: slow}
 	m.retries[sid] = next
+	m.retryHook(sid, next)
 	m.wg.Add(1) // the worker holds a count, so this never races wg.Wait
 	go func() {
 		defer m.wg.Done()
@@ -266,11 +290,32 @@ func (m *openCodeNodes) bindWithRetry(r *bindRetry) {
 		defer t.Stop()
 		select {
 		case <-t.C:
-			m.enqueue(workItem{retry: next})
 		case <-m.stop:
+			return
 		case <-m.ctx.Done():
+			return
+		}
+		select {
+		case m.queue <- workItem{retry: next}:
+		default:
+			// Queue full: give up this retry instead of leaving it pending.
+			m.dropped.Add(1)
+			m.frameMu.Lock()
+			if m.retries[sid] == next {
+				delete(m.retries, sid)
+				slog.Warn("opencode_bind", "error", "retry dropped: manager queue full")
+				m.retryHook(sid, nil)
+			}
+			m.frameMu.Unlock()
 		}
 	}()
+}
+
+// retryHook reports retry state to tests. Requires frameMu.
+func (m *openCodeNodes) retryHook(sid string, r *bindRetry) {
+	if m.onRetry != nil {
+		m.onRetry(sid, r)
+	}
 }
 
 // sendRestore offers a newly connected plugin every session this location

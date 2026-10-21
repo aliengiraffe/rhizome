@@ -218,7 +218,7 @@ a real tailnet; the two-device Tailscale checklist in
   `[network]` and the other 12 tools. Each bound session holds the collection
   lease; on an instance reload the predecessor releases leases once a successor
   owns the socket (never unlinking it), and the successor retries busy binds for
-  at most 10 s; the plugin re-binds its sessions after every reconnect. Bindings
+  at most 60 s; the plugin re-binds its sessions after every reconnect. Bindings
   persist in `<runtime>/opencode-bindings/` (0600, 64 entries, 24 h idle, only
   human-prompt binds, re-verified by the plugin). The plugin finds the socket via
   `RHIZOME_RUNTIME_DIR` or the default only. Bridge limits: 64 KiB frames,
