@@ -494,8 +494,22 @@ all pass. Not exercised: Tailscale mode, a paired remote host or file transfer
 with a live OpenCode session (unit tests cover gateway acceptance of
 `opencode` identities and the OpenCode tool set only).
 
+TUI toast for peer deliveries (2026-10-21): `plugins/opencode/rhizome-tui.js`
+is unit-tested (`task test-plugin`: toast for an enqueued Rhizome synthetic item;
+none for user prompts, other synthetic items, malformed envelopes, unknown
+sessions or other directories; once per inbox item; control-character stripping
+and truncation; throwing APIs contained) and `setup_test.go` covers installing it.
+In a disposable OpenCode 2.0.32 (isolated `XDG_*` directories, `opencode serve`
+plus a TUI attached with `--server` in a private tmux), the TUI log showed
+`setup` of `rhizome.tui` with no plugin errors; a synthetic item with Rhizome's
+envelope posted through `POST /api/session/{id}/synthetic` rendered the toast
+"Rhizome · direct from 4f3a9c1e" with the stripped, single-line excerpt and an
+**Open** action, and a plain synthetic item showed nothing. Not yet checked: a
+real Rhizome delivery into the user's own TUI after `rhizome setup`.
+
 Manual checklist (not yet run): in an interactive OpenCode TUI session, submit a
 prompt, run `list_sessions` and confirm `BOUND`, `collection_state: watching` and
 the session title; then subscribe from a Claude session and confirm activity and
-delivery in both directions. Interactive TUI parity with `run`/`serve` is
+delivery in both directions, and that each delivery to the OpenCode session shows
+a "Rhizome · <kind> from <id>" toast. Interactive TUI parity with `run`/`serve` is
 otherwise unverified.

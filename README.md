@@ -126,7 +126,9 @@ for the other agents. A session binds on its first human prompt; its
 identity is `_meta["ai.opencode/sessionID"]`, child sessions are refused. The
 plugin talks to Rhizome over a private Unix socket, relays allowlisted activity
 (assistant text, tool names, turn completion, titles) and delivers peer events
-with `ctx.session.synthetic` (queued, waking idle sessions). Add the MCP entry
+with `ctx.session.synthetic` (queued, waking idle sessions). OpenCode's TUI hides
+synthetic input, so setup also installs a display-only TUI plugin that shows a
+toast with a sanitized excerpt of each peer delivery. Add the MCP entry
 by hand from `examples/opencode/`; tested with OpenCode **2.0.32**. See
 [OpenCode setup and limits](docs/opencode.md).
 
@@ -518,7 +520,8 @@ Setup detects Claude Code (`$CLAUDE_CONFIG_DIR` or `~/.claude`, or `claude` on
 PATH), Codex (`$CODEX_HOME` or `~/.codex`, or `codex` on PATH) and OpenCode
 (`$XDG_CONFIG_HOME/opencode`, `~/.config/opencode`, or `opencode` on PATH). For
 OpenCode, setup also installs the relay plugin to
-`<config>/opencode/plugins/rhizome.js`. The picker
+`<config>/opencode/plugins/rhizome.js` and the TUI toast plugin to
+`<config>/opencode/plugins/rhizome-tui/tui.js`. The picker
 pre-selects detected agents; space toggles one, `a` toggles all, enter confirms.
 Without a terminal, `--agents` is required (unless only writing configuration with
 `--network`, below). The skill is written to

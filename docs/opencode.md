@@ -11,9 +11,13 @@ deliveries; all filtering and routing decisions are made in Go.
 ## Install
 
 1. `task build`.
-2. `./rhizome setup --agents opencode` installs the collaboration skill and writes
-   the embedded plugin to `<config>/opencode/plugins/rhizome.js` (reported as
-   installed, updated or unchanged; an existing symlink is left alone).
+2. `./rhizome setup --agents opencode` installs the collaboration skill, writes
+   the embedded relay plugin to `<config>/opencode/plugins/rhizome.js` and the
+   display-only TUI plugin to `<config>/opencode/plugins/rhizome-tui/tui.js`
+   (each reported as installed, updated or unchanged; an existing symlink is left
+   alone). OpenCode discovers both from that directory; no configuration entry is
+   needed. The TUI watches that directory; restart an already open TUI if peer
+   toasts do not appear.
 3. Merge [`examples/opencode/opencode.json`](../examples/opencode/opencode.json)
    into `~/.config/opencode/opencode.json`, using an absolute binary path. The
    server key must stay `rhizome`: Rhizome identifies its own tools by the
@@ -33,7 +37,7 @@ deliveries; all filtering and routing decisions are made in Go.
 `runtime_dir`, `hostname` and the `[network]` table with flag > env > file >
 default precedence, so `--lan`, `--tailscale` and their `RHIZOME_*` variables
 apply to OpenCode session nodes. `rhizome setup` lists OpenCode in its picker
-and `--agents` flag; it installs only the skill and plugin and never writes
+and `--agents` flag; it installs only the skill and plugins and never writes
 OpenCode configuration. Which agent a process serves stays the per-launch
 `--agent` flag.
 
@@ -119,6 +123,30 @@ untrusted-peer envelope as Codex and are never republished.
 - A delivery written but not acknowledged within 5 s, or whose connection
   dropped, counts as dropped ("acceptance unknown; not retried") to avoid
   duplicate peer content.
+
+### Peer messages in the TUI
+
+OpenCode's TUI hides synthetic input, so the model sees a peer delivery but the
+human does not. Delivery stays synthetic: sending peer content as a normal prompt
+would present untrusted text as a human instruction and would count as a human
+prompt for binding and peer-turn suppression. Instead the TUI plugin
+(`rhizome-tui/tui.js`, OpenCode's V2 TUI plugin API: default export `{id, setup}`,
+loaded from `<config>/opencode/plugins/<name>/tui.js`) shows an `info` toast when
+a synthetic inbox item carrying Rhizome's peer envelope is enqueued
+(`session.inbox.enqueued` via `ctx.data.on`) for a session whose directory is the
+TUI's directory:
+
+- Title: `Rhizome · <kind> from <first 8 characters of the sender session_id>`
+  (only envelope `origin` fields; the envelope carries no agent type).
+- Message: the envelope `content` without its leading `[<kind>]` tag, as plain
+  text: control and bidirectional/zero-width formatting characters removed,
+  whitespace collapsed, truncated to 200 characters with an ellipsis.
+- When the session is not the one on screen, OpenCode adds an **Open** action.
+
+The TUI plugin only displays. It makes no Rhizome decision, opens no socket or
+file, sends nothing, logs nothing, shows each inbox item once (256-entry window)
+and catches every error per event. Unknown sessions, other directories,
+malformed envelopes and envelopes over 64 KiB show nothing.
 
 ## Lifecycle and limits
 
