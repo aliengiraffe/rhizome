@@ -552,8 +552,7 @@ Automated and local evidence, macOS 26 arm64 with GoReleaser 2.17.1:
   the x86_64 slice under Rosetta. The package payload matched the archive
   binary and ran. Checksums and the native darwin smoke passed. Linux amd64
   and arm64 archives ran in Alpine containers.
-- `GOOS=windows` and `GOOS=linux` `go vet ./...` pass for amd64 and arm64. This
-  change fixes Windows compilation of gateway file staging.
+- `GOOS=windows` and `GOOS=linux` `go vet ./...` pass for amd64 and arm64.
 
 - The first pull request snapshot run (Actions run 39646167543, 2026-10-21)
   passed every job. It ran with no environment and no secrets, and the macOS
