@@ -118,7 +118,10 @@ a real tailnet; the two-device Tailscale checklist in
   are exported. Never forward proxy advertisements, trust peer-supplied endpoints,
   or expose the admin API or history except through the opt-in peer-history policy below. Cross-host ID collisions fail closed.
   Revocation closes connections and invalidates queued events via local trust
-  grants; old invitations cannot restore revoked trust. State is private under
+  grants; old invitations cannot restore revoked trust. Every link end logs a
+  stable reason and host ID prefix (never session data); a link that ends within
+  5 s counts as a dial failure for the per-host backoff, whichever side dialed,
+  and a longer one resets it. State is private under
   `<runtime>/gateway/`. Session privacy (#37) is not yet implemented; the shared
   export/access predicate must enforce it when added. See [docs/gateway.md](docs/gateway.md)
   for enrollment recovery, bounds, configuration, compatibility, and manual checks.
@@ -200,6 +203,13 @@ a real tailnet; the two-device Tailscale checklist in
   per-session OS lease before baselining. Passive scans yield and expose handoff
   gaps. Never route delivery to `observation_only` identities or replay another
   collector's history on handoff. All local processes must share runtime scope.
+  Each node holds `<runtime>/<node_id>.lock` from before writing its (atomic,
+  routing-only) `<node_id>.json` until close; bootstrap prunes a registration
+  only when that lock is free, never because a probe failed or timed out, and
+  live nodes restore a missing registration every 30 s. `registry.lock` covers
+  only file-system decisions; probes run after it is released, at most 8 at
+  once, and a failed live peer is not re-probed by the process for 30 s
+  (`internal/channel/registry.go`).
 - **Native watches drive observer collection.** Do not add normal-path tree
   polling. Keep file/directory/session limits and visible degraded coverage.
   See `internal/channel/observer.go`, `ownership.go`, and `docs/service.md`.

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"math/rand"
 	"net"
@@ -29,7 +30,20 @@ type gatewayRetry struct {
 	failures int
 	next     time.Time
 }
+
+const (
+	// gatewayShortLink is the minimum lifetime of a link that counts as a
+	// success; shorter links count as connection failures for the backoff.
+	gatewayShortLink = 5 * time.Second
+	// gatewaySnapshotStale stops a link whose peer sent no snapshot this long.
+	gatewaySnapshotStale = 10 * time.Second
+	gatewayMaxFailures   = 5
+)
+
 type gateway struct {
+	// shortLink, staleAfter and log override defaults in tests; zero uses them.
+	shortLink, staleAfter              time.Duration
+	log                                *slog.Logger
 	files                              *gatewayFiles
 	history                            *historyService // serves paired hosts; separate from MCP processes
 	historyPolicy                      config.HistoryPolicy
@@ -215,7 +229,7 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway, history
 	_ = admin.Close()
 	g.mu.Lock()
 	for _, l := range g.links {
-		l.stop()
+		l.stop("shutdown")
 	}
 	g.mu.Unlock()
 	g.wg.Wait()
@@ -266,6 +280,59 @@ func GatewayAdmin(ctx context.Context, runtime string, cmd GatewayCommand) (json
 	return out, nil
 }
 func (g *gateway) saveLocked() error { return gatewayWrite(g.statePath, g.state) }
+func (g *gateway) logger() *slog.Logger {
+	if g.log != nil {
+		return g.log
+	}
+	return slog.Default()
+}
+func (g *gateway) snapshotStaleAfter() time.Duration {
+	if g.staleAfter > 0 {
+		return g.staleAfter
+	}
+	return gatewaySnapshotStale
+}
+
+// failLocked records one connection failure for host and schedules the next
+// dial with exponential backoff (2s..32s plus up to 1s jitter). The caller
+// holds g.mu.
+func (g *gateway) failLocked(host string) gatewayRetry {
+	retry := g.retry[host]
+	if retry.failures < gatewayMaxFailures {
+		retry.failures++
+	}
+	delay := time.Second * time.Duration(1<<retry.failures)
+	retry.next = time.Now().Add(delay + time.Duration(rand.Int63n(int64(time.Second))))
+	g.retry[host] = retry
+	return retry
+}
+
+// linkEndedLocked applies a finished link to the dial backoff and returns the
+// resulting failure count and delay. A link that ends within the short-link
+// window counts as a failure whichever side dialed it, so a connect-then-drop
+// loop backs off instead of rebuilding every proxy each second. A link that
+// lived longer resets the backoff. Shutdown, tie-break replacement and
+// revocation are neutral. The caller holds g.mu.
+func (g *gateway) linkEndedLocked(host string, lifetime time.Duration, reason string) (int, time.Duration) {
+	if _, trusted := g.state.Peers[host]; !trusted {
+		delete(g.retry, host)
+		return 0, 0
+	}
+	switch reason {
+	case "shutdown", "replaced", "revoked":
+		return g.retry[host].failures, 0
+	}
+	short := g.shortLink
+	if short <= 0 {
+		short = gatewayShortLink
+	}
+	if lifetime >= short {
+		delete(g.retry, host)
+		return 0, 0
+	}
+	retry := g.failLocked(host)
+	return retry.failures, time.Until(retry.next)
+}
 func (g *gateway) clientTLS(host string) *tls.Config {
 	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{g.cert}, InsecureSkipVerify: true, // Peer identity is pinned below, independent of DNS names.
 		VerifyConnection: func(cs tls.ConnectionState) error {
@@ -443,7 +510,7 @@ func (g *gateway) command(ctx context.Context, cmd GatewayCommand) (any, error) 
 		}
 		l := g.links[cmd.ID]
 		if l != nil {
-			l.stop()
+			l.stop("revoked")
 		}
 		g.mu.Unlock()
 		if l != nil {
@@ -582,6 +649,11 @@ func (g *gateway) connect(w http.ResponseWriter, r *http.Request) {
 	p, ok := g.state.Peers[host]
 	g.mu.Unlock()
 	if !ok || p.Pending || host == g.host {
+		reason := "untrusted"
+		if ok && p.Pending {
+			reason = "pending"
+		}
+		g.logger().Info("gateway_attach_rejected", "host", gatewayHostLabel(host), "direction", "incoming", "reason", reason)
 		http.Error(w, "untrusted host", 403)
 		return
 	}
@@ -626,22 +698,22 @@ func (g *gateway) tryDial(host string) {
 	g.mu.Unlock()
 	go func() {
 		defer g.wg.Done()
+		attached := false
 		defer func() {
 			g.mu.Lock()
 			defer g.mu.Unlock()
 			delete(g.dialing, host)
-			_, stillTrusted := g.state.Peers[host]
-			if g.links[host] != nil || !stillTrusted {
+			if _, stillTrusted := g.state.Peers[host]; !stillTrusted {
 				delete(g.retry, host)
 				return
 			}
-			retry := g.retry[host]
-			if retry.failures < 5 {
-				retry.failures++
+			// An attached link settles the backoff when it ends, by its
+			// lifetime; resetting here would let connect-then-drop loops
+			// redial every second.
+			if attached || g.links[host] != nil {
+				return
 			}
-			delay := time.Second * time.Duration(1<<retry.failures)
-			retry.next = time.Now().Add(delay + time.Duration(rand.Int63n(int64(time.Second))))
-			g.retry[host] = retry
+			g.failLocked(host)
 		}()
 		ctx, cancel := context.WithTimeout(g.ctx, 5*time.Second)
 		defer cancel()
@@ -651,7 +723,7 @@ func (g *gateway) tryDial(host string) {
 			res.Body.Close()
 		}
 		if err == nil {
-			g.attach(host, c, true)
+			attached = g.attach(host, c, true)
 		}
 	}()
 }

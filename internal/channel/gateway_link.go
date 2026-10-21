@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -25,6 +26,9 @@ type gatewayFrame struct {
 }
 type gatewayLink struct {
 	lastSnapshot time.Time
+	established  time.Time
+	stopOnce     sync.Once
+	reason       string // first stop reason; written once by stop
 	g            *gateway
 	host         string
 	grant        string
@@ -48,40 +52,120 @@ type gatewayProxy struct {
 	node   *Node
 }
 
-func (g *gateway) attach(host string, c *websocket.Conn, outgoing bool) {
+// gatewayHostLabel shortens a host ID for diagnostics.
+func gatewayHostLabel(host string) string {
+	if len(host) > 12 {
+		return host[:12]
+	}
+	return host
+}
+func gatewayDirection(outgoing bool) string {
+	if outgoing {
+		return "outgoing"
+	}
+	return "incoming"
+}
+
+// attachRejection returns why a connection cannot become the link for host,
+// or "" when it can. The caller holds g.mu.
+func (g *gateway) attachRejection(host string, outgoing bool, replacing bool) string {
+	p, ok := g.state.Peers[host]
+	switch {
+	case g.ctx.Err() != nil:
+		return "shutdown"
+	case !ok:
+		return "untrusted"
+	case p.Pending:
+		return "pending"
+	}
+	old := g.links[host]
+	if !replacing && old != nil && (old.outgoing == (g.host < host) || outgoing != (g.host < host)) {
+		// Both hosts dial; the lower host ID keeps its outgoing connection.
+		return "duplicate"
+	}
+	return ""
+}
+
+// attach makes c the link for host and reports whether it did. It replaces an
+// existing link only when the tie-break prefers the new connection.
+func (g *gateway) attach(host string, c *websocket.Conn, outgoing bool) bool {
 	g.attachMu.Lock()
 	defer g.attachMu.Unlock()
 	g.mu.Lock()
-	p, ok := g.state.Peers[host]
-	old := g.links[host]
-	if !ok || p.Pending || g.ctx.Err() != nil || (old != nil && (old.outgoing == (g.host < host) || outgoing != (g.host < host))) {
+	if reason := g.attachRejection(host, outgoing, false); reason != "" {
 		g.mu.Unlock()
 		c.Close()
-		return
+		g.logger().Info("gateway_attach_rejected", "host", gatewayHostLabel(host), "direction", gatewayDirection(outgoing), "reason", reason)
+		return false
 	}
+	old := g.links[host]
 	if old != nil {
-		old.stop()
+		old.stop("replaced")
 	}
 	g.mu.Unlock()
 	if old != nil {
 		<-old.done
 	}
 	ctx, cancel := context.WithCancel(g.ctx)
-	l := &gatewayLink{lastSnapshot: time.Now(), g: g, host: host, grant: p.Grant, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
+	l := &gatewayLink{lastSnapshot: time.Now(), established: time.Now(), g: g, host: host, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
 	g.mu.Lock()
-	p, ok = g.state.Peers[host]
-	if !ok || p.Pending || g.ctx.Err() != nil {
+	if reason := g.attachRejection(host, outgoing, true); reason != "" {
 		g.mu.Unlock()
 		cancel()
 		c.Close()
-		return
+		g.logger().Info("gateway_attach_rejected", "host", gatewayHostLabel(host), "direction", gatewayDirection(outgoing), "reason", reason)
+		return false
 	}
+	l.grant = g.state.Peers[host].Grant
 	g.links[host] = l
 	g.wg.Add(1)
 	g.mu.Unlock()
+	g.logger().Info("gateway_link_up", "host", gatewayHostLabel(host), "direction", gatewayDirection(outgoing))
 	go func() { defer g.wg.Done(); l.run() }()
+	return true
 }
-func (l *gatewayLink) stop() { l.cancel(); _ = l.conn.Close() }
+
+// stop closes the link. The first reason is kept and logged when the link
+// ends; reasons are short stable labels, never session data. Once the gateway
+// is shutting down every reason is "shutdown".
+func (l *gatewayLink) stop(reason string) {
+	if l.g.ctx.Err() != nil {
+		reason = "shutdown"
+	}
+	l.stopOnce.Do(func() { l.reason = reason })
+	l.cancel()
+	_ = l.conn.Close()
+}
+
+// writeFailure classifies a write error as a stop reason. This side never
+// sends a close frame itself, so ErrCloseSent means the read side received the
+// peer's close and the default close handler answered it: the remote closed,
+// whichever goroutine notices first.
+func writeFailure(err error) string {
+	if errors.Is(err, websocket.ErrCloseSent) {
+		return "remote_closed"
+	}
+	return "write_error"
+}
+
+// readFailure classifies a read error as a stop reason.
+func readFailure(err error) string {
+	var closed *websocket.CloseError
+	var syntax *json.SyntaxError
+	var typed *json.UnmarshalTypeError
+	var timeout net.Error
+	switch {
+	case errors.Is(err, websocket.ErrReadLimit):
+		return "frame_too_large"
+	case errors.As(err, &closed):
+		return "remote_closed"
+	case errors.As(err, &syntax), errors.As(err, &typed):
+		return "invalid_frame"
+	case errors.As(err, &timeout) && timeout.Timeout():
+		return "read_timeout"
+	}
+	return "read_error"
+}
 func (l *gatewayLink) write(f gatewayFrame) error {
 	select {
 	case <-l.ctx.Done():
@@ -92,19 +176,12 @@ func (l *gatewayLink) write(f gatewayFrame) error {
 	case l.writes <- f:
 		return nil
 	default:
-		l.stop()
+		l.stop("write_overflow")
 		return errors.New("gateway queue overflow")
 	}
 }
 func (l *gatewayLink) run() {
 	defer close(l.done)
-	defer func() {
-		l.g.mu.Lock()
-		if l.g.links[l.host] == l {
-			delete(l.g.links, l.host)
-		}
-		l.g.mu.Unlock()
-	}()
 	l.conn.SetReadLimit(gatewayMaxFrame)
 	l.wg.Add(3)
 	go func() { defer l.wg.Done(); l.writer() }()
@@ -114,6 +191,7 @@ func (l *gatewayLink) run() {
 		_ = l.conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 		var f gatewayFrame
 		if err := l.conn.ReadJSON(&f); err != nil {
+			l.stop(readFailure(err))
 			break
 		}
 		switch f.Type {
@@ -122,7 +200,7 @@ func (l *gatewayLink) run() {
 			l.lastSnapshot = time.Now()
 			l.mu.Unlock()
 			if len(f.Sessions) > gatewayMaxSessions {
-				l.stop()
+				l.stop("snapshot_too_large")
 				break
 			}
 			select {
@@ -139,14 +217,14 @@ func (l *gatewayLink) run() {
 			}
 		case "send", "follow":
 			if len(f.ID) != 32 {
-				l.stop()
+				l.stop("invalid_request")
 				break
 			}
 			l.mu.Lock()
 			_, duplicate := l.active[f.ID]
 			if duplicate || len(l.active) >= 64 {
 				l.mu.Unlock()
-				l.stop()
+				l.stop("request_limit")
 				break
 			}
 			ctx, cancel := context.WithCancel(l.ctx)
@@ -172,15 +250,15 @@ func (l *gatewayLink) run() {
 				select {
 				case ch <- f:
 				default:
-					l.stop()
+					l.stop("event_overflow")
 				}
 			}
 			l.mu.Unlock()
 		default:
-			l.stop()
+			l.stop("unknown_frame")
 		}
 	}
-	l.stop()
+	l.stop("closed")
 	l.wg.Wait()
 	l.mu.Lock()
 	proxies := l.proxies
@@ -189,6 +267,16 @@ func (l *gatewayLink) run() {
 	for _, p := range proxies {
 		p.close()
 	}
+	// stopOnce has completed, so reason is stable. Record the outcome before
+	// the link leaves g.links so reconnect never dials ahead of the backoff.
+	lifetime := time.Since(l.established)
+	l.g.mu.Lock()
+	if l.g.links[l.host] == l {
+		delete(l.g.links, l.host)
+	}
+	failures, backoff := l.g.linkEndedLocked(l.host, lifetime, l.reason)
+	l.g.mu.Unlock()
+	l.g.logger().Info("gateway_link_stop", "host", gatewayHostLabel(l.host), "direction", gatewayDirection(l.outgoing), "reason", l.reason, "uptime_ms", lifetime.Milliseconds(), "proxies", len(proxies), "failures", failures, "backoff_ms", backoff.Milliseconds())
 }
 func (l *gatewayLink) writer() {
 	for {
@@ -199,11 +287,11 @@ func (l *gatewayLink) writer() {
 			_ = l.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			encoded, err := json.Marshal(f)
 			if err != nil || len(encoded) > gatewayMaxFrame {
-				l.stop()
+				l.stop("frame_too_large")
 				return
 			}
 			if err := l.conn.WriteMessage(websocket.TextMessage, encoded); err != nil {
-				l.stop()
+				l.stop(writeFailure(err))
 				return
 			}
 		}
@@ -214,10 +302,10 @@ func (l *gatewayLink) advertise() {
 	defer ticker.Stop()
 	for {
 		l.mu.Lock()
-		stale := time.Since(l.lastSnapshot) > 10*time.Second
+		stale := time.Since(l.lastSnapshot) > l.g.snapshotStaleAfter()
 		l.mu.Unlock()
 		if stale {
-			l.stop()
+			l.stop("stale_snapshot")
 			return
 		}
 		sessions := []*pb.Identity{}
@@ -264,7 +352,7 @@ func (l *gatewayLink) reconcile() {
 			wanted := map[string]*pb.Identity{}
 			for _, p := range list {
 				if !validGatewayIdentity(p) || wanted[p.NodeId] != nil {
-					l.stop()
+					l.stop("invalid_snapshot")
 					return
 				}
 				wanted[p.NodeId] = p
@@ -305,7 +393,7 @@ func (l *gatewayLink) reconcile() {
 				select {
 				case l.g.proxySlots <- struct{}{}:
 				default:
-					l.stop()
+					l.stop("proxy_slots_exhausted")
 					return
 				}
 				n := newNode(l.ctx)
@@ -322,7 +410,8 @@ func (l *gatewayLink) reconcile() {
 				n.bridge = p
 				if err := n.start(Options{Runtime: l.g.runtime, Hostname: remote.Host}); err != nil {
 					p.close()
-					l.stop()
+					l.g.logger().Warn("gateway_proxy_start", "host", gatewayHostLabel(l.host), "error", err)
+					l.stop("proxy_start_failed")
 					return
 				}
 				l.mu.Lock()

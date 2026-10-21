@@ -249,13 +249,18 @@ collectors and streams and remove the registration.
 ## Discovery and authentication
 
 Listeners allocate their actual ports automatically. `~/.rhizome/run`
-contains a private cluster token, a registry lock and one endpoint registration
-per live process. Set `runtime_dir` in the [configuration file](#configuration),
-or override it with `RHIZOME_RUNTIME_DIR` for an isolated cluster; its
-directory must be owned by you and private (0700). Token and registration files
-are 0600. Concurrent launches serialize bootstrap with `flock`, probe candidates
-with authentication before joining, and prune stale registrations. Registry files
-bootstrap gossip; they are not a broker or persisted session state.
+contains a private cluster token, a registry lock and, per live process, one
+endpoint registration plus the OS lock that process holds while it runs. Set
+`runtime_dir` in the [configuration file](#configuration), or override it with
+`RHIZOME_RUNTIME_DIR` for an isolated cluster; its directory must be owned by
+you and private (0700). Token and registration files are 0600. Concurrent
+launches serialize registry updates with an OS lock, then probe candidates
+concurrently with authentication before joining. A registration is pruned only
+when its owner's lock is free (the process exited or crashed); a live process
+that fails a probe is skipped for 30 seconds, not removed, and every live
+process restores its own registration within 30 seconds if it disappears.
+Registry files bootstrap gossip; they are not a broker or persisted session
+state.
 
 The token authenticates gRPC and supplies the memberlist encryption key; it is
 never advertised or logged. By default all endpoints must be `127.0.0.1` and

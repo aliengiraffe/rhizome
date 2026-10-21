@@ -14,7 +14,9 @@ All passed:
 - `python3 scripts/smoke_stdio.py --lan`
 - `git diff --check`
 
-The Go suite exercises concurrent registry bootstrap, distinct auto-allocated
+The Go suite exercises concurrent registry bootstrap, lock-gated registration
+pruning (failed or timed-out probes of live owners keep their registration;
+exited owners are pruned) and registration self-healing, distinct auto-allocated
 ports, authentication rejection, duplicate live session IDs, binding refresh and
 retirement, stale/child hooks, unsubscribe queue removal, transcript partial
 writes, historical partial-line baselines, duplicate records, truncation,
@@ -432,6 +434,7 @@ terminal prompts remain manual; the checks above describe how to exercise them.
 
 Run `python3 scripts/smoke_gateway.py` after `task build` for three isolated
 services with independent tokens, TLS invitation redemption, bidirectional
-send/subscribe, restart, non-transitivity, and revocation. This is one-machine
+send/subscribe, restart, non-transitivity, and revocation. Go tests cover
+logged link stop reasons and the short-link dial backoff. This is one-machine
 coverage. See [gateway verification](gateway.md#verification) for the manual
 two-device LAN/Tailscale checklist and known compatibility limits.
