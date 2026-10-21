@@ -439,6 +439,25 @@ logged link stop reasons and the short-link dial backoff. This is one-machine
 coverage. See [gateway verification](gateway.md#verification) for the manual
 two-device LAN/Tailscale checklist and known compatibility limits.
 
+## Setup agent installation (#55)
+
+Automated in `setup_agents_test.go`: the installed hook groups equal
+`.claude/settings.json` and `examples/codex/hooks.json`; server entries for
+default and custom homes, explicit configuration (missing file refused) and a
+resolvable Codex executable; merges that keep unrelated servers, hooks, mixed
+hook groups, comments and numbers while removing stale Rhizome entries; backups
+with the same mode, symlinked files edited through the link, malformed JSON/TOML
+and inline Codex tables rejected without replacement, read-only directories
+leaving the original intact; and the real entry point in a subprocess with an
+isolated home containing spaces (`--list` read-only, `--network` alone
+config-only, one agent selected leaves the other untouched, `--agents all` with
+an explicit configuration, idempotent repeat). Live validation is not automated:
+with a throwaway `HOME`, run `rhizome setup --agents all --network local`, start
+Claude Code with the channel flag and Codex from another directory, confirm each
+shows the `rhizome` server and its hooks, and that `list_sessions` reports
+`BOUND` after the first prompt. Cursor is not supported on this base, so no
+Cursor check applies.
+
 ## Collaboration skill device origin (#49)
 
 The skill is prose, so no automated check proves how an agent applies it.

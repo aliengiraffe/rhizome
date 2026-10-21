@@ -211,7 +211,7 @@ func TestSetupConfig(t *testing.T) {
 	t.Run("flags write without a terminal", func(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
-		if err := setupConfig(resolved(t), p, lan(), false, false, strings.NewReader(""), &out, &errOut); err != nil {
+		if _, err := setupConfig(resolved(t), p, lan(), false, false, strings.NewReader(""), &out, &errOut); err != nil {
 			t.Fatal(err)
 		}
 		b, err := os.ReadFile(p)
@@ -222,7 +222,7 @@ func TestSetupConfig(t *testing.T) {
 	t.Run("no terminal and no network writes nothing", func(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
-		if err := setupConfig(resolved(t), p, nil, false, false, strings.NewReader(""), &out, &errOut); err != nil {
+		if _, err := setupConfig(resolved(t), p, nil, false, false, strings.NewReader(""), &out, &errOut); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) || !strings.Contains(errOut.String(), "--network") || out.Len() != 0 {
@@ -233,7 +233,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		os.WriteFile(p, []byte("# mine\n"), 0o600)
 		var out, errOut bytes.Buffer
-		if err := setupConfig(resolved(t), p, lan(), false, false, strings.NewReader(""), &out, &errOut); err != nil {
+		if _, err := setupConfig(resolved(t), p, lan(), false, false, strings.NewReader(""), &out, &errOut); err != nil {
 			t.Fatal(err)
 		}
 		if b, _ := os.ReadFile(p); string(b) != "# mine\n" || !strings.Contains(errOut.String(), "--replace-config") {
@@ -244,7 +244,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		os.WriteFile(p, []byte("# mine\n"), 0o600)
 		var out, errOut bytes.Buffer
-		if err := setupConfig(resolved(t), p, lan(), true, false, strings.NewReader(""), &out, &errOut); err != nil {
+		if _, err := setupConfig(resolved(t), p, lan(), true, false, strings.NewReader(""), &out, &errOut); err != nil {
 			t.Fatal(err)
 		}
 		matches, _ := filepath.Glob(p + ".bak-*")
@@ -256,7 +256,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		os.WriteFile(p, []byte("# mine\n"), 0o600)
 		var out, errOut bytes.Buffer
-		if err := setupConfig(resolved(t), p, nil, false, true, strings.NewReader("\n"), &out, &errOut); err != nil {
+		if _, err := setupConfig(resolved(t), p, nil, false, true, strings.NewReader("\n"), &out, &errOut); err != nil {
 			t.Fatal(err)
 		}
 		if b, _ := os.ReadFile(p); string(b) != "# mine\n" || !strings.Contains(out.String(), "# mine") {
@@ -267,7 +267,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
 		// local, no custom paths, no service install.
-		if err := setupConfig(resolved(t), p, nil, false, true, strings.NewReader("1\n\nn\nn\n"), &out, &errOut); err != nil {
+		if _, err := setupConfig(resolved(t), p, nil, false, true, strings.NewReader("1\n\nn\nn\n"), &out, &errOut); err != nil {
 			t.Fatal(err)
 		}
 		if b, _ := os.ReadFile(p); !strings.Contains(string(b), `mode = "local"`) {

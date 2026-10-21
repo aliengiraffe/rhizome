@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +40,11 @@ func wizard(t *testing.T) *setupModel {
 	}
 	m := newSetupModel(c, filepath.Join(home, "config.toml"), []agent{{Name: "claude", Label: "Claude", Skills: filepath.Join(home, "skills"), Detected: true}, {Name: "codex", Label: "Codex", Skills: filepath.Join(home, "other")}}, nil, nil, false)
 	t.Cleanup(m.work.close)
+	m.installAgent = func(_ config.Config, a agent, out io.Writer) error {
+		status, err := installSkill(a.Skills)
+		fmt.Fprintf(out, "%s:\n  skill: %s\n", a.Label, status)
+		return err
+	}
 	return m
 }
 func gotoField(t *testing.T, m *setupModel, name string) {
@@ -354,5 +361,32 @@ func TestWizardCancelledApply(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Dir(m.path)); len(entries) != 0 {
 		t.Fatal("cancelled apply wrote files")
+	}
+}
+
+func TestWizardApplyInstallsMCPAndHooks(t *testing.T) {
+	m := wizard(t)
+	m.installAgent = m.defaultAgentInstaller
+	home := filepath.Dir(m.path)
+	m.agents[0].MCP = filepath.Join(home, ".claude.json")
+	m.agents[0].Hooks = filepath.Join(home, "settings.json")
+	m.checked = []bool{true, false}
+	r := m.applyAnswers(context.Background())
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	for _, path := range []string{m.agents[0].MCP, m.agents[0].Hooks, filepath.Join(m.agents[0].Skills, skillName, "SKILL.md")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b, _ := os.ReadFile(m.agents[0].MCP); !strings.Contains(string(b), "rhizome") {
+		t.Fatal(string(b))
+	}
+	joined := strings.Join(r.steps, "\n")
+	for _, want := range []string{"Claude: skill:", "Claude: mcp:", "Claude: hooks:"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %s", want, joined)
+		}
 	}
 }

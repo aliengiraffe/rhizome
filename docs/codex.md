@@ -10,14 +10,24 @@ Claude's MCP protocol pin.
 
 ## Install
 
-Build this checkout with `task build`. Merge `examples/codex/config.toml` into
-`~/.codex/config.toml`, replacing both executable paths with absolute paths.
-Merge the hook groups from `examples/codex/hooks.json` into `~/.codex/hooks.json`,
+Build this checkout with `task build`, then run `./rhizome setup --agents codex`.
+It writes `[mcp_servers.rhizome]` into `<CODEX_HOME>/config.toml` (absolute
+Rhizome path, `mcp --agent codex`, `--codex-bin` with the absolute Codex
+executable found on PATH, `--config` only for an explicitly selected Rhizome
+file, and `env.CODEX_HOME` for a non-default home), merges the hook groups of
+`examples/codex/hooks.json` into `<CODEX_HOME>/hooks.json` and installs the
+skill. Other tables, servers, hooks and comments are kept, changed files are
+backed up as `<file>.bak-<timestamp>`, and re-running setup repairs a stale entry
+without duplicating hooks. See the
+[README](../README.md#installing-into-agents) for the full contract.
+
+To install by hand instead, merge `examples/codex/config.toml` into
+`~/.codex/config.toml`, replacing both executable paths with absolute paths, and
+the hook groups from `examples/codex/hooks.json` into `~/.codex/hooks.json`,
 preserving other hooks. Back up both files first. Do not install the same hooks
 at both user and project scope. If using a different `CODEX_HOME`, pass that same
-absolute directory through the MCP server's `env` table.
-
-Alternatively register the server with the official CLI:
+absolute directory through the MCP server's `env` table. The official CLI
+registers MCP only (also merge the hooks):
 
 ```sh
 codex mcp add rhizome --env CODEX_HOME="$HOME/.codex" -- \
@@ -25,12 +35,12 @@ codex mcp add rhizome --env CODEX_HOME="$HOME/.codex" -- \
   --codex-bin /absolute/path/to/codex
 ```
 
-This registers MCP only; also merge the hooks. Start a fresh Codex session and
-review the four Rhizome hooks in `/hooks`. Trust only the definitions you reviewed;
-Rhizome does not bypass hook trust. Submit a prompt, then ask Codex to call
-`list_sessions`. Expect `binding: BOUND` and `collection_state: watching` (or
-`watching (empty thread)` before the first message is persisted). Use exact
-session IDs from that result to subscribe or send across Codex and Claude.
+Either way, start a fresh Codex session and review the four Rhizome hooks in
+`/hooks`. Trust only the definitions you reviewed; Rhizome does not bypass hook
+trust. Submit a prompt, then ask Codex to call `list_sessions`. Expect
+`binding: BOUND` and `collection_state: watching` (or `watching (empty thread)`
+before the first message is persisted). Use exact session IDs from that result
+to subscribe or send across Codex and Claude.
 
 `SessionStart` can run before MCP is ready. Binding can instead happen on the
 first successful `UserPromptSubmit`, `PreToolUse`, or `Stop` hook. There is no MCP
