@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Distribution wrapper for the rhizome CLI component package, substituted by
+  scripts/release/build-macos-pkg.sh. The package installs one file,
+  /usr/local/bin/rhizome, runs no scripts, and never touches user
+  configuration, tokens, runtime state or the observer service.
+-->
+<installer-gui-script minSpecVersion="1">
+    <title>Rhizome</title>
+    <pkg-ref id="@PKG_IDENTIFIER@"/>
+    <options customize="never" require-scripts="false" hostArchitectures="x86_64,arm64"/>
+    <!-- Go 1.25 binaries need macOS 12 or later. -->
+    <allowed-os-versions>
+        <os-version min="12.0"/>
+    </allowed-os-versions>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <choices-outline>
+        <line choice="default">
+            <line choice="@PKG_IDENTIFIER@"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="@PKG_IDENTIFIER@" visible="false">
+        <pkg-ref id="@PKG_IDENTIFIER@"/>
+    </choice>
+    <pkg-ref id="@PKG_IDENTIFIER@" version="@PKG_VERSION@" onConclusion="none">@COMPONENT_PKG@</pkg-ref>
+</installer-gui-script>

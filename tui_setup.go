@@ -16,7 +16,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"rhizome/internal/channel"
 	"rhizome/internal/config"
-	"rhizome/internal/service"
 )
 
 type wizardField struct {
@@ -43,7 +42,7 @@ type setupModel struct {
 	err                                 error
 	warning                             string
 	result                              setupResult
-	installService                      func(context.Context, string) error
+	installService                      serviceInstaller
 	apply                               func(context.Context) setupResult
 	probe                               func(context.Context) error
 	explicit                            bool                                        // configuration selected with --config/RHIZOME_CONFIG
@@ -61,13 +60,7 @@ func newSetupModel(c config.Config, path string, agents []agent, checked []bool,
 			m.checked[i] = a.Detected
 		}
 	}
-	m.installService = func(ctx context.Context, path string) error {
-		c, err := config.Resolve(map[string]string{"config": path}, os.Getenv)
-		if err != nil {
-			return err
-		}
-		return service.ManageQuiet(ctx, "install", service.FromConfig(c))
-	}
+	m.installService = quietServiceInstaller
 	m.apply = m.applyAnswers
 	m.installAgent = m.defaultAgentInstaller
 	return m
@@ -93,9 +86,9 @@ func (m *setupModel) fields() []wizardField {
 			if m.values["custom"] == "yes" {
 				f = append(f, wizardField{"runtime", "Runtime directory (blank: " + m.c.RuntimeDir + ")", nil}, wizardField{"claude", "Claude directory (blank: " + m.c.Claude.ConfigDir + ")", nil}, wizardField{"codex", "Codex home (blank: " + m.c.Codex.Home + ")", nil}, wizardField{"bin", "Codex executable (blank: " + m.c.Codex.Bin + ")", nil})
 			}
-			f = append(f, wizardField{"service", "Install background service after writing config?", []string{"no", "yes"}})
 		}
 	}
+	f = append(f, wizardField{"service", "Install and start the background service?", []string{"no", "yes"}})
 	return append(f, wizardField{"review", "Review / Apply", nil})
 }
 func (m *setupModel) answers() (*configAnswers, error) {
@@ -342,8 +335,8 @@ func (m *setupModel) review() string {
 				b.WriteString(safeText(line) + "\n")
 			}
 		}
-		fmt.Fprintf(&b, "Install service: %s\n", m.values["service"])
 	}
+	fmt.Fprintf(&b, "Install and start service: %s\n", m.values["service"])
 	b.WriteString("Enter applies these changes. Esc cancels before any writes.")
 	return b.String()
 }
@@ -429,19 +422,21 @@ func (m *setupModel) applyAnswers(ctx context.Context) setupResult {
 	if err := m.installAgents(ctx, &r, wrote); err != nil {
 		return fail(err)
 	}
-	if wrote && m.values["service"] == "yes" {
-		if err := ctx.Err(); err != nil {
-			return fail(err)
-		}
-		path, err := filepath.Abs(m.path)
-		if err != nil {
-			return fail(err)
-		}
-		if err := m.installService(ctx, path); err != nil {
-			return fail(fmt.Errorf("service installation failed; completed steps remain: %w", err))
-		}
-		r.steps = append(r.steps, "Installed background service")
+	if m.values["service"] != "yes" {
+		return r
 	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	path, err := filepath.Abs(m.path)
+	if err != nil {
+		return fail(err)
+	}
+	outcome, err := m.installService(ctx, path)
+	if err != nil {
+		return fail(fmt.Errorf("service step failed; completed steps remain: %w", err))
+	}
+	r.steps = append(r.steps, "Background service installed and running (configuration "+safeText(path)+", runtime "+safeText(outcome.Runtime)+")")
 	return r
 }
 

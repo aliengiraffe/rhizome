@@ -29,9 +29,16 @@ func main() {
 
 func entry() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: rhizome mcp | setup | service | config | token | files | invite | join | peers | demo [flags]")
+		return fmt.Errorf("usage: rhizome --version | mcp | setup | service | config | token | files | invite | join | peers | demo [flags]")
 	}
 	mode := os.Args[1]
+	if mode == "--version" || mode == "-version" {
+		if len(os.Args) != 2 {
+			return fmt.Errorf("unexpected version arguments")
+		}
+		fmt.Println(versionLine())
+		return nil
+	}
 	os.Args = append(os.Args[:1], os.Args[2:]...)
 	switch mode {
 	case "mcp":

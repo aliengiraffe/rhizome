@@ -117,6 +117,21 @@ comes from read-only App Server polling. Each caller thread has an independent
 node even when Codex shares an MCP connection. See [Codex setup and tested
 limitations](docs/codex.md) and the samples in `examples/codex/`.
 
+## Install
+
+Tagged releases on the [GitHub Releases page](https://github.com/aliengiraffe/rhizome/releases)
+ship a signed and notarized macOS installer (`rhizome_<version>_macos.pkg`, which
+installs `/usr/local/bin/rhizome`) and a universal macOS archive. They also ship
+**unsigned** Linux and Windows archives for amd64 and arm64, and a SHA-256
+manifest (`rhizome_<version>_checksums.txt`). Verify downloads with
+`shasum -a 256 -c rhizome_<version>_checksums.txt`, then check the build with
+`rhizome --version`. The installer never touches `~/.rhizome` and never installs
+or restarts the observer. Run `rhizome setup` and `rhizome service install`
+yourself, and after an upgrade run `rhizome service stop` and then
+`rhizome service start`. Tag conventions, prereleases, verification, upgrades,
+uninstall and platform limits are in [docs/releasing.md](docs/releasing.md).
+To build from source, follow the steps below.
+
 ## OpenCode
 
 Local OpenCode 2.x sessions use `rhizome mcp --agent opencode` (twelve tools; no
@@ -134,7 +149,8 @@ by hand from `examples/opencode/`; tested with OpenCode **2.0.32**. See
 
 ## Claude setup
 
-Requires Go 1.25+, [Task v3](https://taskfile.dev/docs/installation), and macOS or Linux.
+Building from source requires Go 1.25+ and [Task v3](https://taskfile.dev/docs/installation).
+The MCP integration is tested on macOS and Linux.
 Claude Code **2.1.302** is the tested client; older versions are not supported by this verification.
 
 Install Task with `brew install go-task` or
@@ -585,8 +601,8 @@ Then run `/rhizome-collab` in the agent with an optional task description.
 With terminal stdin/stdout and `TERM` other than `dumb`, setup uses a Bubble Tea
 wizard when answers are needed. Enter advances, Shift+Tab goes back while retaining
 answers, arrows/space select choices, Ctrl+U clears a text field, and Esc/Ctrl+C
-cancels. Review shows the selected skills and configuration before Apply;
-cancelling before Apply writes nothing. After Apply begins, completed operations
+cancels. Review shows the selected skills, configuration and service decision before
+Apply; cancelling before Apply writes nothing. After Apply begins, completed operations
 remain and are reported even if a later step fails or is cancelled. PgUp/PgDn
 scroll long views. `--plain` retains the original prompts (and their immediate
 skill installation behavior). Fully specified `--agents` plus `--network`
@@ -605,12 +621,21 @@ which setup may create):
    and clears any previous override when replacing configuration.
 4. **Directories**: optionally `runtime_dir`, the Claude config directory, Codex
    home and the Codex executable. Only values that differ from the defaults are written.
-5. **Service**: optionally runs `rhizome service install` afterwards.
+5. **Service**: asks whether to install and start the background service
+   (default no). The question follows the configuration step whether the file
+   was created, replaced, or kept, and runs the same lifecycle as
+   `rhizome service install --config <path>`: a missing service is installed
+   and started, a stopped compatible one is started, and a running one counts
+   as success without a restart. Setup reports success only after the observer
+   is running and names the configuration file it used. On failure the written
+   configuration and any installed definition stay in place for diagnosis;
+   declining leaves the service untouched.
 
 Enter always takes the safe default. Only answered keys are written, the file is
 created 0600 under a 0700 directory, and the token is never written. An existing
 file is kept unless you choose to replace it, in which case it is
-backed up first (`config.toml.bak-<timestamp>`). Without a terminal, pass the type:
+backed up first (`config.toml.bak-<timestamp>`); keeping it still offers the
+service step. Without a terminal, pass the type:
 
 ```sh
 ./rhizome setup --network local --hostname "Work laptop"
@@ -621,10 +646,11 @@ backed up first (`config.toml.bak-<timestamp>`). Without a terminal, pass the ty
 ```
 
 Combine with `--agents` to also install the selected agents; the configuration
-is written first so its directories decide the destinations. Without a terminal
-and without `--network`, setup installs the selected agents, leaves configuration
-untouched and says so on stderr; it refuses to register an explicit `--config`
-file that does not exist yet.
+is written first so its directories decide the destinations. `--network` and
+`--list` never install or start the service. Without a terminal and without
+`--network`, setup installs the selected agents, leaves configuration untouched
+and says so on stderr; it refuses to register an explicit `--config` file that
+does not exist yet.
 
 Bare `rhizome service` opens [service management](docs/service.md#terminal-interface)
 on usable terminals. `rhizome service status --tui` and

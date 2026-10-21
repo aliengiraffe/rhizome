@@ -331,25 +331,93 @@ func TestCLIRejectsTUIAndPreservesPlain(t *testing.T) {
 func TestWizardServiceOptInAndPartialFailure(t *testing.T) {
 	m := wizard(t)
 	calls := 0
-	m.installService = func(_ context.Context, path string) error {
+	m.installService = func(_ context.Context, path string) (serviceOutcome, error) {
 		calls++
 		if path != m.path || !filepath.IsAbs(path) {
 			t.Error(path)
 		}
-		return errors.New("override differs")
+		return serviceOutcome{}, errors.New("override differs")
 	}
 	m.values["service"] = "yes"
+	if !strings.Contains(m.review(), "Install and start service: yes") {
+		t.Fatal(m.review())
+	}
 	r := m.applyAnswers(context.Background())
-	if calls != 1 || r.err == nil || len(r.steps) != 2 {
+	if calls != 1 || r.err == nil || len(r.steps) != 2 || !strings.Contains(r.err.Error(), "override differs") {
 		t.Fatal(calls, r)
 	}
 	if _, err := os.Stat(m.path); err != nil {
 		t.Fatal("completed config missing", err)
 	}
 	m2 := wizard(t)
-	m2.installService = func(context.Context, string) error { t.Error("implicit service installation"); return nil }
+	m2.installService = func(context.Context, string) (serviceOutcome, error) {
+		t.Error("implicit service installation")
+		return serviceOutcome{}, nil
+	}
 	if r := m2.applyAnswers(context.Background()); r.err != nil {
 		t.Fatal(r.err)
+	}
+	m3 := wizard(t)
+	m3.installService = func(context.Context, string) (serviceOutcome, error) {
+		return serviceOutcome{Installed: true, Running: true, Runtime: "/run"}, nil
+	}
+	m3.values["service"] = "yes"
+	r = m3.applyAnswers(context.Background())
+	if r.err != nil || len(r.steps) != 3 || !strings.Contains(r.steps[2], "installed and running (configuration "+m3.path+", runtime /run)") {
+		t.Fatal(r)
+	}
+}
+func TestWizardKeptConfigOffersService(t *testing.T) {
+	original := "[network]\nmode = 'local'\n"
+	for _, fixed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "wizard", true: "network flag"}[fixed], func(t *testing.T) {
+			m := wizard(t)
+			if err := os.WriteFile(m.path, []byte(original), 0600); err != nil {
+				t.Fatal(err)
+			}
+			m.exists = true
+			if fixed {
+				m.fixedAnswers = &configAnswers{Network: config.Network{Mode: "lan"}}
+			}
+			keys := []string{}
+			for _, f := range m.fields() {
+				keys = append(keys, f.key)
+			}
+			joined := strings.Join(keys, ",")
+			if !strings.Contains(joined, "service,review") || strings.Contains(joined, "mode") || fixed == strings.Contains(joined, "existing") {
+				t.Fatal(joined)
+			}
+			gotoField(t, m, "service")
+			if !strings.Contains(m.View(), "Install and start the background service?") {
+				t.Fatal(m.View())
+			}
+			if !strings.Contains(m.review(), "Keep existing configuration.") || !strings.Contains(m.review(), "Install and start service: no") {
+				t.Fatal(m.review())
+			}
+			var paths []string
+			m.installService = func(_ context.Context, path string) (serviceOutcome, error) {
+				paths = append(paths, path)
+				return serviceOutcome{Installed: true, Running: true, Runtime: "/run"}, nil
+			}
+			if r := m.applyAnswers(context.Background()); r.err != nil || len(paths) != 0 || len(r.steps) != 2 || r.steps[0] != "Kept configuration" {
+				t.Fatal("declined service", r, paths)
+			}
+			m.values["service"] = "yes"
+			r := m.applyAnswers(context.Background())
+			if r.err != nil || len(paths) != 1 || paths[0] != m.path || len(r.steps) != 3 || r.steps[0] != "Kept configuration" || !strings.Contains(r.steps[2], "installed and running") {
+				t.Fatal(r, paths)
+			}
+			b, _ := os.ReadFile(m.path)
+			backups, _ := filepath.Glob(m.path + ".bak-*")
+			if string(b) != original || len(backups) != 0 {
+				t.Fatal("keep changed file", string(b), backups)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if r := m.applyAnswers(ctx); !errors.Is(r.err, context.Canceled) || len(paths) != 1 {
+				t.Fatal("cancelled apply reached the service step", r, paths)
+			}
+		})
 	}
 }
 func TestWizardCancelledApply(t *testing.T) {
