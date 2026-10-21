@@ -71,17 +71,42 @@ type tailscaleClient interface {
 // tailscaled and on both macOS variants, whose LocalAPI socket paths differ.
 type tailscaleCLI struct{}
 
+// macOS CLI locations, in order. launchd services get a minimal PATH without
+// /usr/local/bin or /opt/homebrew/bin, so they are checked explicitly before
+// falling back to the app bundle binary.
+var darwinTailscalePaths = []string{
+	"/usr/local/bin/tailscale",
+	"/opt/homebrew/bin/tailscale",
+	"/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+}
+
 func tailscaleBinary() (string, error) {
-	if path, err := exec.LookPath("tailscale"); err == nil {
+	exists := func(path string) bool { _, err := os.Stat(path); return err == nil }
+	return findTailscaleBinary(runtime.GOOS, exec.LookPath, exists)
+}
+func findTailscaleBinary(goos string, lookPath func(string) (string, error), exists func(string) bool) (string, error) {
+	if path, err := lookPath("tailscale"); err == nil {
 		return path, nil
 	}
-	if runtime.GOOS == "darwin" {
-		const app = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-		if _, err := os.Stat(app); err == nil {
-			return app, nil
+	if goos == "darwin" {
+		for _, path := range darwinTailscalePaths {
+			if exists(path) {
+				return path, nil
+			}
 		}
 	}
 	return "", errors.New("tailscale CLI not found on PATH; install Tailscale or add its CLI to PATH")
+}
+
+// tailscaleEnv sets TERM when it is unset. The macOS app binary acts as the GUI
+// without it (as under launchd) and prints a GUI error instead of status JSON.
+func tailscaleEnv(env []string) []string {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TERM=") {
+			return env
+		}
+	}
+	return append(env, "TERM=dumb")
 }
 func (tailscaleCLI) Status(ctx context.Context) (*tailscaleStatus, error) {
 	binary, err := tailscaleBinary()
@@ -91,6 +116,7 @@ func (tailscaleCLI) Status(ctx context.Context) (*tailscaleStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, "status", "--json")
+	cmd.Env = tailscaleEnv(os.Environ())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

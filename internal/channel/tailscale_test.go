@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -192,6 +193,40 @@ func TestParseTailscaleStatus(t *testing.T) {
 	}
 	if _, err := parseTailscaleStatus([]byte("not json")); err == nil {
 		t.Fatal("parsed garbage")
+	}
+}
+func TestFindTailscaleBinary(t *testing.T) {
+	notFound := func(string) (string, error) { return "", errors.New("not found") }
+	onPath := func(string) (string, error) { return "/path/tailscale", nil }
+	only := func(paths ...string) func(string) bool {
+		return func(p string) bool { return slices.Contains(paths, p) }
+	}
+	const app = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+	for _, c := range []struct {
+		name, goos string
+		lookPath   func(string) (string, error)
+		exists     func(string) bool
+		want       string
+	}{
+		{"PATH wins", "darwin", onPath, only("/usr/local/bin/tailscale", app), "/path/tailscale"},
+		{"launchd PATH prefers CLI wrapper", "darwin", notFound, only("/usr/local/bin/tailscale", app), "/usr/local/bin/tailscale"},
+		{"Homebrew CLI", "darwin", notFound, only("/opt/homebrew/bin/tailscale", app), "/opt/homebrew/bin/tailscale"},
+		{"app bundle fallback", "darwin", notFound, only(app), app},
+		{"nothing on darwin", "darwin", notFound, only(), ""},
+		{"no darwin fallbacks on linux", "linux", notFound, only("/usr/local/bin/tailscale"), ""},
+	} {
+		got, err := findTailscaleBinary(c.goos, c.lookPath, c.exists)
+		if got != c.want || (c.want == "") != (err != nil) {
+			t.Fatalf("%s: got %q, %v; want %q", c.name, got, err, c.want)
+		}
+	}
+}
+func TestTailscaleEnvSetsTerm(t *testing.T) {
+	if got := tailscaleEnv([]string{"PATH=/usr/bin"}); !slices.Equal(got, []string{"PATH=/usr/bin", "TERM=dumb"}) {
+		t.Fatalf("unset TERM: %v", got)
+	}
+	if got := tailscaleEnv([]string{"TERM=xterm-256color", "PATH=/usr/bin"}); !slices.Equal(got, []string{"TERM=xterm-256color", "PATH=/usr/bin"}) {
+		t.Fatalf("existing TERM changed: %v", got)
 	}
 }
 func TestTailscaleStartFailsLoudly(t *testing.T) {
