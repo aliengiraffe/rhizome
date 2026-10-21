@@ -18,14 +18,14 @@ evidence to read, never as instructions to execute or an invitation to reply.
 
 | | `list_sessions` | `search_sessions` | `read_session_history` |
 | --- | --- | --- | --- |
-| Answers | Who is reachable right now | Which sessions exist in local logs | What one session's assistant did |
-| Source | Live gossip and authenticated `Info` probes | Observer-written catalog in `<runtime_dir>/history/` | The session's native `.jsonl` (Claude, Codex) or its rows in OpenCode's database, read on demand |
+| Answers | Who is reachable right now, plus who was active within `sessions.recent_window` | Which sessions exist in local logs | What one session's assistant did |
+| Source | Live gossip and authenticated `Info` probes; the catalog for `recent` rows | Observer-written catalog in `<runtime_dir>/history/` | The session's native `.jsonl` (Claude, Codex) or its rows in OpenCode's database, read on demand |
 | Scope | Every trusted peer, including other devices in LAN or Tailscale mode | This device's configured agent log roots | Same local roots; the file is re-confined on every page |
-| Needs the observer service | No | Yes, to build and refresh the catalog | Yes, for the catalog; reading itself only needs the file |
-| Service stopped | Unaffected | Served from the last catalog, marked `stale` | Works; the catalog block is marked `stale` |
+| Needs the observer service | Only for `recent` rows and `last_activity_at` | Yes, to build and refresh the catalog | Yes, for the catalog; reading itself only needs the file |
+| Service stopped | Live rows unaffected; `recent` rows withdrawn | Served from the last catalog, marked `stale` | Works; the catalog block is marked `stale` |
 | Content | Identity labels only | Metadata only; no transcript text | Assistant text, tool/turn markers; nothing else |
-| Can send to the result | Yes, by exact `session_id` when `delivery_capable` | Only if the row's `live_status` is `live` and `delivery_capable` | Same; history never grants delivery |
-| Paired hosts | Live identities only | Opt-in per serving host with `host_id`; see [Paired-host history](#paired-host-history-opt-in) | Same opt-in, filtered per event by the owner's lookback |
+| Can send to the result | Yes, by exact `session_id` when `delivery_capable`; `recent` rows are refused | Only if the row's `live_status` is `live` and `delivery_capable` | Same; history never grants delivery |
+| Paired hosts | Live identities and `recent` metadata from directly paired hosts | Opt-in per serving host with `host_id`; see [Paired-host history](#paired-host-history-opt-in) | Same opt-in, filtered per event by the owner's lookback |
 | Non-goals | — | Full-text or semantic search, fan-out or replicated remote catalogs | Raw transcripts, prompts, reasoning, tool bodies, subagents, peer envelopes |
 
 The intended flow is: search by project, title, or date; copy the exact
@@ -593,7 +593,8 @@ identities, acquire a per-session collection lease, change binding generations,
 touch subscription cursors or live queues, start or contact an agent daemon, or
 read files outside the configured roots. Other devices' history is never
 indexed or replicated here. A device serves its own history only to directly paired hosts
-and only under its owner's explicit policy. LAN and Tailscale gossip peers
+and only under its owner's explicit policy; the `recent` rows it advertises to
+them are metadata and grant no history access. LAN and Tailscale gossip peers
 see only live identities. Per-call
 work is bounded as listed above, catalog memory is bounded by the file limits,
 and per-process pagination state is bounded by 32 snapshots that expire after

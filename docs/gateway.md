@@ -184,8 +184,22 @@ receive messages. Proxy events carry a local trust grant that is checked again
 before delivery; a new grant after re-pairing cannot revive old queued content.
 Existing normalizers, suppression, deduplication, and live replay rules apply.
 
+Each snapshot also carries a bounded `recent` list: the sending host's own
+sessions whose last recorded activity is inside its `sessions.recent_window`
+(see the README's [Session status](../README.md#session-status)). Entries are
+metadata only (ID, agent, labels, `last_activity_at`, `expires_at`) and come
+from the sender's local catalog while its observer runs; entries learned from
+other hosts are never forwarded. The receiving service drops invalid entries,
+stamps the authenticated `host_id`, and keeps them in the private
+`<runtime>/gateway/recent.json` only while that connection lasts, removing them
+on disconnect, revocation and shutdown; local `list_sessions` reads the file
+only while the gateway holds its service lock and drops expired entries itself.
+Recent entries never become proxies, so `send`, `subscribe` and file offers to
+them fail closed, and they grant no history access. Older peers ignore the field
+and simply omit recent rows.
+
 Bounds: 16 peers, 128 issued invitations, 128 combined join receipts/revocation
-tombstones, 64 advertised sessions per host, 128 active proxies per gateway,
+tombstones, 64 advertised sessions and 64 recent entries per host, 128 active proxies per gateway,
 64 pending and 64 serving requests per connection, 64 queued frames per connection
 and per request, and 256 KiB per frame/state read. Enrollment is limited to four
 requests/second with a burst of eight; network sockets and administrative
@@ -206,6 +220,11 @@ normalization, service restart, and non-transitive discovery.
 `go test -race ./internal/channel -run PeerHistory` covers history sharing
 across three isolated gateways: default denial, per-agent policy, cursor binding
 across hosts, restart and revocation, second-hop and unsupported peers.
+`-run TestGatewayRecentAcrossHosts` covers recent-only advertisements: host
+stamping, refusal of sends and file offers, no second-hop forwarding, withdrawal
+while the owner's observer is stopped, peers that advertise none, revocation,
+and a stopped gateway ignoring a leftover registry. The gateway smoke checks the
+same through real processes.
 
 These do not establish cross-device or live-agent coverage. For a manual check,
 configure two machines in LAN or Tailscale mode, pair them, list their verified
@@ -233,7 +252,9 @@ and content filters as local reads, and it never exposes paths or the admin API.
 It admits 4 concurrent history requests, 2 per peer. Older gateways answer
 `REMOTE_HISTORY_UNSUPPORTED`. Messaging and local history are unaffected. Exact
 semantics, outputs and error codes are in
-[paired-host history](history.md#paired-host-history-opt-in).
+[paired-host history](history.md#paired-host-history-opt-in). Recent-only
+session advertisements are independent of this policy: a paired host may list
+a session as `recent` without being able to read any of its history.
 
 ## File attachments
 

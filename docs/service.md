@@ -6,7 +6,11 @@ headless sessions. Existing MCP/channel peers can list and subscribe to their
 exact session IDs. A passive session cannot receive messages: `send` returns an
 observation-only error until an integrated endpoint is available. The same
 process is the single writer of the local [session-history catalog](history.md)
-that `search_sessions` and `read_session_history` query.
+that `search_sessions` and `read_session_history` query, and that catalog is
+what lets `list_sessions` show sessions whose process ended within
+`sessions.recent_window` as `recent` (metadata only, never a delivery
+destination; see the README's [Session status](../README.md#session-status)).
+While the service is stopped those rows are withdrawn, not fabricated.
 
 ```sh
 rhizome service install
@@ -142,8 +146,10 @@ the same inventory: every `.jsonl` file enumerated by the walk is queued and
 parsed from its last checkpoint for identity, timestamps, and titles only, with
 a 4 MiB budget per maintenance tick so backfill never stalls live reads. The
 indexer does not create publisher nodes, acquire collection leases, or emit
-events; a pre-existing file becomes searchable through `search_sessions` while
-`list_sessions` still does not list it until new activity appears. The catalog
+events; a pre-existing file becomes searchable through `search_sessions` and,
+when its last recorded activity is inside `sessions.recent_window`, appears in
+`list_sessions` as `recent`. It is never listed as live or observed until new
+activity is actually seen. The catalog
 lives at `<runtime_dir>/history/catalog.json`, is bounded to 4,096 files, and
 stays readable (reported as `stale`) after the service stops. Shutdown flushes
 pending catalog changes and removes only `observer-health.json`. Limits,
@@ -186,7 +192,8 @@ rotation, filtering, duplicate direct rejection, passive delivery rejection, and
 catalog indexing without publishing. The service smoke uses separate
 observer/MCP processes and synthetic logs to verify subscription handoffs,
 direct delivery, daemon restart, no duplicate replay, pre-existing logs becoming
-searchable and readable, and a stale catalog while the service is stopped. No models or real user logs are involved. Service-definition tests validate
+searchable and readable, a recently ended session listed as `recent` and refused
+by `send`, and a stale catalog with withdrawn recent rows while the service is stopped. No models or real user logs are involved. Service-definition tests validate
 XML and arguments; they do not prove installation/startup on another operating
 system. Native install/login/recovery tests must be recorded per platform.
 

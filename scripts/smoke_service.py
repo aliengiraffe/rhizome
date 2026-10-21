@@ -3,6 +3,7 @@
 historical catalog checks (search_sessions / read_session_history)."""
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -101,6 +102,27 @@ def opencode_checks(client):
     assert page['coverage']['state'] == 'complete', page
 
 
+def recent_checks(client, running):
+    """The ended session is advertised as recent (never live) only while the service runs."""
+    state = client.tool('list_sessions')
+    rows = [s for s in state['sessions'] if s['identity']['session_id'] == 'ended']
+    status = state['recent_sessions']
+    if not running:
+        assert status['state'] == 'unavailable' and status['reason'] == 'service_stopped', status
+        assert not rows, rows
+        return
+    assert status['state'] == 'enabled' and status['window'] == '24h0m0s' and status['advertised'] == 1, status
+    assert len(rows) == 1, state
+    row = rows[0]
+    assert row['status'] == 'recent' and row['delivery_capable'] is False and 'host_id' not in row, row
+    assert row['last_activity_at'] and row['recent_until'] and 'node_id' not in row['identity'], row
+    assert row['identity']['session_name'] == 'Ended work' and row['identity']['display_name'] == 'ended', row
+    # Older than the window: historical only, never advertised.
+    assert not [s for s in state['sessions'] if s['identity']['session_id'] == 'past'], state
+    refused = client.call('tools/call', {'name': 'send', 'arguments': {'session_id': 'ended', 'text': 'nobody home'}})
+    assert refused.get('isError') and 'recent, not live' in refused['content'][0]['text'], refused
+
+
 def catalog_ready(client):
     """True once the observer has flushed a complete catalog (written on its first tick)."""
     result = client.call('tools/call', {'name': 'search_sessions', 'arguments': {'session_id': 'past'}})
@@ -132,6 +154,13 @@ def main():
             f.write(json.dumps({'type': 'assistant', 'uuid': 'p3', 'sessionId': 'past', 'timestamp': '2026-09-01T10:05:00Z',
                                 'cwd': '/work/past', 'message': {'role': 'assistant', 'content': [{'type': 'thinking', 'thinking': 'hidden'}],
                                                                  'stop_reason': 'end_turn'}}) + '\n')
+        # A session that ended an hour ago: inside the default 24-hour recent window.
+        ended = roots / 'project' / 'ended.jsonl'
+        recent_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace('+00:00', 'Z')
+        with ended.open('a') as f:
+            f.write(json.dumps({'type': 'user', 'uuid': 'e1', 'sessionId': 'ended', 'timestamp': recent_ts,
+                                'cwd': '/work/ended', 'message': {'role': 'user', 'content': 'recent prompt'}}) + '\n')
+            f.write(json.dumps({'type': 'custom-title', 'customTitle': 'Ended work', 'sessionId': 'ended'}) + '\n')
         rollout = directory / 'codex' / '2026' / '09' / '02' / 'rollout.jsonl'
         rollout.parent.mkdir(parents=True)
         with rollout.open('w') as f:
@@ -161,10 +190,12 @@ def main():
             until(lambda: catalog_ready(subscriber))
             history_checks(subscriber, running=True)
             health = json.loads((directory / 'run' / 'observer-health.json').read_text())
-            assert health['catalog']['state'] == 'ready' and health['catalog']['sessions'] == 3, health
+            assert health['catalog']['state'] == 'ready' and health['catalog']['sessions'] == 4, health
             assert 'historical' not in json.dumps(health) and '/work/past' not in json.dumps(health), health
-            # Historical sessions are neither peers nor publishers.
+            # Historical sessions are neither peers nor publishers; a recently ended one is
+            # advertised as recent metadata that cannot receive messages.
             assert not [s for s in subscriber.tool('list_sessions')['sessions'] if s['identity']['session_id'] == 'past']
+            recent_checks(subscriber, running=True)
             append(transcript, 'initial', 'initial')
             def session():
                 return [s for s in subscriber.tool('list_sessions')['sessions']
@@ -205,11 +236,14 @@ def main():
             observer.terminate()
             assert observer.wait(timeout=15) == 0
             processes.remove(observer)
-            # A stopped service serves a visibly stale catalog; reads still work.
+            # A stopped service serves a visibly stale catalog; reads still work, but
+            # recent-only presence is withdrawn rather than fabricated.
             history_checks(subscriber, running=False, past_name=('Renamed past', 'explicit'))
+            recent_checks(subscriber, running=False)
             start()
             until(lambda: catalog_ready(subscriber))
             history_checks(subscriber, running=True, past_name=('Renamed past', 'explicit'))
+            recent_checks(subscriber, running=True)
             cleared = subscriber.tool('set_session_name', {'session_id': 'past', 'name': ''})
             assert cleared['session_name'] == 'Past work' and cleared['source'] == 'native', cleared
             append(transcript, 'restart-human', 'continue again', 'user')
@@ -237,7 +271,7 @@ def main():
                 process.terminate()
                 process.wait(timeout=15)
     print('PASS: observer discovery, direct handoff/delivery, passive takeover, restart without duplicate replay, '
-          'historical catalog search/read, stale catalog while stopped, renaming other local sessions')
+          'historical catalog search/read, stale catalog while stopped, renaming other local sessions, recent-only advertisement')
 
 
 if __name__ == '__main__':

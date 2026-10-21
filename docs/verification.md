@@ -393,6 +393,18 @@ Automated on macOS:
   registration in both agent modes with schema/decoder agreement, Codex
   `CALLER_UNVERIFIED`; incremental checkpoints, replacement re-indexing, visible
   limits and path-free health output.
+- Recent-only advertisements (`internal/channel/recent_test.go`,
+  `internal/config/sessions_test.go`): `sessions.recent_window` default,
+  overrides, zero, invalid units, negatives and overflow; the inclusive cutoff,
+  unknown and future timestamps with the five-minute skew tolerance, expiry
+  under a fixed clock, bounded newest-first selection with an `omitted` count;
+  `list_sessions` with a stopped service, live → recent → live transitions
+  without duplicates, idle live sessions beyond the window, `send` refused
+  before queueing, window `0s`; and across three isolated gateways: host
+  stamping, send/file refusal, no forwarding, withdrawal while the owner's
+  observer is stopped, peers advertising none, revocation and a stopped
+  gateway. The service and gateway smokes exercise the same through real
+  processes. Cross-device behavior remains covered by the manual checklists.
 - `task build`, `task check` (`go vet ./...`, `go test -race ./...`),
   `git diff --check`, `python3 scripts/smoke_stdio.py` with and without
   `--lan`, and `python3 scripts/smoke_service.py`, which now writes logs for

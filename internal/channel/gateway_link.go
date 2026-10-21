@@ -20,6 +20,7 @@ type gatewayFrame struct {
 	Type       string            `json:"type"`
 	ID         string            `json:"id,omitempty"`
 	Sessions   []*pb.Identity    `json:"sessions,omitempty"`
+	Recent     []recentSession   `json:"recent,omitempty"` // metadata only; older peers ignore it
 	Send       *pb.SendRequest   `json:"send,omitempty"`
 	Follow     *pb.FollowRequest `json:"follow,omitempty"`
 	Event      *pb.Event         `json:"event,omitempty"`
@@ -169,6 +170,15 @@ func readFailure(err error) string {
 	}
 	return "read_error"
 }
+
+// now is the gateway's clock for recency decisions; it follows the history
+// service's clock so tests can pin it and falls back to wall time without one.
+func (g *gateway) now() time.Time {
+	if g.history != nil {
+		return g.history.clock()
+	}
+	return time.Now()
+}
 func (l *gatewayLink) write(f gatewayFrame) error {
 	select {
 	case <-l.ctx.Done():
@@ -202,10 +212,11 @@ func (l *gatewayLink) run() {
 			l.mu.Lock()
 			l.lastSnapshot = time.Now()
 			l.mu.Unlock()
-			if len(f.Sessions) > gatewayMaxSessions {
+			if len(f.Sessions) > gatewayMaxSessions || len(f.Recent) > maxRecentSessions {
 				l.stop("snapshot_too_large")
 				break
 			}
+			l.g.recent.set(l, f.Recent)
 			select {
 			case l.snapshots <- f.Sessions:
 			default:
@@ -279,6 +290,9 @@ func (l *gatewayLink) run() {
 	}
 	failures, backoff := l.g.linkEndedLocked(l.host, lifetime, l.reason)
 	l.g.mu.Unlock()
+	// Advertisement lifetime is the connection: a disconnected or revoked
+	// host's recent entries disappear with its proxies.
+	l.g.recent.clear(l)
 	l.g.logger().Info("gateway_link_stop", "host", gatewayHostLabel(l.host), "direction", gatewayDirection(l.outgoing), "reason", l.reason, "uptime_ms", lifetime.Milliseconds(), "proxies", len(proxies), "failures", failures, "backoff_ms", backoff.Milliseconds())
 }
 func (l *gatewayLink) writer() {
@@ -333,7 +347,7 @@ func (l *gatewayLink) advertise() {
 			}
 		}
 		stopScan()
-		if l.write(gatewayFrame{Type: "snapshot", Sessions: sessions}) != nil {
+		if l.write(gatewayFrame{Type: "snapshot", Sessions: sessions, Recent: l.g.recentExport(l.g.now())}) != nil {
 			return
 		}
 		select {

@@ -58,7 +58,7 @@ func RunForeground(ctx context.Context, c Config) error {
 	results := make(chan error, 2)
 	go func() { results <- channel.RunObserver(ctx, c.Observer) }()
 	go func() {
-		results <- channel.RunGateway(ctx, c.Observer.Runtime, c.Gateway, channel.GatewayHistory{ClaudeRoot: c.Observer.ClaudeRoot, CodexRoot: c.Observer.CodexRoot, OpenCodeRoot: c.Observer.OpenCodeRoot, Policy: c.PeerHistory})
+		results <- channel.RunGateway(ctx, c.Observer.Runtime, c.Gateway, channel.GatewayHistory{ClaudeRoot: c.Observer.ClaudeRoot, CodexRoot: c.Observer.CodexRoot, OpenCodeRoot: c.Observer.OpenCodeRoot, Policy: c.PeerHistory, RecentWindow: c.RecentWindow, Hostname: c.Observer.Hostname})
 	}()
 	err := <-results
 	cancel()

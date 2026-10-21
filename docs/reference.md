@@ -35,6 +35,7 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `network.mdns` | `RHIZOME_MDNS` | mcp `--mdns` | on in LAN mode, off in Tailscale mode |
 | `network.gossip_port` | `RHIZOME_GOSSIP_PORT` | mcp `--gossip-port` | `7946` (Tailscale only) |
 | `network.discovery_interval` | `RHIZOME_DISCOVERY_INTERVAL` | mcp `--discovery-interval` | `20s` (Tailscale only) |
+| `sessions.recent_window` | — | — | `24h`; `0s` disables recent-only rows ([Session status](../README.md#session-status)) |
 | `gateway.history.enabled` | — | — | `false`: paired hosts cannot search or read history |
 | `gateway.history.lookback` | — | — | `30d`; positive whole days or `all` |
 | `claude.peer_history.enabled`, `codex.peer_history.enabled` | — | — | inherit `gateway.history.enabled`; can only narrow it |
@@ -88,6 +89,14 @@ The file is limited to 64 KiB and must be a regular, user-owned file, not a
 symlink or group/world-writable file; 0644 is accepted on Unix. Windows checks
 ownership and rejects write grants to other accounts except SYSTEM and
 Administrators. Create `~/.rhizome` with 0700 when creating the file manually.
+
+`sessions.recent_window` is file-only and bounds how long sessions whose process
+has ended remain visible as `recent` in `list_sessions` and to directly paired
+hosts, measured from their last recorded activity. It accepts any finite,
+nonnegative Go duration (`24h`, `90m`, `0s`); negative, malformed or overflowing
+values fail at startup. MCP processes and the service read it once at start, so
+restart them after a change; there is no hot reload. See
+[Session status](../README.md#session-status) for what `recent` does and does not promise.
 
 The `gateway.history` and `*.peer_history` keys are file-only. They let directly
 [paired hosts](gateway.md) search and read this device's session history
@@ -192,7 +201,7 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 
 | Tool | Behavior |
 | --- | --- |
-| `list_sessions()` | Bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](opencode.md#why-a-closed-session-can-still-be-live)). |
+| `list_sessions()` | Live, observed, recent or ambiguous sessions ([Session status](../README.md#session-status)), `delivery_capable`, recorded `last_activity_at`, a `recent_sessions` block, bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](opencode.md#why-a-closed-session-can-still-be-live)). |
 | `set_session_name(name, session_id?)` | Name the caller's bound session for peers, or with an exact `session_id` another session on this device. Empty clears the override. Returns the effective name and its source. |
 | `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |

@@ -235,3 +235,56 @@ See [AGENTS.md](AGENTS.md) for engineering requirements and additional checks
 for specific integrations. Automated smokes use isolated state and synthetic
 transcripts. Live agent and cross-device validation are documented separately
 in the [verification guide](docs/verification.md).
+
+## Session status
+
+Every row of `list_sessions` carries a `status` and `delivery_capable`; neither
+visibility nor a label implies that a person will read a message.
+
+| `status` | Meaning | `delivery_capable` |
+| --- | --- | --- |
+| `live` | Exactly one direct integration currently owns the session; a verified route exists at the time of listing. | `true` |
+| `observed (liveness unknown)` | Only the [background observer](docs/service.md) saw log activity; it can be subscribed to but cannot deliver. | `false` |
+| `recent` | The session recorded activity within `sessions.recent_window` (default a rolling 24 hours) but no process currently owns it. Metadata only: no node ID, generation or endpoint. | `false` |
+| `ambiguous` | Several direct integrations claim the ID; routing fails closed. | as advertised, but `send` refuses |
+
+Recent rows currently cover Claude Code and Codex sessions; OpenCode callers
+can list them, but OpenCode history is not advertised as recent.
+
+Recent rows come from the observer service's local history catalog, so the
+service must be running on the owning device: a stopped service withdraws them
+(`recent_sessions.state: "unavailable"`, `reason: "service_stopped"`) rather
+than fabricating presence, and processes without the catalog show
+`no_catalog`. Recency is `now - last_activity_at <= recent_window`, inclusive,
+computed on the owner in UTC from recorded log timestamps only; `recent_until`
+is that expiry. Heartbeats, probes, peer queries, service restarts, catalog
+rewrites and file modification times never renew it, sessions with unknown
+timestamps never qualify, and a timestamp more than five minutes in the future
+is treated as unknown so a skewed clock cannot keep a session advertised. Rows
+are sorted newest activity first and capped at 64 per device;
+`recent_sessions.omitted` reports how many were left out. Sessions that ended
+before the service was installed qualify through their recorded metadata.
+
+A verified live session always wins its (host, agent, session) key: when a
+process exits, its row downgrades to `recent` if it qualifies and disappears
+otherwise; when a process reconnects, the row upgrades to `live` without a
+duplicate. A live session idle for longer than the window stays `live`; the
+window only bounds recent-only retention. `last_activity_at` is also attached
+to local `live`/`observed` rows when the catalog knows it.
+
+`send` to a `recent` session fails before anything is queued, with an explicit
+"recent, not live" error; nothing is deferred for a later restart and nothing is
+routed to an observer. File offers and every other operation that needs a live
+recipient reject recent rows the same way. `subscribe` keeps its existing
+"retain intent while absent" behavior and never replays history. Live sends
+still resolve and verify the exact current identity at send time, so a session
+that exits between listing and sending fails rather than being queued.
+
+Recent rows are advertised to [paired hosts](docs/gateway.md) as metadata only
+and carry that host's `host_id`; they are never forwarded a second hop, never
+grant history reads (`[gateway.history]` stays a separate, default-off
+capability) and vanish when the host disconnects or is revoked. LAN and
+Tailscale gossip carries live identities only.
+
+**Upgrade note:** this release lists recently ended sessions by default. Set
+`[sessions] recent_window = "0s"` to opt out; live discovery is unchanged.
