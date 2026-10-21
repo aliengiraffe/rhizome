@@ -76,7 +76,13 @@ a real tailnet; the two-device Tailscale checklist in
 
 `setup` uses Bubble Tea on usable stdin/stdout terminals when input is needed;
 `--plain` retains legacy prompts. Stage all answers until review/apply; cancellation
-before apply must not write skills, config, or service state. Use `config.Preview`
+before apply must not write skills, config, or service state. The opt-in
+"install and start" service step (`setup_service.go`) follows the configuration
+whether it was created, replaced, or kept; it runs the normal install lifecycle
+through an injectable `serviceInstaller`, reports running only after
+`service.Inspect` confirms the observer lock, distinguishes an installed
+definition from a running observer on failure, and is never run by `--list` or
+by `--network` without the interactive questions. Use `config.Preview`
 for resolver-backed validation without disk writes. Filter network fields by the
 selected mode. Bare terminal `service` manages lifecycle (confirm stop/uninstall),
 `service status --tui` is read-only, and `peers list --tui` browses paired hosts

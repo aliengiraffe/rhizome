@@ -337,6 +337,28 @@ second run shows the file and keeps it by default, and that `rhizome config`
 reports the keys with source `file`. In Tailscale mode with the daemon stopped,
 setup must warn and still write the file, and `rhizome mcp` must refuse to start.
 
+### Setup service step (#57, 2026-10-21)
+
+Automated with an injected service step, never a real service manager:
+`setup_service_test.go` drives `installService` through a fake manager in an
+isolated `HOME` (missing service installed and started, running service
+accepted without restart, install error with nothing installed, startup
+timeout that keeps the definition, cancellation, invalid or missing file never
+reaching the manager, exact custom `--config` path and runtime). `TestSetupConfig`
+covers the line prompts: create/replace/keep each followed by the
+"install and start" question, decline leaving the file byte-identical, accept
+calling the installer with the exact path, installer failure after the file was
+written, EOF at the question, and `--network` never asking. `tui_test.go`
+(`TestWizardKeptConfigOffersService`, `TestWizardServiceOptInAndPartialFailure`)
+covers the wizard with kept and `--network` configurations, review text,
+decline, accept, cancellation before the step, and partial failure.
+`scripts/smoke_tui.py` walks the "Install and start" field on a PTY with the
+default answer. The real lifecycle commands are unchanged and remain covered by
+`internal/service` command-generation tests and `scripts/smoke_service.py`
+(foreground `service run`). Native installation and startup through launchd,
+systemd or Task Scheduler were not performed for this change on any platform;
+use the manual checklist under "Terminal interfaces" on a disposable account.
+
 ## Session history catalog (#25, 2026-10-20)
 
 Automated on macOS:
@@ -480,8 +502,8 @@ exact host identity, refresh, plain JSON, and terminal-control sanitization;
 redirected explicit-TUI rejection, and restored terminal modes/alternate screen.
 BSD's transient `PENDIN` bookkeeping flag is excluded from mode comparison.
 Model tests cover mode-specific answers, defaults, inline validation, keep/backup,
-selected skills only, opt-in service dispatch, partial failure, duplicate actions,
-and worker cancellation. `service run` remains covered by the service smoke.
+selected skills only, opt-in install-and-start dispatch after created, replaced
+or kept configuration, partial failure, duplicate actions, and worker cancellation. `service run` remains covered by the service smoke.
 
 The UI dependency is pinned to stable Bubble Tea v1.3.10; the only additional
 direct helper is its existing `x/ansi` dependency for terminal-cell wrapping.

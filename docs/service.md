@@ -24,9 +24,12 @@ tokens, coordination files, and diagnostic logs. It does not edit agent
 configuration or start an agent.
 
 Create `~/.rhizome/config.toml` before installing, with `rhizome setup` (it asks
-for the installation type; see the README's
+for the installation type and then offers to install and start this service,
+also when it keeps an existing file; see the README's
 [Collaboration skill](../README.md#creating-the-configuration-file)) or by hand
 (an empty file selects defaults), or select an existing file with `--config`.
+Accepting that offer runs the install lifecycle below for the selected file and
+reports success only once the observer holds its runtime lock.
 The observer does not peer, so the `[network]` table has no effect on the service.
 The service can also run an opt-in [host gateway](gateway.md) via `[gateway]`;
 that gateway bridges local sessions without changing observer collection or history.
