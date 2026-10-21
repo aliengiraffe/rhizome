@@ -2,12 +2,13 @@
 
 ## Orientation
 
-Rhizome is a Go MCP bridge for local coding agent sessions (Claude Code, Codex
-and OpenCode). It binds verified session identities, collects selected activity,
+Rhizome is a Go MCP bridge for local coding agent sessions (Claude Code, Codex,
+OpenCode and Cursor). It binds verified session identities, collects selected activity,
 discovers peers through memberlist, and delivers events over authenticated
 loopback gRPC. Claude uses channel notifications; Codex uses per-thread nodes and
 local queue delivery; OpenCode uses an embedded plugin over a private Unix socket
-bridge. An optional per-user service observes coding agent logs independently of MCP
+bridge; Cursor uses per-conversation nodes bound by `rhizome hook --agent cursor`
+and hook-pull delivery (see [docs/cursor.md](docs/cursor.md)). An optional per-user service observes coding agent logs independently of MCP
 and maintains the local session-history catalog behind `search_sessions` and
 `read_session_history`; see [docs/service.md](docs/service.md) for lifecycle,
 boundaries, and validation and [docs/history.md](docs/history.md) for the
@@ -25,7 +26,7 @@ Start with [README.md](README.md) for behavior and setup,
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`), and the OpenCode bridge (`opencode*.go`). |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, Cursor hook binding and hook-pull delivery (`cursor.go`, `cursor_hook.go`), session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`), and the OpenCode bridge (`opencode*.go`). |
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
@@ -49,6 +50,7 @@ python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts
 python3 scripts/smoke_service.py    # Separate observer/MCP processes, handoffs, history catalog.
 python3 scripts/smoke_tui.py        # Unix PTYs; isolated setup/service/peers UI and restoration.
 python3 scripts/smoke_stdio.py --lan # Same scenario in LAN mode: pinned TLS, separate registries.
+python3 scripts/smoke_cursor.py     # Cursor mode: synthetic hook payloads, tickets, hook-pull delivery.
 git diff --check                   # Check whitespace errors.
 task proto                         # Requires protoc; installs pinned generators in .bin.
 python3 scripts/smoke_codex.py --help # Inspect live smoke prerequisites/options.
@@ -56,7 +58,8 @@ python3 scripts/smoke_opencode.py --help # Inspect OpenCode live smoke options.
 ```
 
 Before marking a change done, build, check (including race tests), both stdio
-smokes (loopback and `--lan`), the service smoke, and the whitespace check must pass.
+smokes (loopback and `--lan`), the service smoke, the Cursor smoke, and the
+whitespace check must pass.
 Format touched Go files with `gofmt`; run targeted package tests first. Regenerate
 protobufs only for protocol changes
 and review the generated diff. Check all documentation links and paths.
@@ -133,7 +136,7 @@ See README, [service](docs/service.md#terminal-interface), and
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
-  CLI usage: `rhizome --version | mcp | setup | service | config | token | invite | join | peers | files | demo [flags]`.
+  CLI usage: `rhizome --version | mcp | hook | setup | service | config | token | invite | join | peers | files | demo [flags]`.
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
   `mcp` only, with flag > env > file > default. `rhizome setup` is the only
@@ -235,9 +238,29 @@ See README, [service](docs/service.md#terminal-interface), and
   derive a name from prompts or transcript content, and a name-only change must
   not touch generation, streams, subscriptions, cursors, or queues
   (`internal/channel/name.go`, README "Session names").
+- **Cursor binds through hooks, never through `tools/call`.** Cursor sends no
+  conversation identity in MCP requests and cannot be woken when idle. `rhizome
+  mcp --agent cursor` hosts one node per `conversation_id`, registers a private
+  0600 socket under `<runtime>/cursor/` with its PID and `roots/list`, and
+  `rhizome hook --agent cursor` (run by `~/.cursor/hooks.json`) forwards a
+  minimized payload: never the prompt, tool bodies, transcripts or `user_email`.
+  The hook matches a process by `workspace_roots`, contacts exactly one
+  candidate, and otherwise answers Cursor's default (`{}`, `continue`, `ask`)
+  with exit 0; it must never block Cursor. Tool calls resolve by a single-use
+  `beforeMCPExecution` ticket (tool name + canonical input digest, 5 s) or the
+  single bound conversation; anything else is `identity_ambiguous`. Collection
+  is hook push only (`afterAgentResponse`, `postToolUse*`, `stop`), with the
+  shared `isPeerInput` suppression; no transcript tailing and no history
+  indexing of Cursor logs. Delivery is hook pull through a bounded per-node
+  outbox (32 entries, 64 KiB, 8 KiB per injection): `postToolUse*`
+  `additional_context` always, `stop` `followup_message` only with
+  `[cursor] followup_delivery = true` (file-only, default false, `loop_count`
+  0, completed turns). Setup never writes Cursor's `mcp.json`/`hooks.json`;
+  `examples/cursor/` is merged by the user. Live Cursor behavior is unverified:
+  keep `docs/cursor.md` and the checklist in `docs/verification.md` honest.
 - **Never manually invoke `observe_session` or invent an ID.** Trusted hooks,
   verified transport identity, and authoritative log metadata own binding;
-  synthetic test harnesses are not a user workflow (`internal/channel/node.go`, `internal/channel/codex.go`).
+  synthetic test harnesses are not a user workflow (`internal/channel/node.go`, `internal/channel/codex.go`, `internal/channel/cursor.go`).
 - **Never log or advertise the cluster token.** It authenticates trusted peers;
   keep runtime files private (`internal/channel/discovery.go`, README).
 - **Preserve loopback-only defaults and behavior without `--lan`.** Without

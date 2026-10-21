@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -402,7 +403,7 @@ func TestInstallAgentsFreshRepeatAndStale(t *testing.T) {
 	exe := filepath.Join(home, "Rhizome App", "rhizome")
 	var out bytes.Buffer
 	in := agentInstaller{exe: exe, home: home, c: c, lookPath: func(name string) (string, error) { return "/opt/homebrew/bin/" + name, nil }, now: fixedNow, out: &out}
-	agents := detectAgents(c, noPath)
+	agents := detectAgents(c, noPath)[:3] // claude, codex and opencode; Cursor is skill-only, see TestInstallCursorSkillOnly
 	for _, a := range agents {
 		if err := in.install(a); err != nil {
 			t.Fatal(err)
@@ -674,5 +675,30 @@ func TestSetupCLIInstallsGlobalRegistration(t *testing.T) {
 	run("setup", "--agents", "all", "--config", cfg)
 	if matches, _ := filepath.Glob(filepath.Join(home, ".claude.json.bak-*")); len(matches) != 0 {
 		t.Fatalf("backups after an unchanged run: %v", matches)
+	}
+}
+
+// Cursor setup installs the skill and prints the manual merge note; it never
+// writes Cursor's mcp.json or hooks.json.
+func TestInstallCursorSkillOnly(t *testing.T) {
+	c, home := installEnv(t, nil)
+	var out bytes.Buffer
+	in := agentInstaller{exe: "/bin/rhizome", home: home, c: c, lookPath: noPath, now: fixedNow, out: &out}
+	cursor := detectAgents(c, noPath)[3]
+	if cursor.Name != "cursor" {
+		t.Fatalf("fourth agent = %q", cursor.Name)
+	}
+	if err := in.install(cursor); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"skill: installed", "examples/cursor/mcp.json"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	for _, name := range []string{"mcp.json", "hooks.json"} {
+		if _, err := os.Stat(filepath.Join(c.Cursor.ConfigDir, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("%s written: %v", name, err)
+		}
 	}
 }

@@ -79,7 +79,15 @@ func (n *Node) status() map[string]any {
 	if n.identity.SessionId == "" {
 		binding = "UNBOUND: waiting for session hook; submit a prompt with observe_session hooks configured"
 	}
-	return map[string]any{"binding": binding, "identity": cloneIdentity(n.identity), "subscriptions": feeds, "queue_depth": len(n.incoming), "delivery_paused": n.paused, "counters": n.stats, "collection_state": n.collectionState, "delivery_error": n.deliveryError}
+	if n.identity.SessionId == "" && n.hookPull {
+		binding = "UNBOUND: waiting for Cursor session hook; run `rhizome hook --agent cursor` from hooks.json and submit a prompt"
+	}
+	state := map[string]any{"binding": binding, "identity": cloneIdentity(n.identity), "subscriptions": feeds, "queue_depth": len(n.incoming), "delivery_paused": n.paused, "counters": n.stats, "collection_state": n.collectionState, "delivery_error": n.deliveryError}
+	if n.hookPull {
+		state["delivery_mode"] = "hook_pull"
+		state["outbox_depth"] = len(n.outbox)
+	}
+	return state
 }
 func (n *Node) mcpServer() *mcp.Server {
 	return makeServer(func(*mcp.CallToolRequest) (*Node, error) { return n, nil }, agentClaude, func() { n.mu.Lock(); n.ready = true; n.mu.Unlock() }, n.archive)
@@ -93,6 +101,7 @@ const (
 	agentClaude agentKind = iota
 	agentCodex
 	agentOpenCode
+	agentCursor
 )
 
 // makeServer registers the shared tool set. history is optional: without it

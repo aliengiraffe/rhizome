@@ -196,7 +196,7 @@ func (n *Node) deliver(ctx context.Context) {
 			n.notifications = append(n.notifications, now)
 		} else if errors.Is(err, errDestinationUnavailable) {
 			// Preserve selected events ahead of later arrivals while the reader is
-			// unavailable; the same bounded queue still applies.
+			// unavailable or a Cursor outbox is full; the same bounded queue still applies.
 			available := maxQueue - len(n.incoming)
 			if len(retry) > available {
 				n.stats.Dropped += uint64(len(retry) - available)

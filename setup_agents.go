@@ -519,6 +519,13 @@ func (in agentInstaller) install(a agent) error {
 	if a.Name == "opencode" {
 		return in.installOpenCode(a)
 	}
+	if a.MCP == "" && a.Hooks == "" {
+		// Setup never writes Cursor's mcp.json or hooks.json; the user merges examples/cursor/.
+		for _, note := range agentNotes(a.Name, a) {
+			fmt.Fprintf(in.out, "  next:  %s\n", note)
+		}
+		return nil
+	}
 	server, err := rhizomeServer(in.exe, a.Name, in.c, in.explicit, in.home, in.lookPath)
 	if err != nil {
 		return fmt.Errorf("%s: mcp: %w", a.Label, err)
@@ -540,7 +547,7 @@ func (in agentInstaller) install(a agent) error {
 		return fmt.Errorf("%s: hooks: %w", a.Label, err)
 	}
 	fmt.Fprintf(in.out, "  hooks: %s\n", hooks.describe(fmt.Sprintf("%d hook groups in ", len(template))))
-	for _, note := range agentNotes(a.Name) {
+	for _, note := range agentNotes(a.Name, a) {
 		fmt.Fprintf(in.out, "  next:  %s\n", note)
 	}
 	return nil
@@ -560,7 +567,7 @@ func (in agentInstaller) installOpenCode(a agent) error {
 		}
 		fmt.Fprintf(in.out, "  %-7s %s %s\n", p.label+":", status, p.dest)
 	}
-	for _, note := range agentNotes(a.Name) {
+	for _, note := range agentNotes(a.Name, a) {
 		fmt.Fprintf(in.out, "  next:  %s\n", note)
 	}
 	return nil
@@ -576,12 +583,16 @@ func (r fileResult) describe(what string) string {
 }
 
 // agentNotes lists the steps that remain for the user after installation.
-func agentNotes(agentName string) []string {
+func agentNotes(agentName string, a agent) []string {
 	switch agentName {
 	case "claude":
 		return []string{
 			"restart Claude Code and start it with `claude --dangerously-load-development-channels server:rhizome`; accept the channel and hook prompts it shows.",
 			"a project .mcp.json entry named rhizome takes precedence over this user-scope registration; a project .claude/settings.json that also carries the Rhizome hooks runs them twice, so keep them in one place.",
+		}
+	case "cursor":
+		return []string{
+			"merge examples/cursor/mcp.json and examples/cursor/hooks.json into " + filepath.Dir(a.Skills) + " with absolute paths (see docs/cursor.md); setup does not write them.",
 		}
 	case "codex":
 		return []string{

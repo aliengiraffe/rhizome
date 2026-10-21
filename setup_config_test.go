@@ -61,13 +61,13 @@ func TestRenderAndWriteConfig(t *testing.T) {
 		want []string
 		not  []string
 	}{
-		{"local", configAnswers{}, []string{`mode = "local"`}, []string{"bind_addr", "join", "[claude]", "[codex]", "runtime_dir"}},
+		{"local", configAnswers{}, []string{`mode = "local"`}, []string{"bind_addr", "join", "[claude]", "[codex]", "[cursor]", "runtime_dir"}},
 		{"lan", configAnswers{Network: config.Network{Mode: "lan", BindAddr: "192.168.1.5", Join: []string{"a:7946"}, MDNS: &off}},
 			[]string{`mode = "lan"`, `bind_addr = "192.168.1.5"`, `join = ["a:7946"]`, "mdns = false"}, []string{"gossip_port", "token"}},
 		{"tailscale", configAnswers{Network: config.Network{Mode: "tailscale", GossipPort: 7950, DiscoveryInterval: "45s"}},
 			[]string{`mode = "tailscale"`, "gossip_port = 7950", `discovery_interval = "45s"`}, []string{"bind_addr", "mdns"}},
-		{"paths", configAnswers{RuntimeDir: "/r", ClaudeDir: "/c", CodexHome: "/h", CodexBin: "mycodex"},
-			[]string{`runtime_dir = "/r"`, "[claude]", `config_dir = "/c"`, "[codex]", `bin = "mycodex"`, `home = "/h"`}, nil},
+		{"paths", configAnswers{RuntimeDir: "/r", ClaudeDir: "/c", CodexHome: "/h", CodexBin: "mycodex", CursorDir: "/u"},
+			[]string{`runtime_dir = "/r"`, "[claude]", `config_dir = "/c"`, "[codex]", `bin = "mycodex"`, `home = "/h"`, "[cursor]", `config_dir = "/u"`}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -180,8 +180,8 @@ func TestAskConfig(t *testing.T) {
 			return n.GossipPort == 7950 && n.DiscoveryInterval == "45s" && len(n.Join) == 1
 		}, "Warning: tailscale is not running"},
 		{"retry bad choice", "wan\n1\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" }, "Choose 1, 2 or 3"},
-		{"paths only when non-default", "1\n\ny\n\n/c\n\n\n", ok, func(a configAnswers) bool {
-			return a.ClaudeDir == "/c" && a.RuntimeDir == "" && a.CodexHome == "" && a.CodexBin == ""
+		{"paths only when non-default", "1\n\ny\n\n/c\n\n\n\n", ok, func(a configAnswers) bool {
+			return a.ClaudeDir == "/c" && a.RuntimeDir == "" && a.CodexHome == "" && a.CodexBin == "" && a.CursorDir == ""
 		}, ""},
 	}
 	for _, tc := range cases {

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"math/rand"
 	"net"
 	"os"
@@ -29,7 +30,7 @@ func main() {
 
 func entry() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: rhizome --version | mcp | setup | service | config | token | files | invite | join | peers | demo [flags]")
+		return fmt.Errorf("usage: rhizome --version | mcp | hook | setup | service | config | token | files | invite | join | peers | demo [flags]")
 	}
 	mode := os.Args[1]
 	if mode == "--version" || mode == "-version" {
@@ -43,7 +44,7 @@ func entry() error {
 	switch mode {
 	case "mcp":
 		opts := flag.NewFlagSet("mcp", flag.ContinueOnError)
-		agent := opts.String("agent", "claude", "delivery agent: claude, codex or opencode")
+		agent := opts.String("agent", "claude", "delivery agent: claude, codex, opencode or cursor")
 		config.Bind(opts, "codex-bin")
 		o, err := optionsFromEnv()
 		if err != nil {
@@ -89,9 +90,37 @@ func entry() error {
 			return channel.RunCodex(c, o)
 		case "opencode":
 			return channel.RunOpenCode(c, o)
+		case "cursor":
+			return channel.RunCursor(c, o)
 		default:
 			return fmt.Errorf("unsupported agent %q", *agent)
 		}
+	case "hook":
+		// Cursor runs this from hooks.json with the hook payload on stdin. Stdout
+		// is the hook's JSON response and must carry nothing else; any failure
+		// answers with a response that leaves Cursor's behavior unchanged.
+		opts := flag.NewFlagSet("hook", flag.ContinueOnError)
+		agent := opts.String("agent", "", "agent whose hook payload is on stdin: cursor")
+		config.Bind(opts)
+		if err := opts.Parse(os.Args[1:]); err != nil {
+			return err
+		}
+		if opts.NArg() != 0 {
+			return fmt.Errorf("unexpected hook arguments")
+		}
+		if *agent != "cursor" {
+			return fmt.Errorf("unsupported hook agent %q (cursor)", *agent)
+		}
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+		runtime := ""
+		if c, err := config.FromFlags(opts); err == nil {
+			runtime = c.RuntimeDir
+		} else {
+			slog.Warn("cursor_hook_config", "error", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		return channel.CursorHook(ctx, runtime, os.Stdin, os.Stdout)
 	case "config":
 		fs := flag.NewFlagSet("config", flag.ContinueOnError)
 		config.Bind(fs, "runtime-dir", "codex-bin", "claude-root", "codex-root")

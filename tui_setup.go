@@ -84,7 +84,7 @@ func (m *setupModel) fields() []wizardField {
 			}
 			f = append(f, wizardField{"hostname", "Hostname override (blank: OS hostname)", nil}, wizardField{"custom", "Customize directories or Codex binary?", []string{"no", "yes"}})
 			if m.values["custom"] == "yes" {
-				f = append(f, wizardField{"runtime", "Runtime directory (blank: " + m.c.RuntimeDir + ")", nil}, wizardField{"claude", "Claude directory (blank: " + m.c.Claude.ConfigDir + ")", nil}, wizardField{"codex", "Codex home (blank: " + m.c.Codex.Home + ")", nil}, wizardField{"bin", "Codex executable (blank: " + m.c.Codex.Bin + ")", nil})
+				f = append(f, wizardField{"runtime", "Runtime directory (blank: " + m.c.RuntimeDir + ")", nil}, wizardField{"claude", "Claude directory (blank: " + m.c.Claude.ConfigDir + ")", nil}, wizardField{"codex", "Codex home (blank: " + m.c.Codex.Home + ")", nil}, wizardField{"cursor", "Cursor directory (blank: " + m.c.Cursor.ConfigDir + ")", nil}, wizardField{"bin", "Codex executable (blank: " + m.c.Codex.Bin + ")", nil})
 			}
 		}
 	}
@@ -138,7 +138,7 @@ func (m *setupModel) answers() (*configAnswers, error) {
 		for _, v := range []struct {
 			key, def string
 			dest     *string
-		}{{"runtime", m.c.RuntimeDir, &a.RuntimeDir}, {"claude", m.c.Claude.ConfigDir, &a.ClaudeDir}, {"codex", m.c.Codex.Home, &a.CodexHome}, {"bin", m.c.Codex.Bin, &a.CodexBin}} {
+		}{{"runtime", m.c.RuntimeDir, &a.RuntimeDir}, {"claude", m.c.Claude.ConfigDir, &a.ClaudeDir}, {"codex", m.c.Codex.Home, &a.CodexHome}, {"cursor", m.c.Cursor.ConfigDir, &a.CursorDir}, {"bin", m.c.Codex.Bin, &a.CodexBin}} {
 			if value := m.values[v.key]; value != "" && value != v.def {
 				*v.dest = value
 			}
@@ -147,7 +147,7 @@ func (m *setupModel) answers() (*configAnswers, error) {
 	for flag, set := range map[string]bool{
 		"bind-addr": n.BindAddr != "", "advertise-addr": n.AdvertiseAddr != "", "join": len(n.Join) > 0,
 		"gossip-port": n.GossipPort != 0, "discovery-interval": n.DiscoveryInterval != "", "mdns": n.MDNS != nil,
-		"runtime-dir": a.RuntimeDir != "", "claude-dir": a.ClaudeDir != "", "codex-home": a.CodexHome != "", "codex-bin": a.CodexBin != "",
+		"runtime-dir": a.RuntimeDir != "", "claude-dir": a.ClaudeDir != "", "codex-home": a.CodexHome != "", "codex-bin": a.CodexBin != "", "cursor-dir": a.CursorDir != "",
 	} {
 		a.Selected[flag] = set
 	}
@@ -176,6 +176,8 @@ func (m *setupModel) validateField(key string) error {
 		a.ClaudeDir = m.values[key]
 	case "codex":
 		a.CodexHome = m.values[key]
+	case "cursor":
+		a.CursorDir = m.values[key]
 	case "bin":
 		a.CodexBin = m.values[key]
 	case "port":

@@ -37,6 +37,8 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `codex.bin` | — | mcp `--codex-bin` | `codex` |
 | `codex.home` | `CODEX_HOME` | — | `~/.codex` |
 | `codex.sessions_dir` | — | service `--codex-root` | effective `codex.home` + `/sessions` |
+| `cursor.config_dir` | — | — | `~/.cursor`; skills are installed under it |
+| `cursor.followup_delivery` | — | — | `false`: the Cursor `stop` hook never auto-submits queued peer events |
 | `network.mode` | `RHIZOME_LAN`, `RHIZOME_TAILSCALE` | mcp `--lan`, `--tailscale` | `local` |
 | `network.bind_addr` | `RHIZOME_BIND_ADDR` | mcp `--bind-addr` | LAN: all interfaces; Tailscale: the Tailscale IP |
 | `network.advertise_addr` | `RHIZOME_ADVERTISE_ADDR` | mcp `--advertise-addr` | first private interface; Tailscale: the Tailscale IP |
@@ -64,12 +66,17 @@ home = "~/.codex"
 # Omit, or leave empty, to derive from home.
 sessions_dir = ""
 
+[cursor]
+config_dir = "~/.cursor"
+# Opt in to end-of-turn delivery through the Cursor stop hook; see docs/cursor.md.
+followup_delivery = false
+
 # Optional. Omit the table, or use mode = "local", for loopback only.
 [network]
 mode = "local"   # or "lan", or "tailscale"
 ```
 
-`hostname` controls the `host` label in session listings for both supported agents
+`hostname` controls the `host` label in session listings for every supported agent
 and observer sessions. A missing, empty, or whitespace-only value uses the OS
 hostname at startup (the portion before the first dot, bounded to 64 bytes).
 Custom labels are trimmed, must be valid UTF-8, contain no control characters,
@@ -87,9 +94,9 @@ controls MCP gossip and must be local when pairing is enabled. `rhizome setup`
 can write this file for you ([Collaboration skill](#collaboration-skill)).
 
 Settings are grouped by the agent they describe. Which agent a process serves is
-not configuration: each MCP client launches `rhizome mcp --agent claude` or
-`--agent codex` (Claude is the default), so one file serves both agents on a
-device. Path settings expand `~`, `$HOME`, and `${HOME}` and must resolve to
+not configuration: each MCP client launches `rhizome mcp --agent claude`,
+`--agent codex` or `--agent cursor` (Claude is the default), so one file serves
+every agent on a device. Path settings expand `~`, `$HOME`, and `${HOME}` and must resolve to
 absolute paths. `codex.bin` may be an executable name on PATH. Empty agent
 directories also use their defaults. Unknown keys/tables, wrong types, invalid
 TOML, relative paths, and identical log roots fail before startup.
@@ -147,6 +154,20 @@ synthetic input, so setup also installs a display-only TUI plugin that shows a
 toast with a sanitized excerpt of each peer delivery. Add the MCP entry
 by hand from `examples/opencode/`; tested with OpenCode **2.0.32**. See
 [OpenCode setup and limits](docs/opencode.md).
+
+## Cursor
+
+Cursor IDE chats and Cursor CLI sessions use `rhizome mcp --agent cursor` with
+the same tools and cross-agent subscriptions. Cursor's MCP tool calls carry no
+conversation identity and nothing can push into an idle chat, so binding and
+collection come from Cursor's shell hooks running `rhizome hook --agent cursor`,
+and peer events are injected at tool and turn boundaries (`additional_context`;
+the `stop` follow-up only with `[cursor] followup_delivery = true`). Each
+conversation gets its own node; several chats in one window need the
+`beforeMCPExecution` hook to attribute tool calls, otherwise they fail closed.
+Cursor logs are not indexed for history. This integration is verified with
+synthetic hook payloads only; see [Cursor setup, limitations and the live
+checklist](docs/cursor.md) and the samples in `examples/cursor/`.
 
 ## Claude setup
 
@@ -231,7 +252,8 @@ project-directory label. The effective name is resolved in this order:
 1. An explicit override set with `set_session_name(name)` by that session.
 2. The agent's native title: Claude's `/rename` title (`custom-title` transcript
    record), then Claude's automatic title (`ai-title`); for Codex the thread name
-   reported by the App Server; for OpenCode the session title.
+   reported by the App Server; for OpenCode the session title. Cursor exposes no
+   native title.
 3. A stable fallback `<display_name> · <agent_type> · <first 8 characters of
    session_id>`, identical across process restarts for the same session and project.
 
@@ -513,7 +535,7 @@ or leave feeds paused when you do not want peer-triggered work.
 
 ## Collaboration skill
 
-`skills/rhizome-collab/` is a user-invoked skill (Claude Code, Codex or OpenCode) that guides
+`skills/rhizome-collab/` is a user-invoked skill (Claude Code, Codex, OpenCode or Cursor) that guides
 an agent through listing peers, naming its own session after a concise task
 description, telling which device each session runs on, reviewing recorded
 status read-only, judging relevance, subscribing deliberately, treating peer
@@ -534,15 +556,16 @@ with the agent's MCP registration and hooks.
 
 ```sh
 ./rhizome setup                     # interactive: pick agents with a checkbox list
-./rhizome setup --agents all        # select every agent (incl. opencode); terminal still asks config questions
-./rhizome setup --agents claude     # or codex, opencode, or claude,codex,opencode
+./rhizome setup --agents all        # select every agent (incl. opencode and cursor); terminal still asks config questions
+./rhizome setup --agents claude     # or codex, opencode, cursor, or claude,codex,opencode,cursor
 ./rhizome setup --list              # read-only: detected agents and destinations
 ./rhizome setup --plain             # original line/picker prompts
 ```
 
 Setup detects Claude Code (`$CLAUDE_CONFIG_DIR` or `~/.claude`, or `claude` on
 PATH), Codex (`$CODEX_HOME` or `~/.codex`, or `codex` on PATH) and OpenCode
-(`$XDG_CONFIG_HOME/opencode`, `~/.config/opencode`, or `opencode` on PATH). For
+(`$XDG_CONFIG_HOME/opencode`, `~/.config/opencode`, or `opencode` on PATH) and Cursor (`[cursor].config_dir`
+or `~/.cursor`, or `cursor`/`agent`/`cursor-agent` on PATH). For
 OpenCode, setup also installs the relay plugin to
 `<config>/opencode/plugins/rhizome.js` and the TUI toast plugin to
 `<config>/opencode/plugins/rhizome-tui/tui.js`. The picker
@@ -582,6 +605,7 @@ development checkout can still be linked instead:
 ```sh
 ln -s "$PWD/skills/rhizome-collab" ~/.claude/skills/rhizome-collab   # Claude Code
 ln -s "$PWD/skills/rhizome-collab" ~/.codex/skills/rhizome-collab    # Codex
+ln -s "$PWD/skills/rhizome-collab" ~/.cursor/skills/rhizome-collab   # Cursor
 ```
 
 Setup reports each file and backup, then the steps it cannot do for you:
@@ -691,6 +715,7 @@ task test-plugin                    # OpenCode plugin tests (Node 20+)
 python3 scripts/smoke_stdio.py      # real processes, valid stdout, EOF, restart
 python3 scripts/smoke_service.py    # observer/direct coexistence, restart, history catalog
 python3 scripts/smoke_stdio.py --lan  # same, LAN mode: separate registries, pinned TLS
+python3 scripts/smoke_cursor.py     # Cursor mode with synthetic hook payloads and a Claude peer
 ```
 
 The smokes run every process with an empty `RHIZOME_CONFIG` file in their
