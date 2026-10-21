@@ -90,7 +90,9 @@ a real tailnet; the two-device Tailscale checklist in
 before apply must not write skills, config, or service state. The opt-in
 "install and start" service step (`setup_service.go`) follows the configuration
 whether it was created, replaced, or kept; it runs the normal install lifecycle
-through an injectable `serviceInstaller`, reports running only after
+through an injectable `serviceInstaller` (which replaces an outdated definition
+by stopping, rewriting and starting the service, and refuses only a runtime
+directory change while the observer runs), reports running only after
 `service.Inspect` confirms the observer lock, distinguishes an installed
 definition from a running observer on failure, and is never run by `--list` or
 by `--network` without the interactive questions. Use `config.Preview`

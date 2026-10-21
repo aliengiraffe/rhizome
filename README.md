@@ -135,8 +135,8 @@ manifest (`rhizome_<version>_checksums.txt`). Verify downloads with
 `shasum -a 256 -c rhizome_<version>_checksums.txt`, then check the build with
 `rhizome --version`. The installer never touches `~/.rhizome` and never installs
 or restarts the observer. Run `rhizome setup` and `rhizome service install`
-yourself, and after an upgrade run `rhizome service stop` and then
-`rhizome service start`. Tag conventions, prereleases, verification, upgrades,
+yourself, and after an upgrade run `rhizome service install` again (it
+replaces an outdated definition and restarts the observer). Tag conventions, prereleases, verification, upgrades,
 uninstall and platform limits are in [docs/releasing.md](docs/releasing.md).
 To build from source, follow the steps below.
 
