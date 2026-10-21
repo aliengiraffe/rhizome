@@ -25,19 +25,22 @@ type Config struct {
 	RuntimeDir string `toml:"runtime_dir"`
 	Hostname   string `toml:"hostname"`
 	Claude     struct {
-		ConfigDir   string `toml:"config_dir"`   // CLAUDE_CONFIG_DIR; skills and transcripts live under it.
-		ProjectsDir string `toml:"projects_dir"` // Transcript root the observer watches; default <config_dir>/projects.
+		ConfigDir   string      `toml:"config_dir"`   // CLAUDE_CONFIG_DIR; skills and transcripts live under it.
+		ProjectsDir string      `toml:"projects_dir"` // Transcript root the observer watches; default <config_dir>/projects.
+		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for Claude-sourced history.
 	} `toml:"claude"`
 	Codex struct {
-		Bin         string `toml:"bin"`          // Codex CLI executable name or path.
-		Home        string `toml:"home"`         // CODEX_HOME; App Server socket and skills live under it.
-		SessionsDir string `toml:"sessions_dir"` // Session log root the observer watches; default <home>/sessions.
+		Bin         string      `toml:"bin"`          // Codex CLI executable name or path.
+		Home        string      `toml:"home"`         // CODEX_HOME; App Server socket and skills live under it.
+		SessionsDir string      `toml:"sessions_dir"` // Session log root the observer watches; default <home>/sessions.
+		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for Codex-sourced history.
 	} `toml:"codex"`
-	Gateway Gateway           `toml:"gateway"`
-	Network Network           `toml:"network"`
-	Path    string            `toml:"-"`
-	Found   bool              `toml:"-"`
-	Sources map[string]string `toml:"-"`
+	Gateway     Gateway           `toml:"gateway"`
+	Network     Network           `toml:"network"`
+	PeerHistory HistoryPolicy     `toml:"-"` // Effective policy for paired hosts reading local history.
+	Path        string            `toml:"-"`
+	Found       bool              `toml:"-"`
+	Sources     map[string]string `toml:"-"`
 }
 
 // Network selects how `rhizome mcp` peers. Mode "local" (the default) is
@@ -190,6 +193,12 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	for _, k := range networkKeys {
 		known["network."+k] = true
 	}
+	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history"} {
+		known[table] = true
+		for _, k := range peerHistoryKeys {
+			known[table+"."+k] = true
+		}
+	}
 	for _, s := range raw.settings() {
 		known[s.key] = true
 	}
@@ -211,6 +220,22 @@ func Resolve(flags map[string]string, getenv func(string) string) (Config, error
 	}
 	if err := raw.Gateway.Validate(); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	c.PeerHistory, err = historyPolicy(raw.Gateway.History, map[string]PeerHistory{"claude": raw.Claude.PeerHistory, "codex": raw.Codex.PeerHistory}, func(table, key string) bool {
+		return md.IsDefined(append(strings.Split(table, "."), key)...)
+	})
+	if err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	c.Gateway.History, c.Claude.PeerHistory, c.Codex.PeerHistory = raw.Gateway.History, raw.Claude.PeerHistory, raw.Codex.PeerHistory
+	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history"} {
+		for _, k := range peerHistoryKeys {
+			source := "default"
+			if md.IsDefined(append(strings.Split(table, "."), k)...) {
+				source = "file"
+			}
+			c.Sources[table+"."+k] = source
+		}
 	}
 	c.Network = raw.Network
 	for _, k := range networkKeys {
@@ -364,6 +389,30 @@ func (c Config) Write(w io.Writer) error {
 	for _, l := range lines {
 		if _, err := fmt.Fprintf(w, "%s = %s # source: %s\n", l.key, l.value, c.Sources[l.key]); err != nil {
 			return err
+		}
+	}
+	// Peer history shows the effective, inherited policy, not only file values.
+	if _, err := fmt.Fprintf(w, "gateway.history.enabled = %t # source: %s\n", c.PeerHistory.Enabled, c.Sources["gateway.history.enabled"]); err != nil {
+		return err
+	}
+	global := c.Gateway.History.Lookback
+	if global == "" {
+		global = DefaultLookback
+	}
+	if _, err := fmt.Fprintf(w, "gateway.history.lookback = %q # source: %s\n", global, c.Sources["gateway.history.lookback"]); err != nil {
+		return err
+	}
+	for _, agent := range HistoryAgents {
+		a := c.PeerHistory.Agent(agent)
+		for _, l := range []struct{ key, value string }{{"enabled", fmt.Sprint(a.Enabled)}, {"lookback", fmt.Sprintf("%q", a.Lookback())}} {
+			key := agent + ".peer_history." + l.key
+			source := c.Sources[key]
+			if source == "default" {
+				source = "inherited"
+			}
+			if _, err := fmt.Fprintf(w, "%s = %s # effective; source: %s\n", key, l.value, source); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

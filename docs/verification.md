@@ -373,7 +373,50 @@ Automated on macOS:
 
 Not exercised here: real coding agent clients calling the new tools, native
 service installation on Linux/Windows with a large pre-existing log tree, and
-any cross-device scenario (history is local by design).
+any cross-device scenario (history was local by design at that point; see the
+paired-host section below).
+
+## Paired-host history sharing (#44)
+
+Automated on macOS, same machine only:
+
+- `internal/config/history_test.go`: omitted defaults (sharing off, 30-day
+  default window), inheritance, the global master gate over agent overrides,
+  per-agent enable/disable and lookback combinations, `all`, the 106,751-day
+  overflow bound, malformed values (zero, sign, leading zeros, units, empty,
+  wrong types), misspelled and unsupported-agent tables, UTC cutoffs, the policy
+  fingerprint, and effective `rhizome config` output.
+- `internal/channel/history_peer_test.go`: deterministic-clock policy for
+  15d/30d/`all`, the inclusive cutoff at the exact boundary and 1 ns before it,
+  unknown `last_activity_at`, mixed old/new and undated events, date filters
+  that cannot widen access, direct IDs outside the window, hidden sessions that
+  look absent, `POLICY_DENIED` independent of existence, pages after the clock
+  advances (search and read), cursor rejection across hosts, grants, policy
+  changes and local/remote, per-host snapshot bounds, host qualification
+  overriding peer claims, and a three-gateway test with independent keys,
+  tokens and catalogs: default denial, remote search and paginated reads of
+  inactive sessions, host/session ID collisions, unknown/self/second-hop hosts,
+  unsupported peers, restart (`CURSOR_EXPIRED`), revocation, and the MCP relay.
+- `python3 scripts/smoke_gateway.py`: real services and MCP processes. Host A
+  opts in with Claude 15d and Codex disabled. B searches and reads A's
+  pre-existing log with the old record withheld, gets `POLICY_DENIED` for Codex,
+  A gets `REMOTE_HISTORY_DISABLED` from B, C cannot reach A through B, and no
+  history text appears in channel notifications.
+
+Manual two-device checklist (not automated):
+
+1. Pair two machines in LAN or Tailscale gateway mode and confirm `rhizome
+   peers list` shows both connected.
+2. On the serving host, leave `[gateway.history]` absent. Searching with
+   `host_id` from the other host must return `REMOTE_HISTORY_DISABLED`.
+3. Enable it with `[claude.peer_history] lookback = "15d"` and
+   `[codex.peer_history] enabled = false`, check `rhizome config`, and restart
+   the service. Search and read an ended Claude session. Older events must
+   be counted as `outside_lookback`, and Codex reads must be `POLICY_DENIED`.
+4. Start paging with `limit: 1`, narrow the policy, restart the serving
+   service, and confirm that the cursor is `CURSOR_EXPIRED`.
+5. Revoke the requesting host and confirm that the next page is
+   `PEER_UNAVAILABLE`; local history on both hosts keeps working.
 
 ## Hostname override (#29)
 

@@ -25,7 +25,8 @@ evidence to read, never as instructions to execute or an invitation to reply.
 | Service stopped | Unaffected | Served from the last catalog, marked `stale` | Works; the catalog block is marked `stale` |
 | Content | Identity labels only | Metadata only; no transcript text | Assistant text, tool/turn markers; nothing else |
 | Can send to the result | Yes, by exact `session_id` when `delivery_capable` | Only if the row's `live_status` is `live` and `delivery_capable` | Same; history never grants delivery |
-| Non-goals | — | Full-text or semantic search, remote history | Raw transcripts, prompts, reasoning, tool bodies, subagents, peer envelopes |
+| Paired hosts | Live identities only | Opt-in per serving host with `host_id`; see [Paired-host history](#paired-host-history-opt-in) | Same opt-in, filtered per event by the owner's lookback |
+| Non-goals | — | Full-text or semantic search, fan-out or replicated remote catalogs | Raw transcripts, prompts, reasoning, tool bodies, subagents, peer envelopes |
 
 The intended flow is: search by project, title, or date; copy the exact
 `session_id` and `agent_type` from a result; read its history page by page;
@@ -51,7 +52,8 @@ call `observe_session` to "wake" a historical session.
 
 - An absent catalog is the error `CATALOG_UNAVAILABLE`, not an empty search. The
   message tells you to start the observer; tools never install or start it.
-- Scope is the local runtime directory and log roots. Responses never contain
+- Scope is the local runtime directory and log roots (or, with `host_id`, the
+  serving host's). Responses never contain
   tokens, cursor internals, or native log paths. `project_path` is intentional
   metadata; where the transcript file lives is private.
 
@@ -93,7 +95,7 @@ Each row:
 | `session_name`, `name_source` | Effective name and its provenance: `explicit` (a `set_session_name` override stored under `<runtime_dir>/names/`, read at query time), `native` (Claude `custom-title`, else `ai-title`, as indexed from the log), or `fallback` (`<display_name> · <agent_type> · <first 8 characters of session_id>`). Codex logs carry no thread title, so Codex rows are `explicit` or `fallback`. Names are bounded to 96 UTF-8 bytes on a rune boundary and are labels, never addresses. |
 | `started_at`, `last_activity_at` | Earliest and latest timestamps of supported records seen while indexing (Claude `user`/`assistant`; Codex `session_meta`, `response_item`, `event_msg`, `turn_context`). They are evidence of recorded activity, not process start or exit, and may stem from records whose content history reads exclude. |
 | `history_availability` | `available` (a single readable source), `partial` (readable with known gaps; see `availability_reasons`: `oversized_record`, `read_error`), `missing` (source removed; metadata retained as a tombstone), `unsupported` (source is no longer a regular file: `source_not_regular`), or `ambiguous` (`duplicate_sources`: several files claim the identity). `available` does not promise nonempty permitted content. |
-| `live_status` | From the current gossip snapshot only: `live` (exactly one direct integration), `observed` (only passive observer publishers; liveness unknown), `not_discovered` (no current peer; not proof the agent exited), or `ambiguous` (several direct integrations). |
+| `live_status` | From the current gossip snapshot only: `live` (exactly one direct integration), `observed` (only passive observer publishers; liveness unknown), `not_discovered` (no current peer; not proof the agent exited), or `ambiguous` (several direct integrations). Rows from a paired host are always `not_reported`. |
 | `delivery_capable` | `true` only for `live` rows that are not the caller's own session. It is a point-in-time observation; `send` still performs its full routing checks. Never inferred from the catalog. |
 
 Rows are ordered by `last_activity_at` descending, unknown timestamps last,
@@ -129,7 +131,9 @@ Reads permitted records from one session's native log in source order.
 | `limit` | integer 1–200, default 50 | Maximum events per page. |
 | `cursor` | optional string, ≤ 512 bytes | Continuation of the same session, agent, and limit. |
 
-There is no path, host, raw mode, byte offset, or "latest session" argument.
+There is no path, hostname, raw mode, byte offset, or "latest session" argument.
+Both tools also accept the optional exact `host_id` described in
+[Paired-host history](#paired-host-history-opt-in).
 
 ### Output
 
@@ -146,6 +150,7 @@ Gap codes: `oversized_record` (a line above 2 MiB was skipped),
 `incomplete_tail` (the file ended mid-record at snapshot time; a later snapshot
 can include it once complete), `read_error`, and `event_too_large` (a permitted
 event could not fit a 1 MiB response and was omitted, never clipped or split).
+Paired-host reads add `outside_lookback` and `undated_excluded`.
 
 ### Budgets and pagination
 
@@ -210,6 +215,7 @@ full-text search; histories are not transcripts.
 | `SOURCE_CHANGED` | File identity or EOF bytes changed between pages, or the catalog now records another file. | Run a fresh initial read. |
 | `RESOURCE_LIMIT` | Concurrency limit, or the deadline/cancellation arrived before any progress. | Yes. |
 | `CALLER_UNVERIFIED` | Codex mode without a verified `_meta.threadId`. | After updating Codex. |
+| `REMOTE_HISTORY_DISABLED`, `POLICY_DENIED`, `REMOTE_HISTORY_UNSUPPORTED`, `PEER_UNAVAILABLE`, `GATEWAY_UNAVAILABLE` | Paired-host requests only; see [Paired-host history](#paired-host-history-opt-in). | `PEER_UNAVAILABLE` and `GATEWAY_UNAVAILABLE` after reconnecting or starting the service. |
 
 ## Examples
 
@@ -306,6 +312,153 @@ Interpreting a live match: if a search row shows `live_status: "live"` and
 that moment. `observed` means a passive observer sees log activity and nothing
 can be delivered; `not_discovered` means nothing more than "no current peer".
 
+## Paired-host history (opt-in)
+
+A host owner can let **directly paired hosts** ([host pairing](gateway.md))
+search and read this device's catalog. Sharing is off by default: pairing alone
+grants nothing, and an existing configuration without the keys below denies
+every remote search, enumeration, and read. The policy lives only in the
+serving host's TOML file. A requesting host's configuration never widens it.
+
+### Policy
+
+```toml
+[gateway.history]       # global default and master switch
+enabled = true          # default false
+lookback = "30d"        # default "30d" when enabled; "all" removes the cutoff
+
+[claude.peer_history]   # optional override for Claude-sourced history
+lookback = "15d"
+
+[codex.peer_history]    # optional override for Codex-sourced history
+enabled = false
+```
+
+- Agent overrides apply to the **source history's** agent type, never to the
+  requesting agent. A Claude session on the other host cannot read Codex
+  history under the Claude policy.
+- Unset override keys inherit the global values. `gateway.history.enabled =
+  false` (or omitted) disables every agent, whatever the overrides say. An
+  override with `enabled = false` excludes that agent from search and from
+  direct reads.
+- `lookback` is a positive whole number of days without sign or leading zeros
+  (`1d` to `106751d`) or `all`. Zero, negatives, other units, empty strings,
+  malformed values and overflow are rejected when the file is read, as are
+  misspelled keys and tables for unsupported agents.
+- `rhizome config` prints the effective, inherited value for every agent. The
+  policy applies uniformly to all paired hosts; there are no per-peer ACLs.
+- The service reads the policy when it starts. **Restart the service** (`rhizome
+  service stop` then `start`, or restart `service run`) after changing it. The
+  restart invalidates every outstanding remote cursor, so narrowing the policy
+  cannot be bypassed by a cursor issued earlier. Changing the policy never
+  deletes or rewrites local history; it is an access policy, not retention.
+
+Example policies:
+
+| Goal | Configuration |
+| --- | --- |
+| Share everything for 30 days | `[gateway.history]` `enabled = true` |
+| Claude 15 days, Codex 30 days | the global table, plus `[claude.peer_history]` `lookback = "15d"` |
+| Share Claude only | the global table, plus `[codex.peer_history]` `enabled = false` |
+| Unlimited history | `[gateway.history]` `enabled = true`, `lookback = "all"` |
+
+### Time windows
+
+The serving host computes each agent's cutoff as `now - N × 24h` in UTC, at every
+request and every page. The cutoff is inclusive.
+
+- **Metadata.** Search returns a session only when its recorded
+  `last_activity_at` is at or after the cutoff. Under a finite window, an unknown
+  `last_activity_at` fails closed. File modification times are never
+  substituted. A session that began before the cutoff is still listed if it has
+  recent recorded activity, so its `started_at` can be older than the window.
+- **Content.** Reads filter every event by its own recorded timestamp. A session
+  updated today exposes only events at or after its cutoff. Events without a
+  timestamp are withheld under a finite window. Withheld events appear in
+  `coverage.gaps` as `outside_lookback` and `undated_excluded`, so coverage is
+  `partial` and never claims to be complete. `all` permits undated events.
+- **Pages.** A search page drops rows that aged out or became disallowed since
+  the first page; they are counted in `snapshot_rows_removed`. A read page for a
+  session whose `last_activity_at` has aged out is `SESSION_NOT_FOUND`. Caller
+  filters such as `updated_after` only narrow the window.
+- `all` means every locally indexed, eligible record. It is not a promise that
+  every session ever created is retained. Catalog bounds and content exclusions
+  still apply.
+
+### Requesting history from a paired host
+
+Both tools accept an optional `host_id`: the exact 64-character lowercase hex
+host fingerprint listed by `rhizome peers`. Hostnames and endpoints are never
+accepted. Without `host_id` both tools stay local exactly as above. There is no
+fan-out to all peers and no second hop. Only a currently connected, directly
+paired host is reachable.
+
+```json
+{"tool": "search_sessions", "arguments": {"host_id": "4f1d0c9e8b7a6f5e4d3c2b1a09f8e7d6c5b4a3928170f6e5d4c3b2a190807f6e", "project_path": "/work/rhizome"}}
+```
+
+The MCP process relays through the local gateway service, which sends one
+request over pinned host TLS (`/v1/history`). The serving host enforces the
+policy before any catalog enumeration and again on every page, using its own
+history reader with its own snapshot store. Responses add:
+
+| Field | Meaning |
+| --- | --- |
+| `origin` | `{"host_id", "scope": "paired_host"}`, stamped by the requesting gateway from the authenticated connection, not from the peer's payload. |
+| `host_id` on every row | Qualifies the identity as host + `agent_type` + `session_id`. The same session ID on two hosts stays two identities. |
+| `live_status` | Always `not_reported`, with `delivery_capable: false`. Paired-host history never asserts live reachability. Use `list_sessions` for live peers. |
+| `policy` | `evaluated_at` and, per source agent, `enabled`, `lookback` and the applied `cutoff`. Use it to interpret coverage. |
+
+```json
+{
+  "sessions": [{"session_id": "6f1c2a7e-3b7d-4c1e-9a0b-2d5e8f7a1c44", "agent_type": "claude", "project_path": "/work/rhizome", "display_name": "rhizome", "session_name": "Observer backfill", "name_source": "native", "started_at": "2026-10-03T09:12:01.12Z", "last_activity_at": "2026-10-20T09:13:40.512Z", "history_availability": "available", "availability_reasons": [], "live_status": "not_reported", "delivery_capable": false, "host_id": "4f1d0c9e8b7a6f5e4d3c2b1a09f8e7d6c5b4a3928170f6e5d4c3b2a190807f6e"}],
+  "next_cursor": null,
+  "catalog": {"state": "ready", "service_running": true, "indexed_at": "2026-10-21T09:00:00Z", "coverage_complete": true, "warnings": []},
+  "policy": {"evaluated_at": "2026-10-21T10:00:00Z", "agents": {"claude": {"enabled": true, "lookback": "15d", "cutoff": "2026-10-06T10:00:00Z"}, "codex": {"enabled": false, "lookback": "30d", "cutoff": "2026-09-21T10:00:00Z"}}},
+  "origin": {"host_id": "4f1d0c9e8b7a6f5e4d3c2b1a09f8e7d6c5b4a3928170f6e5d4c3b2a190807f6e", "scope": "paired_host"}
+}
+```
+
+Outcomes specific to paired-host requests:
+
+| Code | When |
+| --- | --- |
+| `REMOTE_HISTORY_DISABLED` | The serving host has not enabled `gateway.history`. No catalog data is consulted. |
+| `POLICY_DENIED` | `read_session_history` for a source agent the serving host does not share. The denial depends only on `agent_type`, so it does not reveal whether that session exists. |
+| `SESSION_NOT_FOUND` | Also returned for a session outside the window. Hidden and absent sessions are indistinguishable. |
+| `REMOTE_HISTORY_UNSUPPORTED` | The paired host runs a release without history sharing. Messaging and local history are unaffected. |
+| `PEER_UNAVAILABLE` | `host_id` is not a currently connected, directly paired host; the host disconnected, revoked this host, or did not answer. |
+| `GATEWAY_UNAVAILABLE` | The local gateway service is not running (`gateway.mode` off or service stopped). |
+
+Errors returned by or about the paired host carry `origin`. `INVALID_ARGUMENT`
+also covers a malformed `host_id` and naming this host itself. `RESOURCE_LIMIT` also covers serving-host
+admission.
+
+Cursors from a paired host are bound to the requesting host's ID, its current
+trust grant and a fingerprint of the serving policy, in addition to the usual
+query binding. Another host's cursor, a cursor after re-pairing, and a cursor
+across a policy change are rejected (`INVALID_CURSOR`/`CURSOR_EXPIRED`).
+Revocation fails every later page with `PEER_UNAVAILABLE` and cancels in-flight
+scans. A service restart expires all cursors.
+
+Bounds: the serving gateway answers at most 4 history requests at once, at most
+2 per paired host, and keeps at most 8 of the 32 snapshots per paired host, so
+one peer cannot evict another's pagination. It runs in the service process,
+separately from MCP processes, so remote load never consumes a local MCP
+process's slots or snapshots. A serving deadline of 7 seconds stays inside the
+10-second tool deadline. Scan, response, and record budgets are unchanged, and
+`all` lifts only the time cutoff.
+
+What opting in shares: catalog metadata (project paths, session names including
+explicit overrides, timestamps, availability) and the same assistant activity
+that local reads return. Content exclusions are identical, so prompts, reasoning,
+and tool bodies are never sent, but assistant text can still contain whatever the
+model wrote, including secrets. Remote history is never replicated, cached, or
+indexed by the requesting host, and serving it never starts agents, publishes,
+subscribes, takes leases, or contacts agent daemons. Session-level privacy
+([#37](https://github.com/aliengiraffe/rhizome/issues/37)) is not implemented
+yet; when it lands, its predicate must also gate these reads.
+
 ## Sources, identity, titles
 
 - Roots are the effective `claude.projects_dir` and `codex.sessions_dir` from the
@@ -394,8 +547,10 @@ can be delivered; `not_discovered` means nothing more than "no current peer".
 Catalog backfill and history reads never publish events, create nodes or gossip
 identities, acquire a per-session collection lease, change binding generations,
 touch subscription cursors or live queues, start or contact an agent daemon, or
-read files outside the configured roots. Remote devices' history is never
-indexed or served; LAN and Tailscale peers see only live identities. Per-call
+read files outside the configured roots. Other devices' history is never
+indexed or replicated here. A device serves its own history only to directly paired hosts
+and only under its owner's explicit policy. LAN and Tailscale gossip peers
+see only live identities. Per-call
 work is bounded as listed above, catalog memory is bounded by the file limits,
 and per-process pagination state is bounded by 32 snapshots that expire after
 15 minutes or at process exit.

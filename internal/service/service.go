@@ -21,14 +21,15 @@ import (
 
 // Config contains the resolved observer settings and selected TOML path.
 type Config struct {
-	ConfigPath string
-	Gateway    config.Gateway
-	Observer   channel.ObserverOptions
+	ConfigPath  string
+	Gateway     config.Gateway
+	PeerHistory config.HistoryPolicy // Served to paired hosts by the gateway; read at service start.
+	Observer    channel.ObserverOptions
 }
 
 // FromConfig adapts resolved configuration for the observer.
 func FromConfig(c config.Config) Config {
-	return Config{ConfigPath: c.Path, Gateway: c.Gateway, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir}}
+	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir}}
 }
 
 type command struct {

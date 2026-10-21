@@ -22,7 +22,7 @@ Start with [README.md](README.md) for behavior and setup,
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), and session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools). |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), and session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`). |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests. |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
@@ -116,7 +116,7 @@ a real tailnet; the two-device Tailscale checklist in
   when pairing is enabled. The service bridges remote sessions through protocol-2
   proxies (`gateway_host`); only local identities with `gateway_version = 1`
   are exported. Never forward proxy advertisements, trust peer-supplied endpoints,
-  or expose local history/admin remotely. Cross-host ID collisions fail closed.
+  or expose the admin API or history except through the opt-in peer-history policy below. Cross-host ID collisions fail closed.
   Revocation closes connections and invalidates queued events via local trust
   grants; old invitations cannot restore revoked trust. State is private under
   `<runtime>/gateway/`. Session privacy (#37) is not yet implemented; the shared
@@ -217,6 +217,21 @@ a real tailnet; the two-device Tailscale checklist in
   snapshots for 15 minutes), signed single-use forward-only cursors, and the
   stable error codes in `docs/history.md`. Live status comes only from current
   discovery; never derive `delivery_capable` from a catalog row.
+- **Peer history is opt-in, serving-host enforced and direct.** File-only keys
+  `[gateway.history]` (`enabled` default false, `lookback` default `30d`) and
+  `[claude|codex.peer_history]` overrides resolve to `config.HistoryPolicy`.
+  The global switch is a master gate, and agent keys refer to the source
+  history's agent. The service reads the policy at start; a restart applies a
+  change and expires remote cursors. Tools take an optional exact `host_id`
+  (lowercase fingerprint). Omitting it stays local, with no fan-out or second
+  hop. The gateway's `/v1/history` serves only trusted, connected peers and checks
+  policy before enumeration and on every page: inclusive UTC cutoffs on
+  `last_activity_at` and on each event timestamp, with unknown timestamps failing
+  closed unless `all`. Hidden sessions look absent. Cursors bind host, grant and
+  policy fingerprint. Rows are stamped with the authenticated `host_id` and
+  `live_status: not_reported`. Bounds: 4 concurrent, 2 per peer, 8 snapshots
+  per peer (`internal/channel/history_peer.go`, `internal/config/history.go`,
+  `docs/history.md`).
 
 ## Git and PR conventions
 

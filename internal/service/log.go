@@ -57,7 +57,9 @@ func RunForeground(ctx context.Context, c Config) error {
 	defer cancel()
 	results := make(chan error, 2)
 	go func() { results <- channel.RunObserver(ctx, c.Observer) }()
-	go func() { results <- channel.RunGateway(ctx, c.Observer.Runtime, c.Gateway) }()
+	go func() {
+		results <- channel.RunGateway(ctx, c.Observer.Runtime, c.Gateway, channel.GatewayHistory{ClaudeRoot: c.Observer.ClaudeRoot, CodexRoot: c.Observer.CodexRoot, Policy: c.PeerHistory})
+	}()
 	err := <-results
 	cancel()
 	other := <-results

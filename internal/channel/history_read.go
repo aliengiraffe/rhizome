@@ -34,6 +34,7 @@ const (
 	historyDeadline      = 10 * time.Second
 	maxHistoryConcurrent = 4
 	maxCursorLength      = 512
+	maxPeerSnapshots     = 8 // per paired host, so one peer cannot evict another's pagination
 )
 
 type historyEvent struct {
@@ -41,6 +42,7 @@ type historyEvent struct {
 	Timestamp *string `json:"timestamp"`
 	Kind      string  `json:"kind"`
 	Text      *string `json:"text"`
+	at        *time.Time
 }
 
 // historySink collects the live normalizer's output for one record without
@@ -48,6 +50,7 @@ type historyEvent struct {
 type historySink struct {
 	identity *pb.Identity
 	ts       *string
+	at       *time.Time
 	offset   int64
 	events   []historyEvent
 	skips    uint64
@@ -65,7 +68,7 @@ func (s *historySink) activity(_ uint64, kind, text string) {
 	default:
 		return
 	}
-	ev := historyEvent{ID: fmt.Sprintf("%x-%d", s.offset, len(s.events)), Timestamp: s.ts, Kind: k}
+	ev := historyEvent{ID: fmt.Sprintf("%x-%d", s.offset, len(s.events)), Timestamp: s.ts, Kind: k, at: s.at}
 	if kind != "turn" {
 		t := text
 		ev.Text = &t
@@ -80,6 +83,8 @@ func (s *historySink) countSkip()                          { s.skips++ }
 // ordered row set; read snapshots fix a source EOF boundary and parser state.
 type snapshot struct {
 	id, kind, query  string
+	owner            string // authenticated paired host; "" for local MCP use
+	access           *historyAccess
 	created, expires time.Time
 	page             int
 	busy             bool
@@ -123,17 +128,27 @@ func (st *snapshotStore) put(s *snapshot) {
 			delete(st.items, key)
 		}
 	}
-	for len(st.items) >= maxSnapshots {
+	evict := func(owned bool) bool {
 		var oldest *snapshot
+		count := 0
 		for _, other := range st.items {
+			if owned && other.owner != s.owner {
+				continue
+			}
+			count++
 			if !other.busy && (oldest == nil || other.created.Before(oldest.created)) {
 				oldest = other
 			}
 		}
-		if oldest == nil {
-			break
+		if oldest == nil || owned && count < maxPeerSnapshots {
+			return false
 		}
 		delete(st.items, oldest.id)
+		return true
+	}
+	for s.owner != "" && evict(true) {
+	}
+	for len(st.items) >= maxSnapshots && evict(false) {
 	}
 	s.id = id()
 	s.created = now
@@ -303,6 +318,12 @@ func (h *historyService) readPage(ctx context.Context, s *snapshot, limit int) (
 	used := 0
 	budget := maxHistoryResponse - historyReserve
 	place := func(ev historyEvent) bool {
+		if s.access != nil {
+			if code := s.access.event(s.agent, ev.at); code != "" {
+				s.gaps[code]++
+				return true
+			}
+		}
 		raw, _ := json.Marshal(ev)
 		size := len(raw) + 1
 		if size > budget {
@@ -372,10 +393,11 @@ func (h *historyService) readPage(ctx context.Context, s *snapshot, limit int) (
 			var meta struct {
 				Timestamp string `json:"timestamp"`
 			}
-			s.sink.ts = nil
+			s.sink.ts, s.sink.at = nil, nil
 			if json.Unmarshal(line, &meta) == nil && meta.Timestamp != "" {
 				if t, err := time.Parse(time.RFC3339Nano, meta.Timestamp); err == nil {
-					s.sink.ts = rfc3339(&t)
+					t = t.UTC()
+					s.sink.ts, s.sink.at = rfc3339(&t), &t
 				}
 			}
 			s.sink.offset = lineStart
