@@ -23,11 +23,11 @@ func gatewayCommand(command string, args []string) error {
 	action := command
 	if command == "peers" {
 		if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-			fmt.Println("usage: rhizome peers list|revoke|invitations|revoke-invite [flags] [id]")
+			fmt.Println("usage: rhizome peers list|revoke|invitations|revoke-invite [flags] [id] (list --tui: interactive paired hosts)")
 			return nil
 		}
 		if len(args) == 0 {
-			return errors.New("usage: rhizome peers list|revoke|invitations|revoke-invite [flags] [id]")
+			return errors.New("usage: rhizome peers list|revoke|invitations|revoke-invite [flags] [id] (list --tui: interactive paired hosts)")
 		}
 		action = args[0]
 		args = args[1:]
@@ -38,11 +38,20 @@ func gatewayCommand(command string, args []string) error {
 			return errors.New("unknown peers action")
 		}
 	}
+	var tui bool
+	if command == "peers" && action == "peers" {
+		fs.BoolVar(&tui, "tui", false, "browse paired hosts interactively (requires a terminal)")
+	}
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return nil
 		}
 		return err
+	}
+	if tui {
+		if err := requireTerminal(); err != nil {
+			return err
+		}
 	}
 	c, err := config.FromFlags(fs)
 	if err != nil {
@@ -78,6 +87,9 @@ func gatewayCommand(command string, args []string) error {
 		if fs.NArg() != 0 {
 			return errors.New("unexpected arguments")
 		}
+	}
+	if tui {
+		return runPanel(peersPanel(c))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()

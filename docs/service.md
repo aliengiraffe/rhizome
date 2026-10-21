@@ -186,3 +186,24 @@ direct delivery, daemon restart, no duplicate replay, pre-existing logs becoming
 searchable and readable, and a stale catalog while the service is stopped. No models or real user logs are involved. Service-definition tests validate
 XML and arguments; they do not prove installation/startup on another operating
 system. Native install/login/recovery tests must be recorded per platform.
+
+## Terminal interface
+
+On usable terminal stdin/stdout (`TERM` must not be `dumb`), bare
+`rhizome service` opens Bubble Tea management. It shows whether the native
+definition exists, whether the observer holds its runtime lock, and available
+observer health counters. The last health snapshot may be stale when stopped;
+this view does not infer native manager state from formatted command output.
+Use `RHIZOME_CONFIG=/absolute/config.toml rhizome service` for a custom config.
+
+Keys: `i` install, `s` start, `x` stop, `u` uninstall, `r` refresh, `q`/Esc/Ctrl+C
+exit. Stop and uninstall require `y` confirmation (`n`/Esc declines). Actions
+reuse existing lifecycle rules, including install override restrictions. Only
+one request runs at a time; status refreshes after actions. Requests are bounded
+and cancelled on exit; completed effects are not rolled back. Errors stay visible.
+Arrows and PgUp/PgDn scroll; resizing and no-color terminals are supported.
+
+`rhizome service status --tui [--config /absolute/config.toml]` opens the same
+status view without lifecycle actions. Explicit subcommands remain one-shot;
+`service run` never launches a UI. Bare noninteractive `service` remains a usage
+error. An explicit `--tui` requires usable terminals and otherwise fails promptly.

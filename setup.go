@@ -240,6 +240,7 @@ func setup(args []string) error {
 	opts := flag.NewFlagSet("setup", flag.ContinueOnError)
 	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex) or \"all\"; omit for an interactive picker")
 	config.Bind(opts)
+	plain := opts.Bool("plain", false, "use the original line/picker prompts instead of Bubble Tea")
 	list := opts.Bool("list", false, "print detected agents and exit")
 	hostname := opts.String("hostname", "", "with --network: device label override; blank uses the OS hostname")
 	network := opts.String("network", "", "write the configuration non-interactively: local, lan or tailscale; omit for the interactive questions")
@@ -270,7 +271,7 @@ func setup(args []string) error {
 	if err != nil {
 		return err
 	}
-	tty := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	tty := usableTerminal()
 	agents := detectAgents(c, exec.LookPath)
 	if *list {
 		for _, a := range agents {
@@ -294,6 +295,15 @@ func setup(args []string) error {
 		answers = &a
 	}
 	var checked []bool
+	if tty && !*plain && (*agentsFlag == "" || answers == nil) {
+		if *agentsFlag != "" {
+			checked, err = parseAgentFlag(*agentsFlag, agents)
+			if err != nil {
+				return err
+			}
+		}
+		return runSetupTUI(newSetupModel(c, path, agents, checked, answers, *replaceConfig))
+	}
 	configOnly := false
 	switch {
 	case *agentsFlag != "":

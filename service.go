@@ -13,8 +13,15 @@ import (
 
 func serviceCommand(args []string) error {
 	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Println("usage: rhizome service install|start|stop|status|uninstall|run [flags]")
+		fmt.Println("usage: rhizome service [install|start|stop|status|uninstall|run] [flags]\nBare service opens terminal management; status --tui is read-only.")
 		return nil
+	}
+	if len(args) == 0 && usableTerminal() {
+		resolved, err := config.Resolve(nil, os.Getenv)
+		if err != nil {
+			return err
+		}
+		return runPanel(servicePanel(resolved, false))
 	}
 	if len(args) == 0 {
 		return fmt.Errorf("usage: rhizome service install|start|stop|status|uninstall|run [flags]")
@@ -25,6 +32,10 @@ func serviceCommand(args []string) error {
 	} else {
 		config.Bind(fs)
 	}
+	var tui bool
+	if args[0] == "status" {
+		fs.BoolVar(&tui, "tui", false, "open read-only interactive status (requires a terminal)")
+	}
 	if err := fs.Parse(args[1:]); err != nil {
 		if err == flag.ErrHelp {
 			return nil
@@ -34,9 +45,17 @@ func serviceCommand(args []string) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected service arguments")
 	}
+	if tui {
+		if err := requireTerminal(); err != nil {
+			return err
+		}
+	}
 	resolved, err := config.FromFlags(fs)
 	if err != nil {
 		return err
+	}
+	if tui {
+		return runPanel(servicePanel(resolved, true))
 	}
 	c := service.FromConfig(resolved)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

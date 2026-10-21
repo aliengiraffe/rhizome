@@ -495,9 +495,10 @@ The skill is embedded in the binary; install it with:
 
 ```sh
 ./rhizome setup                     # interactive: pick agents with a checkbox list
-./rhizome setup --agents all        # non-interactive: every known agent
+./rhizome setup --agents all        # select every agent; terminal still asks config questions
 ./rhizome setup --agents claude     # or codex, or claude,codex
 ./rhizome setup --list              # show what was detected and where skills go
+./rhizome setup --plain             # original line/picker prompts
 ```
 
 Setup detects Claude Code (`$CLAUDE_CONFIG_DIR` or `~/.claude`, or `claude` on
@@ -519,7 +520,17 @@ Then run `/rhizome-collab` in the agent with an optional task description.
 
 ### Creating the configuration file
 
-In a terminal, setup also asks how Rhizome will be used and writes
+With terminal stdin/stdout and `TERM` other than `dumb`, setup uses a Bubble Tea
+wizard when answers are needed. Enter advances, Shift+Tab goes back while retaining
+answers, arrows/space select choices, Ctrl+U clears a text field, and Esc/Ctrl+C
+cancels. Review shows the selected skills and configuration before Apply;
+cancelling before Apply writes nothing. After Apply begins, completed operations
+remain and are reported even if a later step fails or is cancelled. PgUp/PgDn
+scroll long views. `--plain` retains the original prompts (and their immediate
+skill installation behavior). Fully specified `--agents` plus `--network`
+invocations stay noninteractive.
+
+Setup asks how Rhizome will be used and writes
 `~/.rhizome/config.toml` (or the file selected with `--config`/`RHIZOME_CONFIG`,
 which setup may create):
 
@@ -536,7 +547,7 @@ which setup may create):
 
 Enter always takes the safe default. Only answered keys are written, the file is
 created 0600 under a 0700 directory, and the token is never written. An existing
-file is shown and kept unless you choose to replace it, in which case it is
+file is kept unless you choose to replace it, in which case it is
 backed up first (`config.toml.bak-<timestamp>`). Without a terminal, pass the type:
 
 ```sh
@@ -550,6 +561,12 @@ backed up first (`config.toml.bak-<timestamp>`). Without a terminal, pass the ty
 Combine with `--agents` to also install the skill. Without a terminal and without
 `--network`, setup installs skills as before, leaves configuration untouched and
 says so on stderr.
+
+Bare `rhizome service` opens [service management](docs/service.md#terminal-interface)
+on usable terminals. `rhizome service status --tui` and
+`rhizome peers list --tui` provide read-only views. Plain `peers list` always
+prints JSON. Explicit `--tui` fails promptly for redirected streams or `TERM=dumb`;
+help/list commands and `service run` never open a TUI. Screens need no color.
 
 ## Verification
 
