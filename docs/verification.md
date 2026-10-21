@@ -555,8 +555,18 @@ Automated and local evidence, macOS 26 arm64 with GoReleaser 2.17.1:
 - `GOOS=windows` and `GOOS=linux` `go vet ./...` pass for amd64 and arm64. This
   change fixes Windows compilation of gateway file staging.
 
+- The first pull request snapshot run (Actions run 39646167543, 2026-10-21)
+  passed every job. It ran with no environment and no secrets, and the macOS
+  build hook executed the ad-hoc binary natively and its x86_64 slice. Package
+  payload verification passed. Each native smoke host verified the manifest and
+  ran its extracted archive, which reported the expected snapshot version and
+  commit: `ubuntu-latest` (x86_64), `ubuntu-24.04-arm` (aarch64),
+  `windows-latest`, `windows-11-arm`, `macos-15` (arm64) and `macos-15-intel`
+  (x86_64). The macOS hosts also re-verified the package payload. Publish was
+  skipped. On `windows-11-arm`, Git Bash's `uname` reports x86_64 because MSYS
+  is emulated; the arm64 archive is what was executed.
+
 Pending (requires the `release` environment and a pushed tag): real Developer
 ID signing, notarization `Accepted`, stapling, Gatekeeper assessment, draft
-staging and publication, release downloads, and Windows/Linux arm64 smoke on
-hosted runners. Run a `v0.1.0-rc.1` prerelease and record the results here
+staging and publication, and release downloads. Run a `v0.1.0-rc.1` prerelease and record the results here
 ([releasing.md](releasing.md#validating-before-a-stable-release)).
