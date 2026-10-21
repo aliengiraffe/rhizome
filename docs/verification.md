@@ -678,9 +678,11 @@ Cursor, and record the Cursor version:
 3. `send` a direct message to the Cursor conversation, then have Cursor run any
    tool: expect the `<rhizome-peer-event>` block after that tool result and
    Cursor treating it as informational.
-4. Enable `[cursor] followup_delivery = true`, restart the MCP server, queue a
-   peer message, finish a turn: expect exactly one auto-submitted follow-up and
-   no second one; confirm the follow-up reply is not collected by subscribers.
+4. Queue a peer message and finish a turn: expect exactly one auto-submitted
+   follow-up (default-on) and no second one; confirm the follow-up reply is not
+   collected by subscribers. Set `[cursor] followup_delivery = false`, restart
+   the MCP server and repeat: expect no follow-up and delivery at the next tool
+   result instead.
 5. Open a second chat in the same window: expect `identity_ambiguous` for tool
    calls until the `beforeMCPExecution` hook runs; record whether the `matcher`
    scoped the hook, how MCP tools appear in `tool_name`, and whether

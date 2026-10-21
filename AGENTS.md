@@ -257,9 +257,9 @@ See README, [service](docs/service.md#terminal-interface), and
   shared `isPeerInput` suppression; no transcript tailing and no history
   indexing of Cursor logs. Delivery is hook pull through a bounded per-node
   outbox (32 entries, 64 KiB, 8 KiB per injection): `postToolUse*`
-  `additional_context` always, `stop` `followup_message` only with
-  `[cursor] followup_delivery = true` (file-only, default false, `loop_count`
-  0, completed turns). `rhizome setup --agents cursor` installs the skill, the
+  `additional_context` always, `stop` `followup_message` unless
+  `[cursor] followup_delivery = false` (file-only, default true; one per
+  completed turn with `loop_count` 0, marked peer-only). `rhizome setup --agents cursor` installs the skill, the
   MCP entry and the hooks (see the setup invariant); `examples/cursor/` holds
   the same definitions for manual or project-scope merges. Live Cursor behavior is unverified:
   keep `docs/cursor.md` and the checklist in `docs/verification.md` honest.

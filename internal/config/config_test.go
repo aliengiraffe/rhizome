@@ -272,3 +272,23 @@ func TestTarget(t *testing.T) {
 		t.Fatal(p, explicit, err)
 	}
 }
+
+func TestCursorFollowupDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	c, err := Resolve(nil, func(string) string { return "" })
+	if err != nil || !c.Cursor.FollowupDelivery || c.Sources["cursor.followup_delivery"] != "default" {
+		t.Fatalf("default: %v %v %q", err, c.Cursor.FollowupDelivery, c.Sources["cursor.followup_delivery"])
+	}
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{{"[cursor]\nfollowup_delivery = false\n", false}, {"[cursor]\nfollowup_delivery = true\n", true}} {
+		c, err := Resolve(map[string]string{"config": fixture(t, tc.body)}, func(string) string { return "" })
+		if err != nil || c.Cursor.FollowupDelivery != tc.want || c.Sources["cursor.followup_delivery"] != "file" {
+			t.Fatalf("%q: %v %v %q", tc.body, err, c.Cursor.FollowupDelivery, c.Sources["cursor.followup_delivery"])
+		}
+	}
+	if _, err := Resolve(map[string]string{"config": fixture(t, "[cursor]\nfollow_up = true\n")}, func(string) string { return "" }); err == nil {
+		t.Fatal("unknown cursor key accepted")
+	}
+}
