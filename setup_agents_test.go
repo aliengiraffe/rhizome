@@ -430,6 +430,21 @@ func TestInstallAgentsFreshRepeatAndStale(t *testing.T) {
 	if got := readJSON(t, codexHooks)["hooks"]; !reflect.DeepEqual(got, templateAsJSON(t, "codex")) {
 		t.Fatalf("codex hooks: %v", got)
 	}
+	// OpenCode: skill and both plugins, with no MCP entry or hooks edited for it.
+	openCodeDir := filepath.Join(home, ".config", "opencode")
+	if agents[2].Name != "opencode" || agents[2].MCP != "" || agents[2].Hooks != "" {
+		t.Fatalf("opencode destinations: %+v", agents[2])
+	}
+	for _, p := range []string{filepath.Join(openCodeDir, "plugins", "rhizome.js"), filepath.Join(openCodeDir, "plugins", "rhizome-tui", "tui.js")} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("opencode plugin missing: %v", err)
+		}
+	}
+	for _, want := range []string{"plugin: installed", "tui:    installed", "docs/opencode.md"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
 	for _, p := range []string{claudeJSON, claudeSettings, codexTOML, codexHooks} {
 		if st, err := os.Stat(p); err != nil || st.Mode().Perm() != 0o600 {
 			t.Fatalf("%s: %v %v", p, st, err)
@@ -450,7 +465,9 @@ func TestInstallAgentsFreshRepeatAndStale(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if strings.Count(out.String(), "unchanged") != 6 || strings.Contains(out.String(), "backup") {
+	// Claude and Codex report the skill, MCP entry and hooks; OpenCode reports the
+	// skill and its two plugins.
+	if strings.Count(out.String(), "unchanged") != 9 || strings.Contains(out.String(), "backup") {
 		t.Fatalf("repeat run not idempotent:\n%s", out.String())
 	}
 	if matches, _ := filepath.Glob(filepath.Join(home, "*", "*.bak-*")); len(matches) != 0 {

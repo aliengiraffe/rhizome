@@ -24,7 +24,8 @@ serve arbitrary peer-requested paths, or forward files across a third host.
 Peer offers, filenames and file contents are untrusted data. An offer is not
 permission to download or execute anything. Agents must obtain a user request to
 share or accept. MCP takes the source identity from the bound transport, never
-from tool arguments. The CLI is a trusted local-user interface and requires the
+from tool arguments (in OpenCode mode, the bound `_meta["ai.opencode/sessionID"]`
+caller). The CLI is a trusted local-user interface and requires the
 exact local session ID.
 
 ## CLI

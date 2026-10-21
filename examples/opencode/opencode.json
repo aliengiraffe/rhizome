@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "rhizome": {
+        "type": "local",
+        "command": ["/absolute/path/to/rhizome/rhizome", "mcp", "--agent", "opencode"]
+      }
+    }
+  }
+}

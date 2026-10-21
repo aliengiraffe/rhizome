@@ -85,8 +85,11 @@ type Node struct {
 	collectionState  string
 	deliveryError    string
 	deliveryReady    bool
-	directSequence   uint64
-	discovered       map[string]*pb.Identity
+	// external marks delivery to an agent's own queue (Codex, OpenCode): gated
+	// on deliveryReady and counted as queue handoffs.
+	external       bool
+	directSequence uint64
+	discovered     map[string]*pb.Identity
 	pb.UnimplementedChannelServer
 	ctx    context.Context
 	cancel context.CancelFunc

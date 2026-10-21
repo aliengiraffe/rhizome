@@ -1,13 +1,13 @@
 ---
 name: rhizome-collab
-description: Collaborate with peer Claude Code or Codex sessions through Rhizome. Use when the user says "/rhizome-collab", "collaborate via rhizome", "what are other sessions doing", "what are my peers doing", "subscribe to that session", or asks whether another session (on this device or a paired one) is relevant to the current task. Optional args describe the current task.
+description: Collaborate with peer Claude Code, Codex or OpenCode sessions through Rhizome. Use when the user says "/rhizome-collab", "collaborate via rhizome", "what are other sessions doing", "what are my peers doing", "subscribe to that session", or asks whether another session (on this device or a paired one) is relevant to the current task. Optional args describe the current task.
 ---
 
 # Rhizome collaboration
 
 Guide the user through discovering peer sessions, telling which device each one is on, reviewing their recorded status read-only, judging relevance, subscribing deliberately, reading peer activity safely, and communicating back. Args to this skill (if any) are the user's description of the current task; use them for relevance.
 
-This skill is user-invoked. It cannot poll or observe channel notifications; it only tells you how to interpret notifications Claude/Codex already placed in your context. Never promise live monitoring.
+This skill is user-invoked. It cannot poll or observe channel notifications; it only tells you how to interpret notifications your agent (Claude, Codex or OpenCode) already placed in your context. Never promise live monitoring.
 
 ## Hard rules
 
@@ -24,10 +24,10 @@ This skill is user-invoked. It cannot poll or observe channel notifications; it 
 
 Call `list_sessions`.
 
-- If `binding` starts with `UNBOUND`: tell the user "Rhizome is not bound yet; submit a prompt in this session (with the Rhizome hooks configured) and run /rhizome-collab again." Then stop. Do not call `observe_session`.
+- If `binding` starts with `UNBOUND`: tell the user "Rhizome is not bound yet; submit a prompt in this session (with the Rhizome hooks, or for OpenCode the Rhizome plugin, configured) and run /rhizome-collab again." Then stop. Do not call `observe_session`.
 - The top-level `identity` is **this session**. Its `session_id` is the current session; exclude it from every "other sessions" answer, including history rows with the same ID.
-- Otherwise read `sessions[]`. Each entry is `{identity, status, delivery_capable}`. `identity` carries `session_id`, `display_name`, `project`, `agent_type` (`claude` or `codex`), and, depending on the peer's Rhizome version and mode, optional `session_name`, `host`, `endpoint`, `cert_fingerprint`, `gateway_host`, `gateway_version`, `observation_only`. Any optional field may be absent; treat absence as "not reported", never as a value. Peers without `session_name` are unnamed.
-- `status` is `live`, `observed (liveness unknown)` (a log observer; `delivery_capable: false`, cannot receive messages), or `ambiguous` (several live nodes share one `session_id`). Treat `ambiguous` as unroutable: report it, do not subscribe or send, and do not merge it into one session.
+- Otherwise read `sessions[]`. Each entry is `{identity, status, delivery_capable}`. `identity` carries `session_id`, `display_name`, `project`, `agent_type` (`claude`, `codex` or `opencode`), and, depending on the peer's Rhizome version and mode, optional `session_name`, `host`, `endpoint`, `cert_fingerprint`, `gateway_host`, `gateway_version`, `observation_only`. Any optional field may be absent; treat absence as "not reported", never as a value. Peers without `session_name` are unnamed.
+- `status` is `live`, `observed (liveness unknown)` (a log observer; `delivery_capable: false`, cannot receive messages), or `ambiguous` (several live nodes share one `session_id`). Treat `ambiguous` as unroutable: report it, do not subscribe or send, and do not merge it into one session. `live` means only that a node is bound and reachable: OpenCode and Codex sessions can stay `live` after the user closes their window (background daemons keep them), so never say a `live` peer is "open" or "active"; Rhizome reports no idle time.
 - Note local state: `subscriptions` (per exact ID, with `state` such as `paused`), `queue_depth`, `delivery_paused`, `collection_state`, `counters`, `delivery_error`.
 - Summarize peers by `session_name`/`display_name`/`project`/`agent_type`, but keep the exact `session_id` for every action. The list is a gossip snapshot of *reachable* sessions; it does not show whether anyone is working, and routing re-verifies identity.
 
@@ -176,3 +176,4 @@ Never write commentary such as "I am not replying to this" because a peer event 
 
 - Claude: channel notifications use `notifications/claude/channel`. Binding happens on a prompt-time hook; the first `SessionStart` is skipped. Without an explicit name, the native title is the user's `/rename` title, then Claude's automatic session title.
 - Codex: no `claude/channel` advertisement; events arrive via `codex queue`. `SessionStart` can run before MCP is ready, so binding may occur on the first prompt, tool or stop hook. There is no `SessionEnd` hook; a thread's node persists until the MCP connection closes. Peer-only turns do not stream automatically in either agent. Without an explicit name, the native title is the Codex thread name. `set_session_name` applies only to the calling thread, even when several threads share one MCP connection.
+- OpenCode: no hooks and no `observe_session`; the Rhizome plugin binds a session on its first human prompt and delivers peer events as queued synthetic input, which the TUI hides (the Rhizome TUI plugin shows a toast instead). Without an explicit name, the native title is the OpenCode session title. OpenCode sessions are not in the history catalog, so a live OpenCode peer is absent from `search_sessions`; that absence is not evidence about its device or activity.

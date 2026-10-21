@@ -516,6 +516,9 @@ func (in agentInstaller) install(a agent) error {
 		return fmt.Errorf("%s: skill: %w", a.Label, err)
 	}
 	fmt.Fprintf(in.out, "  skill: %s %s\n", status, filepath.Join(a.Skills, skillName))
+	if a.Name == "opencode" {
+		return in.installOpenCode(a)
+	}
 	server, err := rhizomeServer(in.exe, a.Name, in.c, in.explicit, in.home, in.lookPath)
 	if err != nil {
 		return fmt.Errorf("%s: mcp: %w", a.Label, err)
@@ -543,6 +546,26 @@ func (in agentInstaller) install(a agent) error {
 	return nil
 }
 
+// installOpenCode installs the OpenCode relay and TUI toast plugins after the
+// skill. OpenCode has no hooks, and its MCP entry stays a manual step (see
+// docs/opencode.md), so nothing in its user configuration is edited.
+func (in agentInstaller) installOpenCode(a agent) error {
+	for _, p := range []struct {
+		label, dest string
+		content     []byte
+	}{{"plugin", a.Plugin, openCodePlugin}, {"tui", a.TUI, openCodeTUIPlugin}} {
+		status, err := installPlugin(p.dest, p.content)
+		if err != nil {
+			return fmt.Errorf("%s: %s: %w", a.Label, p.label, err)
+		}
+		fmt.Fprintf(in.out, "  %-7s %s %s\n", p.label+":", status, p.dest)
+	}
+	for _, note := range agentNotes(a.Name) {
+		fmt.Fprintf(in.out, "  next:  %s\n", note)
+	}
+	return nil
+}
+
 // describe renders "<status> <what><path> (backup: ...)".
 func (r fileResult) describe(what string) string {
 	s := r.Status + " " + what + r.Path
@@ -563,6 +586,10 @@ func agentNotes(agentName string) []string {
 	case "codex":
 		return []string{
 			"start a fresh Codex session, review the Rhizome hooks in /hooks and trust them; do not keep the same hooks at project scope.",
+		}
+	case "opencode":
+		return []string{
+			"add the rhizome MCP entry to your OpenCode config as described in docs/opencode.md (setup does not edit it), then restart OpenCode so the plugins load; sessions bind on their first prompt.",
 		}
 	}
 	return nil

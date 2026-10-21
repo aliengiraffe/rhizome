@@ -820,7 +820,7 @@ func TestHistoryToolsRegisteredInBothModes(t *testing.T) {
 	manager := &codexNodes{ctx: cctx, nodes: map[string]*Node{}, opts: Options{Runtime: filepath.Join(t.TempDir(), "run")}, binary: "/bin/false", socket: "/nonexistent.sock"}
 	defer manager.close()
 	st2, ct2 := mcp.NewInMemoryTransports()
-	ss2, err := makeServer(manager.resolve, false, func() {}, hh.h).Connect(cctx, st2, nil)
+	ss2, err := makeServer(manager.resolve, agentCodex, func() {}, hh.h).Connect(cctx, st2, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

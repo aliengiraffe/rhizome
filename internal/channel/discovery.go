@@ -169,6 +169,19 @@ func Token(runtime string) (string, error) {
 	defer lock.Close()
 	return loadToken(runtime, Options{})
 }
+
+// runtimeDir normalizes and secures the resolved private runtime directory.
+func runtimeDir(runtime string) (string, error) {
+	runtime, err := localstate.Runtime(runtime)
+	if err != nil {
+		return "", err
+	}
+	if err := secureDir(runtime); err != nil {
+		return "", err
+	}
+	return runtime, nil
+}
+
 func (n *Node) start(o Options) error {
 	hostname, err := config.NormalizeHostname(o.Hostname)
 	if err != nil {
@@ -183,11 +196,8 @@ func (n *Node) start(o Options) error {
 	}
 	n.opts = o
 	n.mode = o.mode()
-	runtime, err := localstate.Runtime(o.Runtime)
+	runtime, err := runtimeDir(o.Runtime)
 	if err != nil {
-		return err
-	}
-	if err := secureDir(runtime); err != nil {
 		return err
 	}
 	n.runtime = runtime

@@ -66,7 +66,7 @@ Metadata search only. Rows prove that a log exists, not that an agent runs.
 | Field | Type / default | Semantics |
 | --- | --- | --- |
 | `session_id` | optional string, 1–128 bytes | Exact, case-sensitive native ID. No prefix, glob, or display-name matching. |
-| `agent_type` | optional `claude` \| `codex` | Omitted means all supported agent types. |
+| `agent_type` | optional `claude` \| `codex` | Omitted means all supported agent types. OpenCode sessions are not cataloged; the tools are available in OpenCode mode for Claude and Codex history. |
 | `project_path` | optional absolute string, ≤ 4096 bytes | Lexically cleaned and compared for equality with the session's recorded `cwd`. No subtree matching, filesystem access, symlink resolution, or implicit caller-project restriction. |
 | `name_contains` | optional nonempty string, ≤ 256 UTF-8 bytes | Literal substring of the effective `session_name` after Unicode lowercase folding. Not a regex, glob, SQL pattern, or transcript search. |
 | `updated_after` | optional RFC 3339 | Inclusive lower bound on `last_activity_at`. |
@@ -214,7 +214,7 @@ full-text search; histories are not transcripts.
 | `CURSOR_EXPIRED` | Snapshot released, expired, evicted, or issued by another process. | Run a fresh initial query. |
 | `SOURCE_CHANGED` | File identity or EOF bytes changed between pages, or the catalog now records another file. | Run a fresh initial read. |
 | `RESOURCE_LIMIT` | Concurrency limit, or the deadline/cancellation arrived before any progress. | Yes. |
-| `CALLER_UNVERIFIED` | Codex mode without a verified `_meta.threadId`. | After updating Codex. |
+| `CALLER_UNVERIFIED` | Codex mode without a verified `_meta.threadId`; OpenCode mode without a verified `_meta["ai.opencode/sessionID"]` or before the session's first human prompt binds it (message starts `UNBOUND`). | After updating the agent, or after the first prompt. |
 | `REMOTE_HISTORY_DISABLED`, `POLICY_DENIED`, `REMOTE_HISTORY_UNSUPPORTED`, `PEER_UNAVAILABLE`, `GATEWAY_UNAVAILABLE` | Paired-host requests only; see [Paired-host history](#paired-host-history-opt-in). | `PEER_UNAVAILABLE` and `GATEWAY_UNAVAILABLE` after reconnecting or starting the service. |
 
 ## Examples
@@ -344,7 +344,9 @@ enabled = false
 - `lookback` is a positive whole number of days without sign or leading zeros
   (`1d` to `106751d`) or `all`. Zero, negatives, other units, empty strings,
   malformed values and overflow are rejected when the file is read, as are
-  misspelled keys and tables for unsupported agents.
+  misspelled keys and tables for unsupported agents. OpenCode sessions are not
+  cataloged, so there is no `[opencode.peer_history]`; an OpenCode session can
+  still request a paired host's Claude and Codex history with `host_id`.
 - `rhizome config` prints the effective, inherited value for every agent. The
   policy applies uniformly to all paired hosts; there are no per-peer ACLs.
 - The service reads the policy when it starts. **Restart the service** (`rhizome

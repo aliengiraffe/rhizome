@@ -111,7 +111,7 @@ services pin the absolute TOML path and reread it on restart; see
 
 ## Codex
 
-Local Codex sessions use `rhizome mcp --agent codex`, with the same nine tools and
+Local Codex sessions use `rhizome mcp --agent codex`, with the same thirteen tools and
 cross-agent subscriptions. Incoming events use `codex queue`; outgoing activity
 comes from read-only App Server polling. Each caller thread has an independent
 node even when Codex shares an MCP connection. See [Codex setup and tested
@@ -131,6 +131,21 @@ yourself, and after an upgrade run `rhizome service stop` and then
 `rhizome service start`. Tag conventions, prereleases, verification, upgrades,
 uninstall and platform limits are in [docs/releasing.md](docs/releasing.md).
 To build from source, follow the steps below.
+
+## OpenCode
+
+Local OpenCode 2.x sessions use `rhizome mcp --agent opencode` (twelve tools; no
+`observe_session`) plus an embedded relay plugin installed by
+`rhizome setup --agents opencode`. Configuration and `[network]` modes apply as
+for the other agents. A session binds on its first human prompt; its
+identity is `_meta["ai.opencode/sessionID"]`, child sessions are refused. The
+plugin talks to Rhizome over a private Unix socket, relays allowlisted activity
+(assistant text, tool names, turn completion, titles) and delivers peer events
+with `ctx.session.synthetic` (queued, waking idle sessions). OpenCode's TUI hides
+synthetic input, so setup also installs a display-only TUI plugin that shows a
+toast with a sanitized excerpt of each peer delivery. Add the MCP entry
+by hand from `examples/opencode/`; tested with OpenCode **2.0.32**. See
+[OpenCode setup and limits](docs/opencode.md).
 
 ## Claude setup
 
@@ -185,13 +200,14 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 
 | Tool | Behavior |
 | --- | --- |
-| `list_sessions()` | Bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. |
+| `list_sessions()` | Bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](docs/opencode.md#why-a-closed-session-can-still-be-live)). |
 | `set_session_name(name)` | Name the caller's bound session for peers. Empty clears the override. Returns the effective name and its source. |
 | `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
 | `publish(text, reply_to?)` | Announce to current subscribers. |
 | `send(session_id, text, reply_to?)` | Direct message without a subscription. Returns a stable message ID and receiver queue acceptance. |
-| `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. |
+| `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. Not offered in OpenCode mode. |
+| `send_file`, `list_files`, `accept_file`, `cancel_file` | Explicit file offers between sessions on paired hosts; see [file transfers](docs/files.md). |
 | `search_sessions(filters…, host_id?)` | Metadata search of the local history catalog by exact ID, agent, project path, title substring, and activity date, with deterministic pagination. Rows carry history availability and current live status separately. Requires the observer service's catalog. With `host_id`, searches one directly paired host that opted in. |
 | `read_session_history(session_id, agent_type, limit?, cursor?, host_id?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes prompts, reasoning, tool bodies, subagents, and peer traffic. With `host_id`, reads from one opted-in paired host within its owner's lookback. |
 
@@ -214,7 +230,7 @@ project-directory label. The effective name is resolved in this order:
 1. An explicit override set with `set_session_name(name)` by that session.
 2. The agent's native title: Claude's `/rename` title (`custom-title` transcript
    record), then Claude's automatic title (`ai-title`); for Codex the thread name
-   reported by the App Server.
+   reported by the App Server; for OpenCode the session title.
 3. A stable fallback `<display_name> · <agent_type> · <first 8 characters of
    session_id>`, identical across process restarts for the same session and project.
 
@@ -496,7 +512,7 @@ or leave feeds paused when you do not want peer-triggered work.
 
 ## Collaboration skill
 
-`skills/rhizome-collab/` is a user-invoked skill (Claude Code or Codex) that guides
+`skills/rhizome-collab/` is a user-invoked skill (Claude Code, Codex or OpenCode) that guides
 an agent through listing peers, naming its own session after a concise task
 description, telling which device each session runs on, reviewing recorded
 status read-only, judging relevance, subscribing deliberately, treating peer
@@ -517,23 +533,29 @@ with the agent's MCP registration and hooks.
 
 ```sh
 ./rhizome setup                     # interactive: pick agents with a checkbox list
-./rhizome setup --agents all        # select every agent; terminal still asks config questions
-./rhizome setup --agents claude     # or codex, or claude,codex
+./rhizome setup --agents all        # select every agent (incl. opencode); terminal still asks config questions
+./rhizome setup --agents claude     # or codex, opencode, or claude,codex,opencode
 ./rhizome setup --list              # read-only: detected agents and destinations
 ./rhizome setup --plain             # original line/picker prompts
 ```
 
 Setup detects Claude Code (`$CLAUDE_CONFIG_DIR` or `~/.claude`, or `claude` on
-PATH) and Codex (`$CODEX_HOME` or `~/.codex`, or `codex` on PATH). The picker
+PATH), Codex (`$CODEX_HOME` or `~/.codex`, or `codex` on PATH) and OpenCode
+(`$XDG_CONFIG_HOME/opencode`, `~/.config/opencode`, or `opencode` on PATH). For
+OpenCode, setup also installs the relay plugin to
+`<config>/opencode/plugins/rhizome.js` and the TUI toast plugin to
+`<config>/opencode/plugins/rhizome-tui/tui.js`. The picker
 pre-selects detected agents; space toggles one, `a` toggles all, enter confirms.
 Without a terminal, `--agents` is required (unless only writing configuration with
 `--network`, below). For each selected agent, setup installs three things at
-**user scope**, so the agent finds Rhizome in every project:
+**user scope**, so the agent finds Rhizome in every project (OpenCode gets the skill and
+its plugins; its MCP entry is added by hand):
 
 | Agent | MCP registration | Hooks | Skill |
 | --- | --- | --- | --- |
 | Claude Code | `mcpServers.rhizome` in `~/.claude.json` (or `<CLAUDE_CONFIG_DIR>/.claude.json`) | `hooks` in `<config dir>/settings.json` | `<config dir>/skills/rhizome-collab/` |
 | Codex | `[mcp_servers.rhizome]` in `<CODEX_HOME>/config.toml` | `<CODEX_HOME>/hooks.json` | `<CODEX_HOME>/skills/rhizome-collab/` |
+| OpenCode | not edited; add it by hand ([docs/opencode.md](docs/opencode.md)) | none; the plugins below relay events | `<config>/opencode/skills/rhizome-collab/` |
 
 The registered command is the absolute path of the running `rhizome` executable
 with `mcp --agent <name>`, so keep that binary where it is or re-run setup after
@@ -641,6 +663,7 @@ help/list commands and `service run` never open a TUI. Screens need no color.
 ```sh
 task check                         # go vet ./... and go test -race ./...
 task build
+task test-plugin                    # OpenCode plugin tests (Node 20+)
 python3 scripts/smoke_stdio.py      # real processes, valid stdout, EOF, restart
 python3 scripts/smoke_service.py    # observer/direct coexistence, restart, history catalog
 python3 scripts/smoke_stdio.py --lan  # same, LAN mode: separate registries, pinned TLS

@@ -491,6 +491,70 @@ worktrees on one device, label mismatches and collisions, gateway proxies,
 paired-host history errors, direct LAN/Tailscale peers, missing metadata,
 conflicting history, ambiguous IDs, stale catalogs, and scope corrections.
 
+## OpenCode 2.0.32 (2026-10-19)
+
+- Spike findings (full detail in
+  [the design spec](superpowers/specs/2026-10-19-opencode-support-design.md)):
+  MCP `tools/call` carries `_meta["ai.opencode/sessionID"]` set by OpenCode, and
+  forged arguments do not change it; subagent calls carry the child session ID, and
+  `ctx.session.get` on a child returns `parentID`; `session.deleted` has
+  `data.sessionID`, fires for children first and reached subscribers twice with two
+  locations loaded (so `forget` is idempotent); OpenCode runs one MCP process and
+  one plugin instance per project directory, and a `git init` directory without
+  commits has project id `global`, so pairing uses the directory; models reach
+  MCP tools through `execute`, which fires tool hooks for the inner tool by its
+  real name; `ctx.session.synthetic` with `delivery: "queue"` wakes an idle session.
+- `task build`, `task check`, `task test-plugin` and `git diff --check` pass.
+- `python3 scripts/smoke_stdio.py` PASS, including OpenCode bridge identity,
+  activity and delivery with a fake plugin.
+- `python3 scripts/smoke_opencode.py --live --model opencode-go/deepseek-v4.1-flash`
+  PASS ("PASS: OpenCode v2.0.32 live binding, activity to a Claude peer and
+  synthetic delivery"); three passing runs. The Claude endpoint is an MCP protocol
+  harness, not an interactive Claude model.
+- Instance reload restore (2026-10-20): `opencode reload --server <url>` on the
+  disposable server reloads the location like the service's periodic reloads (fresh
+  plugin `setup`, new Rhizome process; the old one exits about 2 s later). The live
+  smoke now binds, reloads, waits for the session on a new Rhizome node without a
+  prompt, and confirms a `send` reaches the session export: PASS ("... synthetic
+  delivery, and restore after an instance reload"), two runs. The first attempts
+  exposed that the exiting process unlinked the successor's socket (same path),
+  fixed in the same change. Earlier smoke runs inherited the caller's `PWD`, so
+  their sessions lived in the caller's directory location; the smoke now sets
+  `PWD` to the temp repository.
+- Known CLI caveat: run `opencode run` with stdin closed from non-interactive
+  parents (confirmed cause of hangs); hangs were also seen with message text
+  containing `ses_...`, cause unconfirmed.
+
+After rebasing onto central configuration, LAN/Tailscale modes, the service,
+history, host pairing and file transfer (2026-10-20, macOS): `task build`,
+`task check` (race), `task test-plugin`, `python3 scripts/smoke_stdio.py` and
+`--lan` (the OpenCode process joins the Claude peer over pinned TLS from its own
+runtime directory), `scripts/smoke_service.py`, `scripts/smoke_gateway.py`,
+`git diff --check` and the live smoke above with an isolated `RHIZOME_CONFIG`
+all pass. Not exercised: Tailscale mode, a paired remote host or file transfer
+with a live OpenCode session (unit tests cover gateway acceptance of
+`opencode` identities and the OpenCode tool set only).
+
+TUI toast for peer deliveries (2026-10-21): `plugins/opencode/rhizome-tui.js`
+is unit-tested (`task test-plugin`: toast for an enqueued Rhizome synthetic item;
+none for user prompts, other synthetic items, malformed envelopes, unknown
+sessions or other directories; once per inbox item; control-character stripping
+and truncation; throwing APIs contained) and `setup_test.go` covers installing it.
+In a disposable OpenCode 2.0.32 (isolated `XDG_*` directories, `opencode serve`
+plus a TUI attached with `--server` in a private tmux), the TUI log showed
+`setup` of `rhizome.tui` with no plugin errors; a synthetic item with Rhizome's
+envelope posted through `POST /api/session/{id}/synthetic` rendered the toast
+"Rhizome · direct from 4f3a9c1e" with the stripped, single-line excerpt and an
+**Open** action, and a plain synthetic item showed nothing. Not yet checked: a
+real Rhizome delivery into the user's own TUI after `rhizome setup`.
+
+Manual checklist (not yet run): in an interactive OpenCode TUI session, submit a
+prompt, run `list_sessions` and confirm `BOUND`, `collection_state: watching` and
+the session title; then subscribe from a Claude session and confirm activity and
+delivery in both directions, and that each delivery to the OpenCode session shows
+a "Rhizome · <kind> from <id>" toast. Interactive TUI parity with `run`/`serve` is
+otherwise unverified.
+
 ## Terminal interfaces (#48, 2026-10-21)
 
 `python3 scripts/smoke_tui.py` passed on macOS using isolated Unix PTYs and a

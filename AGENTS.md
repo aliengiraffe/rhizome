@@ -2,18 +2,20 @@
 
 ## Orientation
 
-Rhizome is a Go MCP bridge for local coding agent sessions. It binds
-verified session identities, collects selected activity, discovers peers through
-memberlist, and delivers events over authenticated loopback gRPC. Claude uses
-channel notifications; Codex uses per-thread nodes and local queue delivery.
-An optional per-user service observes coding agent logs independently of MCP
+Rhizome is a Go MCP bridge for local coding agent sessions (Claude Code, Codex
+and OpenCode). It binds verified session identities, collects selected activity,
+discovers peers through memberlist, and delivers events over authenticated
+loopback gRPC. Claude uses channel notifications; Codex uses per-thread nodes and
+local queue delivery; OpenCode uses an embedded plugin over a private Unix socket
+bridge. An optional per-user service observes coding agent logs independently of MCP
 and maintains the local session-history catalog behind `search_sessions` and
 `read_session_history`; see [docs/service.md](docs/service.md) for lifecycle,
 boundaries, and validation and [docs/history.md](docs/history.md) for the
 history contract.
 
 Start with [README.md](README.md) for behavior and setup,
-[docs/codex.md](docs/codex.md) for Codex contracts, and
+[docs/codex.md](docs/codex.md) for Codex contracts,
+[docs/opencode.md](docs/opencode.md) for OpenCode, and
 [docs/verification.md](docs/verification.md) for tested scope and manual checks.
 
 | Path | Responsibility |
@@ -23,7 +25,8 @@ Start with [README.md](README.md) for behavior and setup,
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), and session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`). |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`), and the OpenCode bridge (`opencode*.go`). |
+| `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
 | `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums/smoke tool, and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
@@ -41,6 +44,7 @@ lists them. Use `PROTOC=/path/to/protoc task proto` to override the compiler.
 task build                         # Build the rhizome executable.
 ./rhizome config                   # Inspect effective configuration and sources.
 task check                         # go vet ./... and go test -race ./...
+task test-plugin                   # OpenCode plugin tests (Node 20+; skips without node).
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
 python3 scripts/smoke_service.py    # Separate observer/MCP processes, handoffs, history catalog.
 python3 scripts/smoke_tui.py        # Unix PTYs; isolated setup/service/peers UI and restoration.
@@ -48,6 +52,7 @@ python3 scripts/smoke_stdio.py --lan # Same scenario in LAN mode: pinned TLS, se
 git diff --check                   # Check whitespace errors.
 task proto                         # Requires protoc; installs pinned generators in .bin.
 python3 scripts/smoke_codex.py --help # Inspect live smoke prerequisites/options.
+python3 scripts/smoke_opencode.py --help # Inspect OpenCode live smoke options.
 ```
 
 Before marking a change done, build, check (including race tests), both stdio
@@ -60,7 +65,9 @@ For Codex integration changes, follow the opt-in live smoke instructions in
 [docs/codex.md](docs/codex.md): they require an existing authenticated daemon,
 create disposable threads, and run model turns. The script refuses to run without
 live opt-in; help output does not validate integration. Use the manual checklist
-for client/hook upgrades.
+for client/hook upgrades. OpenCode integration changes likewise require the live
+smoke in [docs/opencode.md](docs/opencode.md) (real model turns; deletes only its
+own sessions).
 
 **LAN coverage:** `python3 scripts/smoke_stdio.py --lan` runs the stdio scenario
 with `--lan` on an isolated runtime directory per process and verifies pinned TLS.
@@ -140,7 +147,9 @@ See README, [service](docs/service.md#terminal-interface), and
   service flags are opt-in and separate from MCP networking, which stays local
   when pairing is enabled. The service bridges remote sessions through protocol-2
   proxies (`gateway_host`); only local identities with `gateway_version = 1`
-  are exported. Never forward proxy advertisements, trust peer-supplied endpoints,
+  are exported, and `opencode` sessions only over links that negotiated the
+  `rhizome.gateway.opencode.v1` subprotocol (older peers drop links over unknown agent
+  types). Never forward proxy advertisements, trust peer-supplied endpoints,
   or expose the admin API or history except through the opt-in peer-history policy below. Cross-host ID collisions fail closed.
   Revocation closes connections and invalidates queued events via local trust
   grants; old invitations cannot restore revoked trust. Every link end logs a
@@ -177,7 +186,8 @@ See README, [service](docs/service.md#terminal-interface), and
   `examples/codex/hooks.json` (tested). Merges touch only Rhizome entries,
   keep everything else, back up changed files as `<file>.bak-<timestamp>`,
   follow symlinks, reject malformed files without replacing them and skip
-  unchanged files. Configuration is written before installs so wizard
+  unchanged files. OpenCode gets the skill and its two plugins only (no hooks;
+  its MCP entry stays manual, see `docs/opencode.md`). Configuration is written before installs so wizard
   directories apply. Project files, `--list` and `--network`-only runs never
   install anything; remaining restart/trust/channel steps are printed.
 - **Releases are tag-driven, signed and fail closed.** Only SemVer 2.0 tags
@@ -250,14 +260,38 @@ See README, [service](docs/service.md#terminal-interface), and
   `internal/channel/delivery.go`, `internal/channel/transcript.go`).
 - **No transcript content or session names in logs.** Diagnose with counters and
   metadata to avoid leaking session content (`internal/channel/transcript.go`,
-  `internal/channel/codex_collect.go`, `internal/channel/name.go`).
+  `internal/channel/codex_collect.go`, `internal/channel/opencode_collect.go`,
+  `internal/channel/opencode.go`, `internal/channel/name.go`,
+  `plugins/opencode/rhizome.js`, `plugins/opencode/rhizome-tui.js`).
 - **Peer-only turns must not trigger feedback loops.** Preserve filtering,
-  suppression, rate limits, and circuit breakers; never republish received envelopes
-  (`internal/channel/transcript.go`, `internal/channel/codex_collect.go`,
-  `internal/channel/delivery.go`).
-- **Codex collection stays read-only and local.** Do not start/restart its daemon
-  or mutate threads through collection; preserve per-thread isolation and bounded
-  polling (`internal/channel/codex_rpc.go`, [docs/codex.md](docs/codex.md)).
+  suppression, rate limits, and circuit breakers; never republish received
+  envelopes (`internal/channel/transcript.go`, `internal/channel/codex_collect.go`,
+  `internal/channel/opencode_collect.go`, `internal/channel/delivery.go`,
+  `plugins/opencode/rhizome.js`). OpenCode inputs count when delivered into the
+  agent loop (`session.inbox.delivered`), not when queued.
+- **Codex and OpenCode collection stay read-only and local.** Do not start/restart
+  the Codex daemon or mutate threads/sessions through collection; preserve
+  per-thread isolation and bounded polling (`internal/channel/codex_rpc.go`,
+  [docs/codex.md](docs/codex.md)). OpenCode's only write is `synthetic` delivery.
+- **OpenCode identity comes only from `_meta["ai.opencode/sessionID"]`, and binding
+  only from the plugin bridge.** Never add `observe_session` to OpenCode mode. The
+  plugin relays allowlisted events of its own directory's sessions and executes
+  deliveries; all filtering stays in Go. OpenCode mode shares configuration,
+  `[network]` and the other 12 tools. Each bound session holds the collection
+  lease; on an instance reload the predecessor releases leases once a successor
+  owns the socket (never unlinking it), and the successor retries busy binds for
+  at most 60 s; the plugin re-binds its sessions after every reconnect. Bindings
+  persist in `<runtime>/opencode-bindings/` (0600, 64 entries, 24 h idle, only
+  human-prompt binds, re-verified by the plugin). The plugin finds the socket via
+  `RHIZOME_RUNTIME_DIR` or the default only. Bridge limits: 64 KiB frames,
+  256-frame plugin buffer, 256 pending inputs, 512-frame manager queue, 16 KiB
+  text, 5 s acknowledgement, 64 sessions, 24 h idle
+  (`internal/channel/opencode*.go`, `plugins/opencode/rhizome.js`,
+  [docs/opencode.md](docs/opencode.md)). Peer deliveries stay synthetic, never
+  prompts. The TUI plugin (`plugins/opencode/rhizome-tui.js`, installed by setup
+  as `plugins/rhizome-tui/tui.js`) is display-only: it toasts a sanitized,
+  200-character excerpt of enqueued Rhizome-envelope synthetic items for its own
+  directory's sessions and never decides, sends, opens sockets or files, or logs.
 - **Coordinate collection across processes.** Direct integrations acquire the
   per-session OS lease before baselining. Passive scans yield and expose handoff
   gaps. Never route delivery to `observation_only` identities or replay another
@@ -290,7 +324,8 @@ See README, [service](docs/service.md#terminal-interface), and
   `[gateway.history]` (`enabled` default false, `lookback` default `30d`) and
   `[claude|codex.peer_history]` overrides resolve to `config.HistoryPolicy`.
   The global switch is a master gate, and agent keys refer to the source
-  history's agent. The service reads the policy at start; a restart applies a
+  history's agent; OpenCode history is not cataloged, so `[opencode]` tables
+  are rejected (OpenCode callers may still pass `host_id`). The service reads the policy at start; a restart applies a
   change and expires remote cursors. Tools take an optional exact `host_id`
   (lowercase fingerprint). Omitting it stays local, with no fan-out or second
   hop. The gateway's `/v1/history` serves only trusted, connected peers and checks
