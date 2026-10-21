@@ -21,11 +21,29 @@ deliveries; all filtering and routing decisions are made in Go.
    (no `sh -c`, `npx` or other wrapper), because the plugin pairs with the
    Rhizome process by OpenCode's process ID. Rhizome never edits OpenCode config.
 4. Restart the OpenCode service: `opencode service restart`.
-5. If `RHIZOME_RUNTIME_DIR` is set, it must be identical in the OpenCode service
-   environment and for the MCP entry, or the plugin and Rhizome will not find the
-   same socket.
+5. The plugin locates the socket only through `RHIZOME_RUNTIME_DIR` in the
+   OpenCode service environment or the default `~/.rhizome/run`. If
+   `RHIZOME_RUNTIME_DIR` is set for the MCP entry, or `runtime_dir` is set in
+   `~/.rhizome/config.toml`, set the identical `RHIZOME_RUNTIME_DIR` in the
+   OpenCode service environment, or the plugin and Rhizome will not find the same
+   socket (Rhizome logs `opencode_runtime_from_config` when the directory comes
+   from the file).
 
-OpenCode mode exposes six tools: the usual seven minus `observe_session`.
+`rhizome mcp --agent opencode` resolves configuration like the other agents:
+`runtime_dir`, `hostname` and the `[network]` table with flag > env > file >
+default precedence, so `--lan`, `--tailscale` and their `RHIZOME_*` variables
+apply to OpenCode session nodes. `rhizome setup` lists OpenCode in its picker
+and `--agents` flag; it installs only the skill and plugin and never writes
+OpenCode configuration. Which agent a process serves stays the per-launch
+`--agent` flag.
+
+OpenCode mode exposes twelve tools: the thirteen of Claude and Codex mode minus
+`observe_session`. Every tool resolves the caller from `_meta`, including the
+file-transfer tools (`send_file`, `list_files`, `accept_file`, `cancel_file`;
+paired hosts only, see [file transfers](files.md)) and the read-only history
+tools (`search_sessions`, `read_session_history`), which serve the local Claude
+and Codex catalog: OpenCode sessions are not indexed by the history catalog or
+observed by the background service.
 
 ## Identity and binding
 
@@ -58,6 +76,9 @@ OpenCode mode exposes six tools: the usual seven minus `observe_session`.
   prompt bound ever enter the store; `session.deleted` and idle eviction remove
   them, a shutdown keeps them. A restored session starts like a fresh bind
   (human turn state) and keeps its stored activity time.
+- Each bound session holds the per-session collection lease (see
+  [service.md](service.md)) for its lifetime, so a second Rhizome process cannot
+  collect the same session; its bind fails closed until the first retires it.
 - There is no `observe_session` in OpenCode mode; never invent an ID.
 - Without the plugin (or before the first prompt) tools return `UNBOUND` with a
   setup hint.
@@ -140,8 +161,10 @@ content or names.
 
 - `task test-plugin` runs `node --test plugins/opencode/*.test.mjs` (Node 20+;
   skipped without `node`).
-- `python3 scripts/smoke_stdio.py` covers the OpenCode bridge with a fake plugin:
-  identity, binding, activity to a Claude peer and delivery.
+- `python3 scripts/smoke_stdio.py` (and `--lan`) covers the OpenCode bridge with
+  a fake plugin: identity, binding, activity to a Claude peer, delivery and
+  restore after a reload; with `--lan` the OpenCode process has its own runtime
+  directory and joins the Claude peer over pinned TLS.
 - Opt-in live smoke:
   `python3 scripts/smoke_opencode.py --live --model <provider/model>`. It also
   forces an instance reload (`opencode reload --server`, disposable server only)

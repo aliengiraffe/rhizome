@@ -484,6 +484,16 @@ conflicting history, ambiguous IDs, stale catalogs, and scope corrections.
   parents (confirmed cause of hangs); hangs were also seen with message text
   containing `ses_...`, cause unconfirmed.
 
+After rebasing onto central configuration, LAN/Tailscale modes, the service,
+history, host pairing and file transfer (2026-10-20, macOS): `task build`,
+`task check` (race), `task test-plugin`, `python3 scripts/smoke_stdio.py` and
+`--lan` (the OpenCode process joins the Claude peer over pinned TLS from its own
+runtime directory), `scripts/smoke_service.py`, `scripts/smoke_gateway.py`,
+`git diff --check` and the live smoke above with an isolated `RHIZOME_CONFIG`
+all pass. Not exercised: Tailscale mode, a paired remote host or file transfer
+with a live OpenCode session (unit tests cover gateway acceptance of
+`opencode` identities and the OpenCode tool set only).
+
 Manual checklist (not yet run): in an interactive OpenCode TUI session, submit a
 prompt, run `list_sessions` and confirm `BOUND`, `collection_state: watching` and
 the session title; then subscribe from a Claude session and confirm activity and

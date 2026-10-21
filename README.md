@@ -111,7 +111,7 @@ services pin the absolute TOML path and reread it on restart; see
 
 ## Codex
 
-Local Codex sessions use `rhizome mcp --agent codex`, with the same nine tools and
+Local Codex sessions use `rhizome mcp --agent codex`, with the same thirteen tools and
 cross-agent subscriptions. Incoming events use `codex queue`; outgoing activity
 comes from read-only App Server polling. Each caller thread has an independent
 node even when Codex shares an MCP connection. See [Codex setup and tested
@@ -119,9 +119,10 @@ limitations](docs/codex.md) and the samples in `examples/codex/`.
 
 ## OpenCode
 
-Local OpenCode 2.x sessions use `rhizome mcp --agent opencode` (six tools; no
+Local OpenCode 2.x sessions use `rhizome mcp --agent opencode` (twelve tools; no
 `observe_session`) plus an embedded relay plugin installed by
-`rhizome setup --agents opencode`. A session binds on its first human prompt; its
+`rhizome setup --agents opencode`. Configuration and `[network]` modes apply as
+for the other agents. A session binds on its first human prompt; its
 identity is `_meta["ai.opencode/sessionID"]`, child sessions are refused. The
 plugin talks to Rhizome over a private Unix socket, relays allowlisted activity
 (assistant text, tool names, turn completion, titles) and delivers peer events
@@ -184,7 +185,8 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
 | `publish(text, reply_to?)` | Announce to current subscribers. |
 | `send(session_id, text, reply_to?)` | Direct message without a subscription. Returns a stable message ID and receiver queue acceptance. |
-| `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. |
+| `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. Not offered in OpenCode mode. |
+| `send_file`, `list_files`, `accept_file`, `cancel_file` | Explicit file offers between sessions on paired hosts; see [file transfers](docs/files.md). |
 | `search_sessions(filters…, host_id?)` | Metadata search of the local history catalog by exact ID, agent, project path, title substring, and activity date, with deterministic pagination. Rows carry history availability and current live status separately. Requires the observer service's catalog. With `host_id`, searches one directly paired host that opted in. |
 | `read_session_history(session_id, agent_type, limit?, cursor?, host_id?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes prompts, reasoning, tool bodies, subagents, and peer traffic. With `host_id`, reads from one opted-in paired host within its owner's lookback. |
 

@@ -13,7 +13,10 @@ Upgrade and restart both services and their local MCP processes. Older processes
 without gateway capability are not exported; older clients ignore gateway proxy
 advertisements. Keep MCP networking in its default local mode. Legacy
 shared-token LAN/Tailscale gossip remains available separately, but cannot be
-combined with gateway pairing in the same configuration.
+combined with gateway pairing in the same configuration. Bound OpenCode sessions
+(`agent_type: "opencode"`) are exported like Claude and Codex sessions; a paired
+host whose build predates OpenCode support rejects such a snapshot and drops the
+link, so upgrade both hosts before binding OpenCode sessions on a paired host.
 
 On each host, put the persistent settings in its existing TOML configuration:
 
