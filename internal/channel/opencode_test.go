@@ -141,6 +141,27 @@ func TestOpenCodeBinding(t *testing.T) {
 	}
 }
 
+func TestOpenCodeCollectionLease(t *testing.T) {
+	m, runtime := openCodeManager(t)
+	dir := shortDir(t)
+	m.handle(bindFrame("ses_a", "", dir, ""))
+	if m.sessions["ses_a"] == nil || m.sessions["ses_a"].node.collectionLease == nil {
+		t.Fatal("bound session holds no collection lease")
+	}
+	// A second process on the same runtime must not collect the same session.
+	other := newOpenCodeNodes(context.Background(), runtime)
+	t.Cleanup(other.close)
+	other.handle(bindFrame("ses_a", "", dir, ""))
+	if other.sessions["ses_a"] != nil {
+		t.Fatal("second collector bound a leased session")
+	}
+	m.handle(bridgeFrame{Type: "forget", SessionID: "ses_a"})
+	other.handle(bindFrame("ses_a", "", dir, ""))
+	if other.sessions["ses_a"] == nil {
+		t.Fatal("lease not released when the session was retired")
+	}
+}
+
 func TestOpenCodeRetirement(t *testing.T) {
 	m, _ := openCodeManager(t)
 	dir := shortDir(t)

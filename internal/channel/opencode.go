@@ -353,7 +353,15 @@ func (m *openCodeNodes) newSessionNode(sid string) (*Node, error) {
 		n.close()
 		return nil, err
 	}
+	// A direct integration holds the per-session collection lease for the
+	// node's lifetime, so a second process cannot collect the same session.
+	lease, err := n.claimCollection(sid)
+	if err != nil {
+		n.close()
+		return nil, err
+	}
 	n.mu.Lock()
+	n.collectionLease = lease
 	n.identity.SessionId = sid
 	n.identity.Generation = 1
 	n.names = nameState{explicit: loadOverride(n.runtime, sid)}
