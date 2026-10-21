@@ -568,5 +568,6 @@ Automated and local evidence, macOS 26 arm64 with GoReleaser 2.17.1:
 
 Pending (requires the `release` environment and a pushed tag): real Developer
 ID signing, notarization `Accepted`, stapling, Gatekeeper assessment, draft
-staging and publication, and release downloads. Run a `v0.1.0-rc.1` prerelease and record the results here
+staging and publication, and release downloads. Run a `v0.1.0-rc.1`
+prerelease and record the results here
 ([releasing.md](releasing.md#validating-before-a-stable-release)).
