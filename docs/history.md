@@ -344,7 +344,9 @@ enabled = false
 - `lookback` is a positive whole number of days without sign or leading zeros
   (`1d` to `106751d`) or `all`. Zero, negatives, other units, empty strings,
   malformed values and overflow are rejected when the file is read, as are
-  misspelled keys and tables for unsupported agents.
+  misspelled keys and tables for unsupported agents. OpenCode sessions are not
+  cataloged, so there is no `[opencode.peer_history]`; an OpenCode session can
+  still request a paired host's Claude and Codex history with `host_id`.
 - `rhizome config` prints the effective, inherited value for every agent. The
   policy applies uniformly to all paired hosts; there are no per-peer ACLs.
 - The service reads the policy when it starts. **Restart the service** (`rhizome

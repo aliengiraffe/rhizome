@@ -46,8 +46,10 @@ OpenCode mode exposes twelve tools: the thirteen of Claude and Codex mode minus
 file-transfer tools (`send_file`, `list_files`, `accept_file`, `cancel_file`;
 paired hosts only, see [file transfers](files.md)) and the read-only history
 tools (`search_sessions`, `read_session_history`), which serve the local Claude
-and Codex catalog: OpenCode sessions are not indexed by the history catalog or
-observed by the background service. Because every tool needs a bound caller,
+and Codex catalog, or with `host_id` an opted-in paired host's (see
+[paired-host history](history.md#paired-host-history-opt-in)): OpenCode sessions
+are not indexed by the history catalog or observed by the background service,
+so they are never shared and there is no `[opencode.peer_history]` key. Because every tool needs a bound caller,
 the history tools return `CALLER_UNVERIFIED` (`UNBOUND`) until the session's
 first human prompt, unlike Codex mode.
 

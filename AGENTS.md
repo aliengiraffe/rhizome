@@ -262,7 +262,8 @@ a real tailnet; the two-device Tailscale checklist in
   `[gateway.history]` (`enabled` default false, `lookback` default `30d`) and
   `[claude|codex.peer_history]` overrides resolve to `config.HistoryPolicy`.
   The global switch is a master gate, and agent keys refer to the source
-  history's agent. The service reads the policy at start; a restart applies a
+  history's agent; OpenCode history is not cataloged, so `[opencode]` tables
+  are rejected (OpenCode callers may still pass `host_id`). The service reads the policy at start; a restart applies a
   change and expires remote cursors. Tools take an optional exact `host_id`
   (lowercase fingerprint). Omitting it stays local, with no fan-out or second
   hop. The gateway's `/v1/history` serves only trusted, connected peers and checks

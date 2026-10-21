@@ -430,6 +430,51 @@ func TestOpenCodeMCPIdentity(t *testing.T) {
 	}
 }
 
+// OpenCode callers reach paired-host history like other agents: binding is
+// checked first, then host_id goes to the local gateway service.
+func TestOpenCodeHistoryHostID(t *testing.T) {
+	m, runtime := openCodeManager(t)
+	dir := shortDir(t)
+	st, ct := mcp.NewInMemoryTransports()
+	ctx := context.Background()
+	ss, err := makeServer(m.resolve, agentOpenCode, func() {}, newHistoryService(historyScope{Runtime: runtime})).Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "1"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	host := strings.Repeat("ab", 32)
+	call := func(name string, args map[string]any) string {
+		r, err := cs.CallTool(ctx, &mcp.CallToolParams{Meta: mcp.Meta{openCodeMetaKey: "ses_a"}, Name: name, Arguments: args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.IsError {
+			t.Fatalf("%s with host_id succeeded without a gateway: %+v", name, r)
+		}
+		return r.Content[0].(*mcp.TextContent).Text
+	}
+	if text := call("search_sessions", map[string]any{"host_id": host}); !strings.Contains(text, "CALLER_UNVERIFIED") {
+		t.Fatalf("unbound caller: %s", text)
+	}
+	m.handle(bindFrame("ses_a", "", dir, ""))
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"search_sessions", map[string]any{"host_id": host}},
+		{"read_session_history", map[string]any{"host_id": host, "session_id": "s", "agent_type": "codex"}},
+	} {
+		if text := call(tc.tool, tc.args); !strings.Contains(text, "GATEWAY_UNAVAILABLE") {
+			t.Fatalf("%s: %s", tc.tool, text)
+		}
+	}
+}
+
 func TestOpenCodeDeliveryThroughBridge(t *testing.T) {
 	m, runtime := openCodeManager(t)
 	path := filepath.Join(runtime, "p.sock")
