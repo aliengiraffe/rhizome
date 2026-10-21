@@ -181,7 +181,7 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 
 | Tool | Behavior |
 | --- | --- |
-| `list_sessions()` | Bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. |
+| `list_sessions()` | Bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](docs/opencode.md#why-a-closed-session-can-still-be-live)). |
 | `set_session_name(name)` | Name the caller's bound session for peers. Empty clears the override. Returns the effective name and its source. |
 | `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |

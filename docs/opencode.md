@@ -188,6 +188,29 @@ malformed envelopes and envelopes over 64 KiB show nothing.
   rebind on their next human prompt, or through the restore list when the plugin
   (re)connects.
 
+## Why a closed session can still be `live`
+
+`live` in `list_sessions` means a Rhizome node for that exact `session_id` is bound
+and reachable. It does not mean a window is open, a model turn is running or
+anyone is using the session, and Rhizome reports no idle time (the identity
+carries no activity timestamp, and adding one would be a wire change).
+
+Closing the OpenCode UI does not end an OpenCode session. The sessions live in
+the OpenCode process (for example `opencode serve --service`), whose plugin
+keeps the session's Rhizome node bound. The node goes away when:
+
+- the session is deleted in OpenCode (`session.deleted` retires the node);
+- 24 h pass without binds, activity or tool calls (idle eviction);
+- the OpenCode process exits (a Rhizome restart alone can be undone by the
+  restore list on the plugin's next connect, which is intended).
+
+To clear a session you no longer use, delete it in OpenCode or stop the OpenCode
+service. To check whether it is actually in use, look at its recorded activity
+rather than its `live` status. OpenCode sessions are not in the history catalog
+(see [history.md](history.md)), so ask the owner, or use the process list on the
+host. Codex behaves the same way: its app-server daemon can keep a thread's node
+alive after the terminal closes (see [codex.md](codex.md)).
+
 ## Trust boundary
 
 The socket trusts processes running as the same user, like the cluster token. This
