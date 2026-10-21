@@ -327,15 +327,22 @@ macOS plus one Linux or macOS device and record the result in the PR.
 
 ## Setup configuration wizard
 
-Automated: `setup_config_test.go` (scripted answers for each mode, flag-driven
-writes, keep/replace/backup, no-terminal behavior, 0600/0700 modes, round trip
-through the real resolver) and the `TestNetwork` table in `internal/config`.
-Not automated: the prompts on a real terminal. Manually, with a throwaway
-`HOME`, run `rhizome setup` and check that each of local/LAN/Tailscale writes
-only the answered keys, that Enter at every prompt yields `mode = "local"`, that a
-second run shows the file and keeps it by default, and that `rhizome config`
-reports the keys with source `file`. In Tailscale mode with the daemon stopped,
-setup must warn and still write the file, and `rhizome mcp` must refuse to start.
+Automated: `setup_config_test.go` and `setup_gateway_test.go` cover legacy and
+gateway modes, scripted wizard defaults and existing-value editing, custom
+config/runtime paths, noninteractive flags, full-schema and environment isolation,
+history-policy preservation, explicit disable, malformed/unknown input, address
+and mode conflicts, repeated updates, backup collisions, private permissions and
+non-regular destinations. Generated files round-trip through the shared resolver.
+The gateway smoke rewrites the paired host's configuration through setup before
+restart, checks unchanged effective settings and gateway state bytes, then verifies
+reconnection and message delivery without enrollment; revocation remains covered.
+
+Not automated: real terminal prompts or cross-device/Tailscale connectivity.
+With a throwaway HOME, verify Enter keeps stored choices, keeping the file leaves
+its bytes unchanged, and fresh defaults are local/gateway off. With Tailscale
+stopped, setup warns or explains prerequisites, and service startup must fail
+closed. Follow the two-device gateway checklist separately. No Cursor smoke is
+provided by this repository; no additional integration support is implied.
 
 ### Setup service step (#57, 2026-10-21)
 
@@ -444,7 +451,7 @@ Manual two-device checklist (not automated):
 
 ## Hostname override (#29)
 
-Automated coverage includes setup prompting and retry, clearing an existing
+Automated coverage includes setup prompting and retry, explicitly clearing an existing
 value with backup, noninteractive `--hostname`, resolver source reporting,
 64-byte UTF-8 and control-character validation, rune-safe gossip trimming,
 authenticated identity probes in local/LAN/Tailscale modes for both agent types,

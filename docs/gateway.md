@@ -21,7 +21,27 @@ the link stays up and that host sees only Claude and Codex sessions; upgrade bot
 hosts to share OpenCode sessions. Without this negotiation such a host would
 reject the snapshot and drop the link.
 
-On each host, put the persistent settings in its existing TOML configuration:
+On each host, setup can save these settings without a terminal:
+
+```sh
+rhizome setup --config /absolute/path/config.toml --network local --gateway-mode lan --gateway-listen 192.168.1.10:7947 --replace-config
+```
+
+Omit `--replace-config` for a fresh file. `--gateway-mode tailscale` selects
+Tailscale pairing; optional `--gateway-advertise IP:port` sets a separate reachable
+endpoint. Interactive setup offers the same choices, defaulting to stored values.
+Gateway mode defaults to off on fresh installs. `--network` continues to mean
+legacy MCP gossip, and must be local for pairing. Existing incompatible settings
+require an explicit switch; setup never silently disables pairing or gossip.
+
+Setup preserves unedited settings, history policy and runtime scope; it does not
+invite/join, rotate tokens/host keys or modify trust/revocation records. Explicit
+`--gateway-mode off` disables transport and clears endpoints while keeping trust
+and policy. An explicit `--runtime-dir` change selects different persisted state.
+Updates create private backups and require a service restart. Writing a file does
+not establish connectivity. History sharing remains a separate file-only opt-in.
+
+Equivalent persistent TOML settings:
 
 ```toml
 network.mode = "local"

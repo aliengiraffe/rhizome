@@ -69,7 +69,7 @@ def main():
                 config = directory / 'config.toml'
                 run = directory / 'run'
                 # Every root is isolated: a default OpenCode root would serve this machine's sessions.
-                config.write_text('runtime_dir = %s\nclaude.projects_dir = %s\ncodex.sessions_dir = %s\n'
+                config.write_text('network.mode = "local"\nruntime_dir = %s\nclaude.projects_dir = %s\ncodex.sessions_dir = %s\n'
                                   'opencode.data_dir = %s\n'
                                   'gateway.mode = "lan"\ngateway.listen = "127.0.0.1:%d"\n' %
                                   (json.dumps(str(run)), json.dumps(str(directory / 'claude')),
@@ -142,6 +142,11 @@ def main():
             # Persistent trust reconnects after a service restart; tokens remain untouched.
             a['process'].terminate()
             a['process'].wait(timeout=20)
+            before = command(a, 'config')
+            gateway_state = {p: p.read_bytes() for p in (a['run'] / 'gateway').rglob('*') if p.is_file()}
+            command(a, 'setup', '--network', 'local', '--replace-config')
+            assert command(a, 'config') == before
+            assert all(p.read_bytes() == data for p, data in gateway_state.items())
             start(a)
             until(lambda: 'gateway-a' in sessions(cb))
             until(lambda: json.loads(command(b, 'peers', 'list'))[0]['connected'])

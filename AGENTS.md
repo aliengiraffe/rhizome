@@ -137,8 +137,14 @@ See README, [service](docs/service.md#terminal-interface), and
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
   `mcp` only, with flag > env > file > default. `rhizome setup` is the only
-  writer of the file: it asks or takes `--network`, never overwrites without a
-  backup, writes only answered keys at 0600, and never writes a token
+  writer of the file: it asks or takes `--network` / `--gateway-mode` (plus
+  `--gateway-listen`, `--gateway-advertise`, `--runtime-dir`), merges only explicit
+  edits into validated stored TOML, and preserves all other supported keys without
+  snapshotting environment overrides. Prompts default to stored choices; keeping
+  a file performs no rewrite. Updates require a private backup and atomic 0600
+  replacement, and never write a token or alter pairing state; the Bubble Tea
+  screen merges into the same stored document. Gateway pairing
+  requires local MCP networking; switching transports is explicit
   (`setup.go`, `setup_config.go`).
 
 - **Host pairing is service-owned and non-transitive.** `invite` / `join` pair
