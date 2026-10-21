@@ -301,7 +301,9 @@ func (n *Node) follow(ctx context.Context, session string, f *feed, generation u
 				}
 				f.status = "following"
 				accepted := true
-				if e.Kind != "position" {
+				// Turn markers are never queued; consume them so the cursor advances
+				// instead of replaying the same marker on every reconnect.
+				if e.Kind != "position" && e.Kind != "turn" {
 					accepted = n.enqueueLocked(e, session, f.token, generation)
 				}
 				if e.Kind == "gap" {
