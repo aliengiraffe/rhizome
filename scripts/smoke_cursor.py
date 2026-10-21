@@ -5,8 +5,8 @@ Drives `rhizome mcp --agent cursor` the way Cursor would: MCP over stdio for
 tools, and `rhizome hook --agent cursor` subprocesses fed the hook payloads
 Cursor writes on stdin. A Claude-mode peer verifies cross-agent discovery,
 subscriptions in both directions, direct messages, hook-pull delivery, ticket
-attribution with two conversations, peer-turn suppression, the opt-in followup
-delivery, and registration cleanup. No Cursor installation is needed and no
+attribution with two conversations, peer-turn suppression, default-on followup
+delivery and its opt-out, and registration cleanup. No Cursor installation is needed and no
 model turn runs; the live Cursor checklist stays in docs/verification.md.
 """
 import json
@@ -195,11 +195,20 @@ def main():
             assert '<rhizome-peer-event>' in block and '"kind":"announcement"' in block and 'untrusted' in block, block
             assert 'Tool completed: Read' in p.event('Tool completed: Read')['content']
 
-            # Followup delivery stays off by default.
+            # Followup delivery is on by default: one auto-submitted message per
+            # completed turn with loop_count 0, and the follow-up turn is peer-only.
             p.tool('send', {'session_id': 'conv-a', 'text': 'queued-for-stop'})
             until(lambda: c.tool('list_sessions')['outbox_depth'] == 1, 'outbox')
+            assert 'followup_message' not in c.hook(payload('stop', 'conv-a', project, status='completed', loop_count=1))
+            assert 'followup_message' not in c.hook(payload('stop', 'conv-a', project, status='aborted', loop_count=0))
+            follow = c.hook(payload('stop', 'conv-a', project, status='completed', loop_count=0))['followup_message']
+            assert follow.startswith('Rhizome delivered queued peer activity') and 'queued-for-stop' in follow, follow
             assert 'followup_message' not in c.hook(payload('stop', 'conv-a', project, status='completed', loop_count=0))
-            assert 'queued-for-stop' in drain()
+            c.hook(payload('afterAgentResponse', 'conv-a', project, text='followup-reply'))
+            c.hook(payload('beforeSubmitPrompt', 'conv-a', project, prompt='next real prompt', attachments=[]))
+            c.hook(payload('afterAgentResponse', 'conv-a', project, text='after-followup'))
+            p.event('after-followup')
+            assert not p.saw('followup-reply'), 'followup turn leaked to subscribers'
 
             # Two conversations in one process: tools fail closed without a ticket.
             c.hook(payload('sessionStart', 'conv-b', project, session_id='conv-b', is_background_agent=False))
@@ -232,35 +241,27 @@ def main():
             assert c.tool('list_sessions')['identity']['session_id'] == 'conv-a'
             until(lambda: len([s for s in p.tool('list_sessions')['sessions'] if s['identity']['agent_type'] == 'cursor']) == 1, 'conv-b gone')
 
-            # Opt-in followup delivery, in a fresh process with the key enabled.
+            # Followup delivery disabled by configuration: the stop hook never
+            # auto-submits and queued events wait for the next tool result.
             c.close()
             clients.remove(c)
             until(lambda: not list((directory / 'run' / 'cursor').glob('*')), 'registration cleanup')
-            f = Client(directory, 'cursor', '[cursor]\nfollowup_delivery = true\n')
+            f = Client(directory, 'cursor', '[cursor]\nfollowup_delivery = false\n')
             clients.append(f)
             f.hook(payload('sessionStart', 'conv-f', project, session_id='conv-f', is_background_agent=False))
-            until(lambda: sees(p, 'conv-f', 'cursor'), 'claude sees followup process')
-            p.tool('send', {'session_id': 'conv-f', 'text': 'followup-marker'})
-            until(lambda: f.tool('list_sessions')['outbox_depth'] == 1, 'followup outbox')
-            assert 'followup_message' not in f.hook(payload('stop', 'conv-f', project, status='completed', loop_count=1))
-            follow = f.hook(payload('stop', 'conv-f', project, status='completed', loop_count=0))['followup_message']
-            assert follow.startswith('Rhizome delivered queued peer activity') and 'followup-marker' in follow, follow
+            until(lambda: sees(p, 'conv-f', 'cursor'), 'claude sees the opt-out process')
+            p.tool('send', {'session_id': 'conv-f', 'text': 'no-followup-marker'})
+            until(lambda: f.tool('list_sessions')['outbox_depth'] == 1, 'opt-out outbox')
             assert 'followup_message' not in f.hook(payload('stop', 'conv-f', project, status='completed', loop_count=0))
-            # The followup turn itself is peer-only and not collected.
-            p.tool('subscribe', {'session_id': 'conv-f'})
-            until(lambda: p.tool('list_sessions')['subscriptions']['conv-f']['state'] == 'following', 'following conv-f')
-            f.hook(payload('afterAgentResponse', 'conv-f', project, text='followup-reply'))
-            f.hook(payload('beforeSubmitPrompt', 'conv-f', project, prompt='next real prompt', attachments=[]))
-            f.hook(payload('afterAgentResponse', 'conv-f', project, text='after-followup'))
-            p.event('after-followup')
-            assert not p.saw('followup-reply'), 'followup turn leaked to subscribers'
+            drained = f.hook(payload('postToolUse', 'conv-f', project, tool_name='Read', tool_input={}, tool_output='', cwd=str(project)))
+            assert 'no-followup-marker' in drained.get('additional_context', ''), drained
         finally:
             for client in clients:
                 client.close()
         assert not list(directory.glob('run/*.json')), 'EOF left registrations'
         assert not list(directory.glob('run/cursor/*')), 'EOF left Cursor registrations or sockets'
     print('PASS: Cursor hook binding, roots-free registration, cross-agent subscriptions, hook-pull delivery, '
-          'tickets with two conversations, peer-turn suppression, opt-in followup, sessionEnd and cleanup')
+          'tickets with two conversations, peer-turn suppression, default-on followup and its opt-out, sessionEnd and cleanup')
 
 
 if __name__ == '__main__':

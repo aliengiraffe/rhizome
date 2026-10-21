@@ -308,7 +308,7 @@ func TestCursorDeliveryOutboxAndFollowup(t *testing.T) {
 	if n.status()["outbox_depth"].(int) != 0 || n.status()["counters"].(counters).QueueHandoffs != 1 {
 		t.Fatalf("outbox not drained: %+v", n.status())
 	}
-	// Followup delivery is off by default: the stop hook never auto-submits.
+	// With followup delivery disabled (configuration false) the stop hook never auto-submits.
 	queue("second")
 	eventually(t, func() bool { return n.status()["outbox_depth"].(int) == 1 })
 	stop := msg("stop")

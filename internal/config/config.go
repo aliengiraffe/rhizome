@@ -41,7 +41,7 @@ type Config struct {
 	} `toml:"opencode"`
 	Cursor struct {
 		ConfigDir        string `toml:"config_dir"`        // Cursor user directory; skills live under it. Default ~/.cursor.
-		FollowupDelivery bool   `toml:"followup_delivery"` // Let the stop hook auto-submit queued peer events as the next turn. Off by default.
+		FollowupDelivery bool   `toml:"followup_delivery"` // Let the stop hook auto-submit queued peer events as the next turn. On by default; false disables.
 	} `toml:"cursor"`
 	Gateway     Gateway           `toml:"gateway"`
 	Network     Network           `toml:"network"`
@@ -273,10 +273,9 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 		}
 	}
 	c.Network = raw.Network
-	c.Cursor.FollowupDelivery = raw.Cursor.FollowupDelivery
-	c.Sources["cursor.followup_delivery"] = "default"
+	c.Cursor.FollowupDelivery, c.Sources["cursor.followup_delivery"] = true, "default"
 	if md.IsDefined("cursor", "followup_delivery") {
-		c.Sources["cursor.followup_delivery"] = "file"
+		c.Cursor.FollowupDelivery, c.Sources["cursor.followup_delivery"] = raw.Cursor.FollowupDelivery, "file"
 	}
 	for _, k := range networkKeys {
 		source := "default"

@@ -29,7 +29,7 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `codex.sessions_dir` | — | service `--codex-root` | effective `codex.home` + `/sessions` |
 | `opencode.data_dir` | — | service `--opencode-root` | `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode` |
 | `cursor.config_dir` | — | — | `~/.cursor`; skills are installed under it |
-| `cursor.followup_delivery` | — | — | `false`: the Cursor `stop` hook never auto-submits queued peer events |
+| `cursor.followup_delivery` | — | — | `true`: the Cursor `stop` hook auto-submits queued peer events once per completed turn; `false` leaves delivery to tool results only |
 | `network.mode` | `RHIZOME_LAN`, `RHIZOME_TAILSCALE` | mcp `--lan`, `--tailscale` | `local` |
 | `network.bind_addr` | `RHIZOME_BIND_ADDR` | mcp `--bind-addr` | LAN: all interfaces; Tailscale: the Tailscale IP |
 | `network.advertise_addr` | `RHIZOME_ADVERTISE_ADDR` | mcp `--advertise-addr` | first private interface; Tailscale: the Tailscale IP |
@@ -59,8 +59,9 @@ sessions_dir = ""
 
 [cursor]
 config_dir = "~/.cursor"
-# Opt in to end-of-turn delivery through the Cursor stop hook; see docs/cursor.md.
-followup_delivery = false
+# End-of-turn delivery through the Cursor stop hook; set false to deliver only
+# alongside tool results. See docs/cursor.md.
+followup_delivery = true
 
 # Optional. Omit the table, or use mode = "local", for loopback only.
 [network]
@@ -152,8 +153,9 @@ Cursor IDE chats and Cursor CLI sessions use `rhizome mcp --agent cursor` with
 the same tools and cross-agent subscriptions. Cursor's MCP tool calls carry no
 conversation identity and nothing can push into an idle chat, so binding and
 collection come from Cursor's shell hooks running `rhizome hook --agent cursor`,
-and peer events are injected at tool and turn boundaries (`additional_context`;
-the `stop` follow-up only with `[cursor] followup_delivery = true`). Each
+and peer events are injected at tool and turn boundaries (`additional_context`
+after tool results, and one auto-submitted `stop` follow-up per completed turn
+unless `[cursor] followup_delivery = false`). Each
 conversation gets its own node; several chats in one window need the
 `beforeMCPExecution` hook to attribute tool calls, otherwise they fail closed.
 Cursor logs are not indexed for history. `rhizome setup --agents cursor`

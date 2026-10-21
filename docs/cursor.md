@@ -143,12 +143,13 @@ it:
   8 KiB of `<rhizome-peer-event>` blocks (origin IDs plus content, framed as
   informational and untrusted). This never starts work; the model sees it with
   the tool result it was already waiting for.
-- `stop` returns `followup_message` only when `[cursor] followup_delivery =
-  true` (default `false`), the turn completed, `loop_count` is 0 and the outbox
-  is non-empty. Cursor then auto-submits that text as the next user message,
-  which consumes model usage and starts a turn; the shipped entry caps it with
-  `loop_limit: 1`, and the turn is marked peer-only so its output is not
-  re-collected. Leave it off unless you want end-of-turn peer updates.
+- `stop` returns `followup_message` when the turn completed, `loop_count` is 0
+  and the outbox is non-empty. Cursor then auto-submits that text as the next
+  user message, which consumes model usage and starts a turn; the shipped entry
+  caps it with `loop_limit: 1`, and the turn is marked peer-only so its output
+  is not re-collected. This is on by default so queued peer events reach a chat
+  as soon as its turn ends; set `[cursor] followup_delivery = false` to deliver
+  only alongside tool results (restart the MCP server to apply).
 - `sessionStart` returns static usage instructions only, never queued events.
 
 Events for an idle chat wait in the queue and outbox until the next turn.
@@ -185,8 +186,8 @@ redacted fixtures exist.
   that process would stay UNBOUND and fail closed.
 - Two IDE windows on the same workspace, or a window whose MCP client does not
   answer `roots/list` alongside another live process, fail closed for hooks.
-- There is no idle wake. Peer events reach a chat only at its next tool result or,
-  with followup delivery enabled, right after its turn ends.
+- There is no idle wake. Peer events reach a chat at its next tool result or
+  right after its turn ends (unless followup delivery is disabled).
 - Hooks run per event as short-lived processes; a slow Rhizome never blocks
   Cursor (`failClosed: false`), at the cost of silently missing that event.
 - Up to 64 conversations per MCP process; restart the server to release them.
