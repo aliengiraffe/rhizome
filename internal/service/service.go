@@ -240,14 +240,22 @@ func (m *manager) manage(ctx context.Context, action string, c Config) error {
 			if err != nil {
 				return err
 			}
-			if running(previous) {
-				if previous == c.Observer.Runtime && string(old) == m.render(c) {
-					return nil
+			switch {
+			case string(old) == m.render(c):
+				if running(previous) {
+					return nil // Installed, current and running: nothing to do.
 				}
-				return errors.New("observer is running; stop it before changing its runtime directory")
-			}
-			if string(old) != m.render(c) {
-				return errors.New("service already configured differently; uninstall before reinstalling")
+			case previous != c.Observer.Runtime && running(previous):
+				// The runtime directory selects the token, host identity and
+				// trust state; moving a live observer is an explicit operation.
+				return fmt.Errorf("observer is running from %s; run `rhizome service stop` before changing its runtime directory", previous)
+			default:
+				// The definition is out of date (binary moved, configuration
+				// path or rendering changed): stop the installed service so the
+				// new definition is loaded, then reinstall it below.
+				if err := m.stopInstalled(ctx, previous); err != nil {
+					return fmt.Errorf("stop outdated service: %w", err)
+				}
 			}
 		}
 		if running(c.Observer.Runtime) {
@@ -327,6 +335,38 @@ func (m *manager) manage(ctx context.Context, action string, c Config) error {
 		}
 		if m.platform == "linux" {
 			return m.run(ctx, "systemctl", "--user", "daemon-reload")
+		}
+	}
+	return nil
+}
+
+// stopInstalled stops the service whose definition is on disk and waits for
+// the observer holding runtime to release its lock, so an updated definition
+// can be installed in its place. A service that is not loaded is left alone.
+func (m *manager) stopInstalled(ctx context.Context, runtime string) error {
+	loaded := running(runtime)
+	if m.platform == "darwin" {
+		probe := exec.CommandContext(ctx, "launchctl", "print", fmt.Sprintf("gui/%d/com.rhizome.observer", os.Getuid()))
+		loaded = probe.Run() == nil
+	}
+	if loaded {
+		for _, cmd := range m.commands("stop") {
+			if err := m.run(ctx, cmd.name, cmd.args...); err != nil {
+				return err
+			}
+		}
+	}
+	deadline := time.NewTimer(15 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for running(runtime) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return errors.New("observer kept its runtime lock after the stop request; inspect service logs")
+		case <-tick.C:
 		}
 	}
 	return nil

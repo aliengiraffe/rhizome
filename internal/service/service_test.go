@@ -127,6 +127,83 @@ func TestInstallRefusesRunningRuntimeChange(t *testing.T) {
 	}
 }
 
+// An outdated definition (here: the binary moved) is replaced in place: a
+// running observer is stopped first and the service is installed again; a
+// stopped one is simply reinstalled. Identical definitions stay untouched.
+func TestInstallRestartsOutdatedDefinition(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("runtime_dir = %q", filepath.Join(dir, "run"))), 0644); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := config.Resolve(map[string]string{"config": path}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := FromConfig(resolved)
+	if err := localstate.SecureDir(c.Observer.Runtime); err != nil {
+		t.Fatal(err)
+	}
+	m := manager{platform: "linux", configPath: path, binary: "/new/rhizome", definition: filepath.Join(dir, "service.unit")}
+	outdated := manager{platform: "linux", configPath: path, binary: "/old/rhizome", definition: m.definition}
+	if err := os.WriteFile(m.definition, []byte(outdated.render(c)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := localstate.Lock(filepath.Join(c.Observer.Runtime, "observer.lock"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if lock != nil {
+			lock.Close()
+		}
+	}()
+	var calls []string
+	m.run = func(_ context.Context, name string, args ...string) error {
+		calls = append(calls, strings.Join(append([]string{name}, args...), " "))
+		switch {
+		case strings.Contains(calls[len(calls)-1], " stop "):
+			lock.Close()
+			lock = nil
+		case strings.Contains(calls[len(calls)-1], "enable --now"):
+			lock, err = localstate.Lock(filepath.Join(c.Observer.Runtime, "observer.lock"), false)
+			return err
+		}
+		return nil
+	}
+	if err := m.manage(context.Background(), "install", c); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"systemctl --user stop rhizome-observer.service", "systemctl --user daemon-reload", "systemctl --user enable --now rhizome-observer.service"}
+	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("commands:\n%s", strings.Join(calls, "\n"))
+	}
+	if got, _ := os.ReadFile(m.definition); string(got) != m.render(c) {
+		t.Fatalf("definition not updated:\n%s", got)
+	}
+	// Identical and running: nothing runs.
+	calls = nil
+	if err := m.manage(context.Background(), "install", c); err != nil || len(calls) != 0 {
+		t.Fatalf("identical reinstall: %v %v", err, calls)
+	}
+	// Outdated and stopped: no stop command, reinstalled and started.
+	lock.Close()
+	lock = nil
+	if err := os.WriteFile(m.definition, []byte(outdated.render(c)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	if err := m.manage(context.Background(), "install", c); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(calls, "\n") != strings.Join(want[1:], "\n") {
+		t.Fatalf("stopped reinstall commands:\n%s", strings.Join(calls, "\n"))
+	}
+	if got, _ := os.ReadFile(m.definition); string(got) != m.render(c) {
+		t.Fatal("definition not updated after stopped reinstall")
+	}
+}
+
 func TestInstallWritesOnlyDefinition(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

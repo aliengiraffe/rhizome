@@ -121,7 +121,7 @@ func TestRhizomeServer(t *testing.T) {
 			t.Fatalf("%+v %v", s, err)
 		}
 	})
-	if _, err := rhizomeServer(exe, "cursor", base(), false, home, noPath); err == nil {
+	if _, err := rhizomeServer(exe, "zed", base(), false, home, noPath); err == nil {
 		t.Fatal("unknown agent accepted")
 	}
 }
