@@ -141,7 +141,7 @@ by hand from `examples/opencode/`; tested with OpenCode **2.0.32**. See
 
 ## Claude setup
 
-Building from source requires Go 1.25+ and [Task v3](https://taskfile.dev/docs/installation).
+Building from source requires Go 1.27.3+ and [Task v3](https://taskfile.dev/docs/installation).
 The MCP integration is tested on macOS and Linux.
 Claude Code **2.1.302** is the tested client; older versions are not supported by this verification.
 
