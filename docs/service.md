@@ -25,8 +25,8 @@ configuration or start an agent.
 
 Create `~/.rhizome/config.toml` before installing, with `rhizome setup` (it asks
 for the installation type and then offers to install and start this service,
-also when it keeps an existing file; see the README's
-[Collaboration skill](../README.md#creating-the-configuration-file)) or by hand
+also when it keeps an existing file; see the setup reference on
+[creating configuration](reference.md#creating-the-configuration-file)) or by hand
 (an empty file selects defaults), or select an existing file with `--config`.
 Accepting that offer runs the install lifecycle below for the selected file and
 reports success only once the observer holds its runtime lock.
@@ -36,8 +36,8 @@ that gateway bridges local sessions without changing observer collection or hist
 With `[gateway.history]` enabled, the same gateway also serves this catalog
 read-only to directly paired hosts under the owner's lookback policy. The policy
 is read when the service starts, so restart the service after changing it. See
-[paired-host history](history.md#paired-host-history-opt-in). See the README's
-[configuration table](../README.md#configuration) for keys and precedence.
+[paired-host history](history.md#paired-host-history-opt-in). See the reference
+[configuration table](reference.md#configuration) for keys and precedence.
 Installation rejects path overrides that differ from the file: put persistent
 paths in TOML so a service launched without the installing shell's environment
 uses the same values. Foreground `service run` still accepts temporary flags and

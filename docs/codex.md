@@ -2,7 +2,7 @@
 
 Rhizome supports local Codex CLI sessions with `rhizome mcp --agent codex`.
 Claude is the default for `rhizome mcp`; the agent is always chosen per launch
-with `--agent`, never from the [Rhizome configuration](../README.md#configuration),
+with `--agent`, never from the [Rhizome configuration](reference.md#configuration),
 whose `[codex]` table holds the Codex binary and home. Both modes share discovery,
 authenticated gRPC, subscriptions, announcements, direct messages, replay limits,
 and feedback controls. Codex mode does not advertise `claude/channel` or impose
@@ -19,7 +19,7 @@ file, and `env.CODEX_HOME` for a non-default home), merges the hook groups of
 skill. Other tables, servers, hooks and comments are kept, changed files are
 backed up as `<file>.bak-<timestamp>`, and re-running setup repairs a stale entry
 without duplicating hooks. See the
-[README](../README.md#installing-into-agents) for the full contract.
+[setup reference](reference.md#installing-into-agents) for the full contract.
 
 To install by hand instead, merge `examples/codex/config.toml` into
 `~/.codex/config.toml`, replacing both executable paths with absolute paths, and
