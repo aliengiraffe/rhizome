@@ -278,9 +278,9 @@ jobs:
           bash scripts/release/verify-pkg-payload.sh "$pkg" "$bin"
           if [ "$RHIZOME_SIGNING" = required ]; then
             check_release_signature "$bin"
-            # A bare binary's ticket is checked online; the package's is stapled.
-            spctl --assess --type execute --verbose=4 "$bin" 2>&1 | tee "$RUNNER_TEMP/spctl-bin.txt"
-            grep -q 'source=Notarized Developer ID' "$RUNNER_TEMP/spctl-bin.txt"
+            # spctl cannot assess a bare Mach-O ("does not seem to be an app");
+            # the binary's notarization verdict is enforced at build time and
+            # the package, the macOS installer artifact, is assessed here.
             pkgutil --check-signature "$pkg" | tee "$RUNNER_TEMP/pkgsig.txt"
             grep -q 'Developer ID Installer:' "$RUNNER_TEMP/pkgsig.txt"
             xcrun stapler validate "$pkg"
