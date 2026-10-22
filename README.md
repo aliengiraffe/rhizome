@@ -40,7 +40,7 @@ macOS has a signed and notarized installer that places `rhizome` in
 Linux and Windows artifacts are unsigned. See the
 [installation and checksum guide](docs/releasing.md#installing-and-upgrading).
 
-Or build from source with Go 1.25+ and [Task v3](https://taskfile.dev/docs/installation):
+Or build from source with Go 1.27.3+ and [Task v3](https://taskfile.dev/docs/installation):
 
 ```sh
 git clone https://github.com/aliengiraffe/rhizome.git

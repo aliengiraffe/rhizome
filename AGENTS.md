@@ -31,11 +31,12 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
 | `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums/smoke tool, and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
+| `.github/workflows/vulncheck.yml` | `govulncheck ./...` on pull requests, pushes to `main`, and weekly; a Go toolchain or dependency advisory fails the check. Run `govulncheck ./...` locally when bumping `go.mod`. |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
 
 ## Commands and completion
 
-Run from the repository root with Go 1.25+, Python 3, and [Task v3](https://taskfile.dev/docs/installation).
+Run from the repository root with Go 1.27.3+, Python 3, and [Task v3](https://taskfile.dev/docs/installation).
 Install Task with `brew install go-task` or
 `go install github.com/go-task/task/v3/cmd/task@latest`, with the Go bin directory
 on `PATH`. Prefer Taskfile tasks over their underlying commands; `task --list`
@@ -58,6 +59,7 @@ python3 scripts/smoke_opencode.py --help # Inspect OpenCode live smoke options.
 
 Before marking a change done, build, check (including race tests), both stdio
 smokes (loopback and `--lan`), the service smoke, and the whitespace check must pass.
+Toolchain or dependency bumps must also pass `govulncheck ./...`.
 Format touched Go files with `gofmt`; run targeted package tests first. Regenerate
 protobufs only for protocol changes
 and review the generated diff. Check all documentation links and paths.

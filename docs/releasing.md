@@ -31,7 +31,7 @@ Every binary reports its identity with `rhizome --version`, for example
 no configuration, writes nothing and contacts nothing. Local builds report
 `dev` and the VCS stamp of the checkout.
 
-The binaries are built with Go 1.25 and need macOS 12 or later.
+The binaries are built with Go 1.27 and need macOS 12 or later.
 
 ## Tags
 

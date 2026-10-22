@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  GO_VERSION: "1.25.x"
+  GO_VERSION: "1.27.3"
   GORELEASER_VERSION: "v2.18.3"
   ASSETS_ARTIFACT: rhizome-release-assets
 
