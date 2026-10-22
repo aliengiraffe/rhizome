@@ -87,9 +87,10 @@ Snapshots are versioned `0.0.0-snapshot+<12-char commit>`.
    Windows amd64 and arm64, macOS arm64 and Intel. Each host verifies the
    manifest, extracts its archive and runs `--version`, which must report the
    expected version and commit. The macOS hosts re-verify the package payload.
-   In production they also check the Developer ID signature and online
-   notarization of the bare binary, and the installer signature, stapled
-   ticket and Gatekeeper verdict of the package.
+   In production they also check the Developer ID signature of the bare
+   binary, and the installer signature, stapled ticket and Gatekeeper verdict
+   of the package. `spctl` cannot assess a bare binary, so its notarization
+   `Accepted` verdict is enforced in the build job.
 4. **publish** (`contents: write`, no signing secrets) runs only for tags and
    only after every build and smoke job succeeds. It verifies the artifact set
    exactly and confirms the tag still names the built commit. It stages a
@@ -167,7 +168,7 @@ keychain and the `.p8` key whether the job succeeds or fails.
    gh release download v0.1.0-rc.1 -R aliengiraffe/rhizome -D /tmp/rz && cd /tmp/rz
    shasum -a 256 -c rhizome_0.1.0-rc.1_checksums.txt
    tar xzf rhizome_0.1.0-rc.1_darwin_all.tar.gz rhizome
-   codesign --verify --strict --verbose=2 rhizome && spctl -a -t exec -vv rhizome
+   codesign --verify --strict --verbose=2 rhizome
    pkgutil --check-signature rhizome_0.1.0-rc.1_macos.pkg
    xcrun stapler validate rhizome_0.1.0-rc.1_macos.pkg
    spctl -a -t install -vv rhizome_0.1.0-rc.1_macos.pkg
