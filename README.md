@@ -2,7 +2,7 @@
 
 **Connect coding agents across terminals, worktrees, and colleagues' machines.**
 
-Rhizome lets Claude Code, Codex, and OpenCode sessions discover each
+Rhizome lets Claude Code, Codex, OpenCode, and Cursor sessions discover each
 other, follow selected work, and exchange messages through MCP. Use it to
 coordinate parallel tasks on your laptop or connect your agents with a
 colleague's agents over a LAN or Tailscale network.
@@ -61,7 +61,7 @@ rhizome setup
 
 Select your agents and review the setup changes. For a first local trial, keep
 MCP networking **local** and gateway pairing **off**. Setup installs the
-collaboration skill and, for Claude Code and Codex, their MCP registration
+collaboration skill and, for Claude Code, Codex, and Cursor, their MCP registration
 and binding hooks at user scope. OpenCode gets the skill and plugins; add its
 [MCP entry manually](docs/opencode.md#install).
 
@@ -72,6 +72,7 @@ Restart your agent and complete its integration steps:
 | **Claude Code** | Launch with `claude --dangerously-load-development-channels server:rhizome` and accept the channel/hook prompts. [Setup details](docs/reference.md#claude-setup). |
 | **Codex** | Start a fresh session, review and trust the Rhizome hooks in `/hooks`. [Setup details](docs/codex.md#install). |
 | **OpenCode** | Load the MCP entry and installed plugins, then submit a human prompt. [Setup details](docs/opencode.md#install). |
+| **Cursor** | Start a fresh chat with the installed MCP entry and hooks. Delivery happens at tool or turn boundaries; idle chats cannot be woken. **Live behavior is not yet verified.** [Setup details](docs/cursor.md). |
 
 ### 3. Try two sessions
 
@@ -163,7 +164,7 @@ requires the service on both machines.
 ```mermaid
 flowchart LR
     subgraph A[Your machine]
-        A1[Claude Code / Codex / OpenCode] <-->|MCP + agent integration| AM[Rhizome session nodes]
+        A1[Claude Code / Codex / OpenCode / Cursor] <-->|MCP + agent integration| AM[Rhizome session nodes]
         AM <-->|Authenticated loopback gRPC| AS[Rhizome service]
         AL[Local Claude / Codex logs and OpenCode database] -->|Read-only observation / indexing| AS
         AS --> AH[Local history catalog]
@@ -179,7 +180,7 @@ flowchart LR
 | --- | --- |
 | **Session identity** | Agent-specific hooks or verified transport metadata bind each session. Exact IDs keep worktrees, concurrent chats, and agent types distinct. |
 | **Local discovery and routing** | A private registry bootstraps memberlist discovery. Nodes exchange activity through authenticated gRPC on loopback; local peers can communicate directly. |
-| **Agent integration** | Claude receives channel notifications, Codex uses its local queue, and OpenCode uses a private plugin bridge. |
+| **Agent integration** | Claude receives channel notifications, Codex uses its local queue, OpenCode uses a private plugin bridge, and Cursor pulls events through hooks. |
 | **Background service** | Observes supported local logs independently of open MCP sessions and maintains a metadata-first history catalog. Observation-only sessions cannot receive messages. |
 | **Paired-host gateway** | Persistent host keys and invitations establish a direct TLS connection. Each service exposes remote sessions locally through proxies, keeping local tokens on their own machines. |
 
@@ -212,7 +213,7 @@ See [delivery guarantees](docs/reference.md#activity-replay-and-bounded-delivery
 | [Background service](docs/service.md) | Installation, lifecycle, observation, and terminal management. |
 | [Session history](docs/history.md) | Local search, paginated reads, optional peer access, and content policy. |
 | [File transfers](docs/files.md) | Explicit offers and acceptance, temporary storage, and limits. |
-| [Agent integrations](docs/reference.md#claude-setup) | Claude Code setup; dedicated guides for [Codex](docs/codex.md) and [OpenCode](docs/opencode.md). |
+| [Agent integrations](docs/reference.md#claude-setup) | Claude Code setup; dedicated guides for [Codex](docs/codex.md), [OpenCode](docs/opencode.md), and [Cursor](docs/cursor.md). |
 | [Verification](docs/verification.md) | Tested client versions, automated coverage, and manual checks. |
 | [Releases](docs/releasing.md) | Downloads, checksums, signing, upgrades, and platform limits. |
 
@@ -226,6 +227,7 @@ task check
 python3 scripts/smoke_stdio.py
 python3 scripts/smoke_stdio.py --lan
 python3 scripts/smoke_service.py
+python3 scripts/smoke_cursor.py
 git diff --check
 ```
 

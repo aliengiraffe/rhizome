@@ -2,7 +2,7 @@
 
 Rhizome serves Cursor IDE agent chats and Cursor CLI (`agent`) sessions with
 `rhizome mcp --agent cursor`. The agent is chosen per launch with `--agent`,
-never from the [configuration file](../README.md#configuration), whose
+never from the [configuration file](reference.md#configuration), whose
 `[cursor]` table holds the Cursor user directory and the one delivery policy
 switch. Discovery, authenticated gRPC, subscriptions, announcements, direct
 messages, replay limits, session names and feedback controls are shared with
