@@ -479,7 +479,7 @@ yet; when it lands, its predicate must also gate these reads.
 ## Sources, identity, titles
 
 - Roots are the effective `claude.projects_dir`, `codex.sessions_dir` and
-  `opencode.data_dir` from the single [configuration](../README.md#configuration).
+  `opencode.data_dir` from the single [configuration](reference.md#configuration).
   Only regular `.jsonl` files reached without following symlinks are considered
   for Claude and Codex; Claude `subagents` directories are skipped. Tools accept
   no path arguments.
