@@ -14,7 +14,8 @@ and maintains the local session-history catalog behind `search_sessions` and
 boundaries, and validation and [docs/history.md](docs/history.md) for the
 history contract.
 
-Start with [README.md](README.md) for behavior and setup,
+Start with [README.md](README.md) for capabilities, collaboration workflows and architecture,
+[docs/reference.md](docs/reference.md) for detailed setup and protocol behavior,
 [docs/codex.md](docs/codex.md) for Codex contracts,
 [docs/opencode.md](docs/opencode.md) for OpenCode, and
 [docs/verification.md](docs/verification.md) for tested scope and manual checks.
@@ -104,7 +105,8 @@ redirected streams, `TERM=dumb`, and `service run` never auto-start a UI.
 Keep models (`tui*.go`) separate from operations; bound/cancel requests, join
 workers on exit, suppress native subprocess output inside screens, sanitize
 untrusted display text, and report partial apply without implying rollback.
-See README, [service](docs/service.md#terminal-interface), and
+See [setup](docs/reference.md#creating-the-configuration-file),
+[service](docs/service.md#terminal-interface), and
 [gateway](docs/gateway.md#paired-host-terminal-view) for keys and terminal checks.
 
 ## Go engineering principles
@@ -241,7 +243,7 @@ See README, [service](docs/service.md#terminal-interface), and
   renaming, and overrides persisted under `<runtime>/names/`. Rhizome must never
   derive a name from prompts or transcript content, and a name-only change must
   not touch generation, streams, subscriptions, cursors, or queues
-  (`internal/channel/name.go`, README "Session names").
+  (`internal/channel/name.go`, [reference "Session names"](docs/reference.md#session-names)).
 - **Cursor binds through hooks, never through `tools/call`.** Cursor sends no
   conversation identity in MCP requests and cannot be woken when idle. `rhizome
   mcp --agent cursor` hosts one node per `conversation_id`, registers a private

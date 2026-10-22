@@ -464,7 +464,7 @@ yet; when it lands, its predicate must also gate these reads.
 ## Sources, identity, titles
 
 - Roots are the effective `claude.projects_dir` and `codex.sessions_dir` from the
-  single [configuration](../README.md#configuration). Only regular `.jsonl`
+  single [configuration](reference.md#configuration). Only regular `.jsonl`
   files reached without following symlinks are considered; Claude `subagents`
   directories are skipped. Tools accept no path arguments.
 - Claude identity is the first record carrying `sessionId` (and `cwd` when
