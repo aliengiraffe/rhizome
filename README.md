@@ -205,9 +205,18 @@ See [delivery guarantees](docs/reference.md#activity-replay-and-bounded-delivery
 | [Verification](docs/verification.md) | Tested client versions, automated coverage, and manual checks. |
 | [Releases](docs/releasing.md) | Downloads, checksums, signing, upgrades, and platform limits. |
 
+## Contributing and reporting
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow. Use the
+[issue chooser](https://github.com/aliengiraffe/rhizome/issues/new/choose) for bugs
+and feature requests, and [SECURITY.md](SECURITY.md) to report vulnerabilities
+privately.
+
 ## Development
 
-Build and run the required checks from the repository root:
+Build and run the required checks from the repository root, using the
+[disposable-state wrapper](AGENTS.md#commands-and-completion) to protect your
+agent configuration:
 
 ```sh
 task build

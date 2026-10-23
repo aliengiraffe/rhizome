@@ -34,6 +34,13 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `.github/workflows/vulncheck.yml` | `govulncheck ./...` on pull requests, pushes to `main`, and weekly; a Go toolchain or dependency advisory fails the check. Run `govulncheck ./...` locally when bumping `go.mod`. |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
 
+## Community policies
+
+[CONTRIBUTING.md](CONTRIBUTING.md) is the human contributor entry point;
+[SECURITY.md](SECURITY.md) routes vulnerability reports privately. Keep issue/PR
+forms in `.github/` consistent with these policies; do not request secrets or raw
+transcripts. Support and response-time promises require maintainer approval.
+
 ## Commands and completion
 
 Run from the repository root with Go 1.27.3+, Python 3, and [Task v3](https://taskfile.dev/docs/installation).
@@ -55,6 +62,31 @@ git diff --check                   # Check whitespace errors.
 task proto                         # Requires protoc; installs pinned generators in .bin.
 python3 scripts/smoke_codex.py --help # Inspect live smoke prerequisites/options.
 python3 scripts/smoke_opencode.py --help # Inspect OpenCode live smoke options.
+```
+
+Run checks in disposable user state, never with inherited real agent directories.
+For example, this Python wrapper keeps the Go caches but isolates configuration
+and clears agent/Rhizome/XDG overrides so defaults follow each test’s HOME
+(run from the repository root):
+
+```sh
+python3 - <<'PYTHON'
+import os, pathlib, subprocess, tempfile
+cache = {key: subprocess.check_output(["go", "env", key], text=True).strip()
+         for key in ("GOPATH", "GOCACHE", "GOMODCACHE")}
+with tempfile.TemporaryDirectory(prefix="rhizome-check-") as tmp:
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("RHIZOME_", "CLAUDE_", "CODEX_", "OPENCODE_", "XDG_"))}
+    env.update(cache)
+    path = pathlib.Path(tmp, "home")
+    path.mkdir(mode=0o700)
+    env["HOME"] = str(path)
+    for command in (["task", "build"], ["task", "check"],
+                    ["python3", "scripts/smoke_stdio.py"],
+                    ["python3", "scripts/smoke_stdio.py", "--lan"],
+                    ["python3", "scripts/smoke_service.py"], ["git", "diff", "--check"]):
+        subprocess.run(command, env=env, check=True)
+PYTHON
 ```
 
 Before marking a change done, build, check (including race tests), both stdio

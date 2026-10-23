@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible problem with Rhizome.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. For suspected vulnerabilities, use [private reporting](https://github.com/aliengiraffe/rhizome/security/advisories/new).
+        Do not include credentials, tokens, pairing invitations, raw transcripts, or private information.
+  - type: input
+    id: rhizome-version
+    attributes:
+      label: Rhizome version
+      description: Output of rhizome --version, or the source commit.
+    validations:
+      required: true
+  - type: input
+    id: agent-version
+    attributes:
+      label: Coding agent and version
+      description: Claude Code, Codex, OpenCode and their versions, or not applicable.
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      description: OS version and architecture; include both devices for cross-device problems.
+  - type: dropdown
+    id: network-mode
+    attributes:
+      label: MCP network mode
+      options:
+        - Local
+        - LAN
+        - Tailscale
+        - Unknown or not applicable
+  - type: input
+    id: gateway-mode
+    attributes:
+      label: Host pairing
+      description: Is gateway pairing off, LAN, or Tailscale? It is separate from MCP networking.
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Use a minimal example with disposable data. Include relevant settings with secrets removed.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected and actual results
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics (optional)
+      description: Relevant error excerpts only. Remove secrets, personal paths, session content, and private identifiers. Do not attach raw transcripts.
+      render: text
