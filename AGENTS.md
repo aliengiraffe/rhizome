@@ -21,16 +21,17 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 
 | Path | Responsibility |
 | --- | --- |
-| `main.go`, `service.go`, `gateway.go`, `files.go` | CLI dispatch, MCP, service lifecycle and legacy demo. |
+| `main.go`, `service.go`, `gateway.go`, `files.go`, `update.go` | CLI dispatch, MCP, service lifecycle, `rhizome update` and legacy demo. |
 | `setup.go`, `setup_config.go`, `setup_agents.go` | `rhizome setup`: agent detection and picker, the configuration wizard, and user-scope skill/MCP/hook installation. |
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
-| `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
+| `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks; `update.go` and `finish_*.go` wire the auto-updater (restarters, detached finisher) into the observer. |
+| `internal/update/` | Verified self-update: eligibility, bounded GitHub source, signed-manifest/digest/codesign/`--version` verification chain, strict extraction, atomic install with one backup, state file, background loop. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
 | `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), recent-only advertisements (`recent.go`), and the OpenCode bridge (`opencode*.go`). |
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
-| `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums/smoke tool, and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
+| `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums, Ed25519 manifest signing and the trusted key list (`keys.go`), smoke tool, and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
 | `.github/workflows/vulncheck.yml` | `govulncheck ./...` on pull requests, pushes to `main`, and weekly; a Go toolchain or dependency advisory fails the check. Run `govulncheck ./...` locally when bumping `go.mod`. |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
 
@@ -49,6 +50,7 @@ task check                         # go vet ./... and go test -race ./...
 task test-plugin                   # OpenCode plugin tests (Node 20+; skips without node).
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
 python3 scripts/smoke_service.py    # Separate observer/MCP processes, handoffs, history catalog.
+python3 scripts/smoke_update.py     # Observer against a loopback fake release: refusals everywhere, install+restart on Linux.
 python3 scripts/smoke_tui.py        # Unix PTYs; isolated setup/service/peers UI and restoration.
 python3 scripts/smoke_stdio.py --lan # Same scenario in LAN mode: pinned TLS, separate registries.
 git diff --check                   # Check whitespace errors.
@@ -58,7 +60,8 @@ python3 scripts/smoke_opencode.py --help # Inspect OpenCode live smoke options.
 ```
 
 Before marking a change done, build, check (including race tests), both stdio
-smokes (loopback and `--lan`), the service smoke, and the whitespace check must pass.
+smokes (loopback and `--lan`), the service smoke, the update smoke, and the
+whitespace check must pass.
 Toolchain or dependency bumps must also pass `govulncheck ./...`.
 Format touched Go files with `gofmt`; run targeted package tests first. Regenerate
 protobufs only for protocol changes
@@ -138,7 +141,12 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
-  CLI usage: `rhizome --version | mcp | setup | service | config | token | invite | join | peers | files | demo [flags]`.
+  CLI usage: `rhizome --version | mcp | setup | service | update | config | token | invite | join | peers | files | demo [flags]`.
+  `[update]` (`enabled` default true, `check_interval` default `24h`, 1h–720h)
+  resolves with `RHIZOME_UPDATE` / `RHIZOME_UPDATE_CHECK_INTERVAL` and the
+  `--update` / `--update-check-interval` flags of `service run|install` and
+  `config`; setup asks or takes `--auto-update` and writes only an explicit
+  choice (`internal/config/update.go`). It is never a per-agent key.
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
   `mcp` only, with flag > env > file > default. `rhizome setup` is the only
@@ -213,13 +221,57 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   is the same binary at `/usr/local/bin/rhizome` (receipt
   `com.aliengiraffe.rhizome`). The package has no scripts and never touches
   user config, state or the observer. Secrets stay in the `release`
-  environment; only the publish job writes releases. It stages a draft,
-  verifies the checksum manifest of every asset, and never replaces a
-  published release. Linux and Windows assets are unsigned. PRs and manual
-  runs build ad-hoc snapshots without secrets. Run `goreleaser check`,
+  environment; only the publish job writes releases. Production signs the
+  checksum manifest with the Ed25519 release key (`RHIZOME_RELEASE_SIGNING_KEY`
+  secret, `releasetool sign`) and publishes `rhizome_<v>_checksums.txt.sig`;
+  `releasetool verify -signed` in the build and publish jobs requires that
+  signature to verify against `internal/release/keys.go`, so a missing or
+  unlisted key fails the release, never degrades it. Key generation
+  (`releasetool keygen`, seed never printed), rotation (add the new public key,
+  ship a release signed by the old key, then switch) and revocation (remove
+  the key) are documented in docs/releasing.md. It stages a draft, verifies
+  the checksum manifest and signature of every asset, and never replaces a
+  published release. Linux and Windows assets are unsigned; the signed
+  manifest is their authenticity root. PRs and manual runs build ad-hoc,
+  unsigned-manifest snapshots without secrets. Run `goreleaser check`,
   `actionlint` and `shellcheck -x -P SCRIPTDIR scripts/release/*.sh` for
   pipeline changes. Real signing is validated only by a tagged prerelease
   (docs/releasing.md).
+- **Self-update is verified, fail-closed and observer-only.** Only
+  `service run` with `[update].enabled` runs the background loop
+  (`internal/update`, wired in `internal/service/update.go`); `mcp`,
+  `--version`, `config`, `setup` and the lifecycle commands never contact a
+  release host, and disabling the policy means zero update requests.
+  `rhizome update` (check by default, `--apply`) is the explicit path through
+  the same code and ignores the policy. Eligibility is strictly newer SemVer,
+  no downgrade, prereleases only for prerelease builds, never for `dev` or
+  snapshot builds; drafts and mislabelled releases are skipped. The source is
+  the GitHub API for `aliengiraffe/rhizome` only, download URLs are
+  constructed (never taken from the API or release bodies), redirects stay on
+  GitHub hosts, TLS is verified, and every read is bounded (1 MiB API, 64 KiB
+  manifest, 4 KiB signature, 128 MiB archive, 256 MiB binary). Before the
+  installed binary is touched, all of: trusted Ed25519 signature over the
+  manifest, SHA-256 of the archive, strict extraction (only `rhizome`,
+  `LICENSE`, `README.md` as regular root files), on macOS a strict `codesign`
+  verify with Developer ID Application authority, hardened runtime, timestamp,
+  identifier `com.aliengiraffe.rhizome` and Team ID `6BY6T468D8`
+  (`update.TeamID`), and a `--version` run reporting the exact version and tag
+  commit. Install is a same-directory temp file renamed over the
+  symlink-resolved target keeping one `.previous` backup; a non-writable
+  directory reports `not_writable` once with no escalation, prompt or
+  definition change; `<runtime>/update.lock` serializes attempts. Restart uses
+  `internal/service` (stop/start), waits for the observer lock plus the new
+  `version` in `observer-health.json` within 60 s, and otherwise restores the
+  backup and restarts again; the observer updating itself hands this to a
+  detached `rhizome update --finish` from the new binary (transient
+  `systemd-run --user` unit on Linux) because it cannot supervise its own
+  replacement, and exits with `restart_required` when no native definition
+  exists. State is `<runtime>/update-state.json` with stable outcome codes;
+  logs carry versions, asset names, key ids and codes only. Test hooks
+  `RHIZOME_UPDATE_SOURCE_URL` (loopback only), `RHIZOME_UPDATE_TRUSTED_KEYS`
+  and `RHIZOME_UPDATE_INITIAL_DELAY` (valid only with the loopback source) serve
+  `scripts/smoke_update.py`; never widen them. Keep docs/service.md
+  "Automatic updates" and docs/releasing.md "Release signing key" in step.
 - **Hostnames are display labels.** Shared top-level `hostname` is written by
   the setup prompt or `setup --network ... --hostname ...`. Blank clears an
   override and uses the OS short hostname in every mode, including Tailscale.

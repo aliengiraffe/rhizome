@@ -92,13 +92,108 @@ than changing the collector's user. The task does not run while the user is logg
 out. Native service-manager status is separate from observer health.
 
 Installed observers write JSON diagnostics to `observer.log`, rotated at 2 MiB
-with one backup. `observer-health.json` reports last update, watched directories,
+with one backup. `observer-health.json` reports last update, the running `version`, watched directories,
 tracked files, active observed publishers, degraded coverage, parser skips,
 suppressed events, and a `catalog` block (indexing state, indexed files and
 sessions, pending work, last write, coverage, warnings, counters). `status` verifies the process lock before reporting running.
 Foreground `run` logs to stderr. No transcript contents or tokens are logged.
 Windows runtime directories use a protected inheritable current-user DACL;
 Unix runtime directories must be private and user-owned.
+
+## Automatic updates
+
+With `[update] enabled = true` (the default) the installed observer is the one
+Rhizome process that contacts a remote host: every `check_interval` (default
+`24h`, minimum `1h`) it asks the GitHub Releases API for `aliengiraffe/rhizome`
+whether a newer release exists and, when one does, installs it over its own
+executable and restarts onto it. `mcp`, `config`, `setup`, `--version` and
+`service install|start|stop|status` never check. Set `enabled = false`, or
+`RHIZOME_UPDATE=0`, and the observer makes no update request at all; the
+explicit `rhizome update` command still works, because it is a user action
+(`--check`, the default, only reports; `--apply` installs). `rhizome config`
+shows the effective policy and its source; see the
+[configuration table](reference.md#configuration).
+
+Eligibility: only releases strictly newer by SemVer precedence are
+considered; never a downgrade, never a prerelease unless the running build is
+itself a prerelease, never anything for `dev` or snapshot builds, and
+mislabelled, draft or malformed releases are ignored. Only the asset names
+that the release matrix in `internal/release/assets.go` defines for this
+platform are downloaded, from download URLs the updater constructs itself;
+URLs in release bodies or API responses are never followed. Requests are
+HTTPS with certificate verification, bounded by timeouts, size caps
+(1 MiB API response, 64 KiB manifest, 4 KiB signature, 128 MiB archive,
+256 MiB extracted binary) and at most five redirects that must stay on GitHub
+hosts. Standard proxy environment variables are honored.
+
+Verification is fail closed; the installed binary is not touched until all of
+it passes:
+
+1. `rhizome_<v>_checksums.txt.sig` must be a valid Ed25519 signature over the
+   manifest by a key compiled into the running binary
+   ([release signing](releasing.md#release-signing-key)). No signature, an
+   unknown key or a tampered manifest rejects the release on every platform.
+2. The downloaded archive's SHA-256 must equal the manifest entry, and the
+   manifest must list exactly the expected assets.
+3. The archive may contain only `rhizome` (or `rhizome.exe`), `LICENSE` and
+   `README.md` as regular files at its root; extra paths, directories,
+   symlinks, traversal and oversize members reject it.
+4. On macOS the extracted binary must pass `codesign --verify --strict` and
+   carry a Developer ID Application signature with hardened runtime, a secure
+   timestamp, identifier `com.aliengiraffe.rhizome` and Team ID `6BY6T468D8`.
+   Ad-hoc or differently signed binaries are rejected. Notarization is not
+   re-checked online.
+5. The candidate is executed with `--version` and must report exactly the
+   release version and the tag's commit.
+
+Install writes the candidate as a private temporary file in the executable's
+real directory (symlinks resolved) and renames it over the target, keeping the
+previous binary as `rhizome.previous` until the new one is confirmed running.
+When that directory is not writable by the user (typical for the package at
+`/usr/local/bin`), the observer reports `not_writable` once with the manual
+command and does not escalate, prompt or change the service definition; later
+checks keep the status current without downloading again. Attempts are
+serialized across processes by `<runtime>/update.lock`.
+
+Restart goes through the native lifecycle in `internal/service`. A running
+process cannot supervise its own replacement, so after installing onto itself
+the observer starts a detached finisher, `rhizome update --finish --config
+<path>`, from the new binary (a transient `systemd-run --user` unit on Linux
+when available, a new session on macOS, a detached process outside the task's
+job on Windows). The finisher stops and starts the service, waits up to 60 s
+for the observer lock plus `observer-health.json` reporting the new version,
+and otherwise restores `rhizome.previous` and starts the service again. The
+new observer confirms the update on start and removes the backup. Without a
+native definition (a foreground `service run` under a custom supervisor) the
+observer exits non-zero with `restart required` so its supervisor restarts it
+on the new binary. `rhizome update --apply` from a shell restarts an installed,
+running service directly and rolls back the same way. MCP processes keep
+running the old binary until their agent client restarts them; run
+`rhizome setup` again if a release changes skills or hooks.
+
+Status lives in `<runtime>/update-state.json` (0600): running version, last
+check, last outcome code, available version, blocked reason, pending restart
+and the next check. `service status` prints it after the health JSON, and the
+terminal view shows it as "Version", "Last update check", "Last update
+outcome", "Update available", "Update blocked" and "Update pending restart".
+Outcome codes are stable: `up_to_date`, `update_available`, `no_release`,
+`dev_build`, `updated`, `installed`, `restart_pending`, `restart_required`,
+`rolled_back`, `restart_failed`, `not_writable`, `locked`, `rate_limited`,
+`network_error`, `timeout`, `oversize`, `redirect_refused`, `http_error`,
+`invalid_release`, `signature_invalid`, `digest_mismatch`, `archive_invalid`,
+`codesign_failed`, `version_mismatch`, `install_failed`. Logs carry versions,
+asset names, key ids and outcome codes only. Failed checks retry on the next
+interval with exponential backoff (up to eight intervals). The finisher logs to
+`<runtime>/update.log` and `update-finish.log`.
+
+Existing installations predate the updater: the first auto-updating release
+must be installed by hand, and no release is installable until the
+[release signing key](releasing.md#release-signing-key) exists.
+`RHIZOME_UPDATE_SOURCE_URL`, `RHIZOME_UPDATE_TRUSTED_KEYS` and
+`RHIZOME_UPDATE_INITIAL_DELAY` are test hooks for
+`scripts/smoke_update.py`: the source must be a loopback URL and the other two
+are honored only with it, so no environment can point a real installation at
+a differently keyed mirror.
 
 ## Collection and history boundaries
 
@@ -184,6 +279,7 @@ task build
 task check
 python3 scripts/smoke_stdio.py
 python3 scripts/smoke_service.py
+python3 scripts/smoke_update.py
 ```
 
 Go tests exercise actual filesystem notifications with no polling fallback,
@@ -193,7 +289,12 @@ catalog indexing without publishing. The service smoke uses separate
 observer/MCP processes and synthetic logs to verify subscription handoffs,
 direct delivery, daemon restart, no duplicate replay, pre-existing logs becoming
 searchable and readable, a recently ended session listed as `recent` and refused
-by `send`, and a stale catalog with withdrawn recent rows while the service is stopped. No models or real user logs are involved. Service-definition tests validate
+by `send`, and a stale catalog with withdrawn recent rows while the service is stopped.
+The update smoke runs a real observer against a loopback fake release: a
+tampered manifest signature is refused and a disabled loop makes no request
+everywhere; on Linux a signed release is installed, the process exits for its
+supervisor, and the restarted observer confirms the new version; on macOS the
+locally built, unsigned candidate is refused by `codesign` policy. No models or real user logs are involved. Service-definition tests validate
 XML and arguments; they do not prove installation/startup on another operating
 system. Native install/login/recovery tests must be recorded per platform.
 
@@ -201,8 +302,8 @@ system. Native install/login/recovery tests must be recorded per platform.
 
 On usable terminal stdin/stdout (`TERM` must not be `dumb`), bare
 `rhizome service` opens Bubble Tea management. It shows whether the native
-definition exists, whether the observer holds its runtime lock, and available
-observer health counters. The last health snapshot may be stale when stopped;
+definition exists, whether the observer holds its runtime lock, available
+observer health counters, and the [automatic update](#automatic-updates) state. The last health snapshot may be stale when stopped;
 this view does not infer native manager state from formatted command output.
 Use `RHIZOME_CONFIG=/absolute/config.toml rhizome service` for a custom config.
 

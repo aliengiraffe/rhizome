@@ -28,6 +28,7 @@ type configAnswers struct {
 	ClaudeDir  string
 	CodexHome  string
 	CodexBin   string
+	AutoUpdate *bool // [update].enabled; nil leaves the stored value
 }
 
 // storedConfig reads the TOML document at path as the base for edits. A
@@ -133,6 +134,9 @@ func (a configAnswers) render() (string, error) {
 	}
 	if selected("gateway-advertise", g.Advertise != "") {
 		set("gateway", "advertise", g.Advertise)
+	}
+	if a.AutoUpdate != nil && selected("auto-update", true) {
+		set("update", "enabled", *a.AutoUpdate)
 	}
 	var b bytes.Buffer
 	b.WriteString("# Written by `rhizome setup`; see the README Configuration section.\n")
@@ -421,6 +425,15 @@ How will Rhizome be used on this device?
 		fmt.Fprintln(p.out, err)
 	}
 	a.Selected["hostname"] = a.Hostname != c.Hostname
+	fmt.Fprintln(p.out, "\nThe background service can check GitHub Releases for newer signed builds and install them (outbound HTTPS to github.com only; `rhizome update` stays available either way).")
+	autoUpdate, err := p.yesNo("Install verified updates automatically", c.AutoUpdate.Enabled)
+	if err != nil {
+		return a, err
+	}
+	if autoUpdate != c.AutoUpdate.Enabled || c.Sources["update.enabled"] == "file" {
+		a.AutoUpdate = &autoUpdate
+	}
+	a.Selected["auto-update"] = a.AutoUpdate != nil && (c.Sources["update.enabled"] != "file" || autoUpdate != c.AutoUpdate.Enabled)
 	a.Selected["bind-addr"] = n.BindAddr != c.Network.BindAddr
 	a.Selected["advertise-addr"] = n.AdvertiseAddr != c.Network.AdvertiseAddr
 	a.Selected["join"] = strings.Join(n.Join, ",") != strings.Join(c.Network.Join, ",")

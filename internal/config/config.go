@@ -42,7 +42,9 @@ type Config struct {
 	Gateway      Gateway           `toml:"gateway"`
 	Network      Network           `toml:"network"`
 	Sessions     Sessions          `toml:"sessions"`
+	Update       Update            `toml:"update"`
 	PeerHistory  HistoryPolicy     `toml:"-"` // Effective policy for paired hosts reading local history.
+	AutoUpdate   UpdatePolicy      `toml:"-"` // Effective [update] policy; only `service run` acts on it.
 	RecentWindow time.Duration     `toml:"-"` // Effective [sessions].recent_window; zero disables recent-only rows.
 	Path         string            `toml:"-"`
 	Found        bool              `toml:"-"`
@@ -121,11 +123,18 @@ func (c *Config) settings() []setting {
 }
 
 // Bind adds configuration selection and the requested override flags.
+// "update" and "update-check-interval" override the [update] table.
 func Bind(fs *flag.FlagSet, names ...string) {
 	fs.String("config", "", "configuration TOML path (default ~/.rhizome/config.toml)")
 	var c Config
-	for _, s := range c.settings() {
-		for _, name := range names {
+	for _, name := range names {
+		switch name {
+		case "update":
+			fs.String(name, "", "override update.enabled: true or false (RHIZOME_UPDATE)")
+		case "update-check-interval":
+			fs.String(name, "", "override update.check_interval, e.g. 24h (RHIZOME_UPDATE_CHECK_INTERVAL)")
+		}
+		for _, s := range c.settings() {
 			if s.flag == name {
 				fs.String(name, "", "override "+s.key)
 			}
@@ -221,12 +230,15 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	}
 	// TOML keys are case-sensitive even though the decoder can match Go fields
 	// case-insensitively. Reject alternate spellings instead of losing their source.
-	known := map[string]bool{"claude": true, "codex": true, "opencode": true, "network": true, "gateway": true, "sessions": true}
+	known := map[string]bool{"claude": true, "codex": true, "opencode": true, "network": true, "gateway": true, "sessions": true, "update": true}
 	for _, k := range networkKeys {
 		known["network."+k] = true
 	}
 	for _, k := range sessionsKeys {
 		known["sessions."+k] = true
+	}
+	for _, k := range updateKeys {
+		known["update."+k] = true
 	}
 	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history"} {
 		known[table] = true
@@ -279,6 +291,15 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 			return c, fmt.Errorf("config %s: %w", path, err)
 		}
 		c.Sources["sessions.recent_window"] = "file"
+	}
+	c.Update = raw.Update
+	var updateSources map[string]string
+	c.AutoUpdate, updateSources, err = resolveUpdate(raw.Update, func(key string) bool { return md.IsDefined("update", key) }, flags, getenv)
+	if err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	for k, v := range updateSources {
+		c.Sources[k] = v
 	}
 	c.Network = raw.Network
 	for _, k := range networkKeys {
@@ -442,6 +463,12 @@ func (c Config) Write(w io.Writer) error {
 		}
 	}
 	if _, err := fmt.Fprintf(w, "sessions.recent_window = %q # source: %s\n", c.RecentWindow.String(), c.Sources["sessions.recent_window"]); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "update.enabled = %t # source: %s\n", c.AutoUpdate.Enabled, c.Sources["update.enabled"]); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "update.check_interval = %q # source: %s\n", c.AutoUpdate.CheckInterval.String(), c.Sources["update.check_interval"]); err != nil {
 		return err
 	}
 	// Peer history shows the effective, inherited policy, not only file values.
