@@ -23,26 +23,32 @@ func TestDetectAgents(t *testing.T) {
 	}
 	missing := func(string) (string, error) { return "", errors.New("not found") }
 	agents := detectAgents(c, missing)
-	if len(agents) != 3 || agents[0].Name != "claude" || agents[1].Name != "codex" || agents[2].Name != "opencode" {
+	if len(agents) != 4 || agents[0].Name != "claude" || agents[1].Name != "codex" || agents[2].Name != "opencode" || agents[3].Name != "cursor" {
 		t.Fatalf("unexpected agents %+v", agents)
 	}
 	if !agents[0].Detected || agents[0].Skills != filepath.Join(home, ".claude", "skills") {
 		t.Fatalf("claude should be detected from ~/.claude: %+v", agents[0])
 	}
-	if agents[1].Detected {
-		t.Fatalf("codex should not be detected: %+v", agents[1])
+	if agents[1].Detected || agents[2].Detected || agents[3].Detected || agents[3].Skills != filepath.Join(home, ".cursor", "skills") {
+		t.Fatalf("codex, opencode and cursor should not be detected: %+v", agents[1:])
 	}
 
 	// PATH lookup detects an agent without a config directory.
 	onPath := func(name string) (string, error) {
-		if name == "codex" {
+		switch name {
+		case "codex":
 			return "/usr/local/bin/codex", nil
+		case "agent": // the Cursor CLI binary; `cursor` is the IDE launcher
+			return "/usr/local/bin/agent", nil
 		}
 		return "", errors.New("not found")
 	}
 	agents = detectAgents(c, onPath)
 	if !agents[1].Detected || !strings.Contains(agents[1].Reason, "PATH") {
 		t.Fatalf("codex should be detected from PATH: %+v", agents[1])
+	}
+	if !agents[3].Detected || !strings.Contains(agents[3].Reason, "/usr/local/bin/agent") {
+		t.Fatalf("cursor should be detected from the agent CLI on PATH: %+v", agents[3])
 	}
 
 	// Environment overrides relocate the skills directory.
@@ -127,7 +133,7 @@ func TestParseAgentFlag(t *testing.T) {
 			t.Fatalf("%q: got %v err %v, want %v", in, got, err, want)
 		}
 	}
-	if _, err := parseAgentFlag("cursor", agents); err == nil || !strings.Contains(err.Error(), "unknown agent") {
+	if _, err := parseAgentFlag("zed", agents); err == nil || !strings.Contains(err.Error(), "unknown agent") {
 		t.Fatalf("expected unknown agent error, got %v", err)
 	}
 }

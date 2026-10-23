@@ -76,10 +76,56 @@ func rhizomeServer(exe, agentName string, c config.Config, explicitConfig bool, 
 		if bin != "" {
 			s.Args = append(s.Args, "--codex-bin", bin)
 		}
+	case "cursor":
+		// Cursor has no home variable to pin; hooks resolve configuration like
+		// every other command and receive --config through hookCommand.
 	default:
 		return s, fmt.Errorf("unsupported agent %q", agentName)
 	}
 	return s, nil
+}
+
+// shellQuote renders s as one POSIX shell word, so executable and
+// configuration paths with spaces survive Cursor's shell-string commands.
+func shellQuote(s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`!*?[]{}()<>|&;#~") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// cursorHookCommand is the shell string Cursor's hooks.json runs for every
+// Rhizome event: the absolute executable, `hook --agent cursor`, and --config
+// only for an explicitly selected configuration file.
+func cursorHookCommand(exe string, c config.Config, explicitConfig bool) string {
+	cmd := shellQuote(exe) + " hook --agent cursor"
+	if explicitConfig {
+		cmd += " --config " + shellQuote(c.Path)
+	}
+	return cmd
+}
+
+// cursorHookEvents lists the Cursor hook events Rhizome installs, in the order
+// of examples/cursor/hooks.json.
+var cursorHookEvents = []string{"sessionStart", "sessionEnd", "beforeSubmitPrompt", "beforeMCPExecution", "postToolUse", "postToolUseFailure", "afterAgentResponse", "stop"}
+
+// cursorHookTemplate returns the Cursor hook entries setup installs, keyed by
+// event, in Cursor's hooks.json shape (`version: 1`, entries directly under the
+// event). Every entry is non-blocking; the beforeMCPExecution entry is scoped to
+// Rhizome and the stop entry caps follow-ups at one.
+func cursorHookTemplate(command string) map[string][]any {
+	out := map[string][]any{}
+	for _, event := range cursorHookEvents {
+		entry := map[string]any{"command": command, "timeout": json.Number("10"), "failClosed": false}
+		switch event {
+		case "beforeMCPExecution":
+			entry["matcher"] = serverName
+		case "stop":
+			entry["loop_limit"] = json.Number("1")
+		}
+		out[event] = []any{entry}
+	}
+	return out
 }
 
 // claudeGlobalConfig is the file holding Claude's user-scope MCP servers:
@@ -136,10 +182,19 @@ func hookTemplate(agentName string) map[string][]any {
 	return out
 }
 
-// isRhizomeHook reports whether a decoded hook entry targets the Rhizome server.
+// isRhizomeHook reports whether a decoded hook entry is Rhizome's: an
+// observe_session mcp_tool entry (Claude, Codex) or a command entry running
+// `rhizome hook --agent cursor` (Cursor).
 func isRhizomeHook(v any) bool {
 	h, ok := v.(map[string]any)
-	return ok && h["type"] == "mcp_tool" && h["server"] == serverName
+	if !ok {
+		return false
+	}
+	if h["type"] == "mcp_tool" && h["server"] == serverName {
+		return true
+	}
+	cmd, _ := h["command"].(string)
+	return strings.Contains(cmd, serverName) && strings.Contains(cmd, " hook --agent cursor")
 }
 
 // mergeHooks removes every Rhizome hook entry from doc["hooks"], dropping groups
@@ -163,6 +218,9 @@ func mergeHooks(doc map[string]any, template map[string][]any) error {
 			if !ok {
 				kept = append(kept, g)
 				continue
+			}
+			if isRhizomeHook(group) {
+				continue // Cursor-shaped entry: the group is the hook itself.
 			}
 			if entries, ok := group["hooks"].([]any); ok {
 				rest := make([]any, 0, len(entries))
@@ -525,7 +583,7 @@ func (in agentInstaller) install(a agent) error {
 	}
 	var mcp, hooks fileResult
 	switch a.Name {
-	case "claude":
+	case "claude", "cursor":
 		mcp, err = editJSON(a.MCP, func(doc map[string]any) error { return mergeJSONServer(doc, server) }, in.now())
 	case "codex":
 		mcp, err = editFile(a.MCP, func(existing []byte) ([]byte, error) { return mergeCodexConfig(existing, server) }, in.now())
@@ -535,12 +593,22 @@ func (in agentInstaller) install(a agent) error {
 	}
 	fmt.Fprintf(in.out, "  mcp:   %s\n", mcp.describe(serverName+" server in "))
 	template := hookTemplate(a.Name)
-	hooks, err = editJSON(a.Hooks, func(doc map[string]any) error { return mergeHooks(doc, template) }, in.now())
+	edit := func(doc map[string]any) error { return mergeHooks(doc, template) }
+	if a.Name == "cursor" {
+		template = cursorHookTemplate(cursorHookCommand(in.exe, in.c, in.explicit))
+		edit = func(doc map[string]any) error {
+			if _, ok := doc["version"]; !ok {
+				doc["version"] = json.Number("1")
+			}
+			return mergeHooks(doc, template)
+		}
+	}
+	hooks, err = editJSON(a.Hooks, edit, in.now())
 	if err != nil {
 		return fmt.Errorf("%s: hooks: %w", a.Label, err)
 	}
 	fmt.Fprintf(in.out, "  hooks: %s\n", hooks.describe(fmt.Sprintf("%d hook groups in ", len(template))))
-	for _, note := range agentNotes(a.Name) {
+	for _, note := range agentNotes(a.Name, a) {
 		fmt.Fprintf(in.out, "  next:  %s\n", note)
 	}
 	return nil
@@ -560,7 +628,7 @@ func (in agentInstaller) installOpenCode(a agent) error {
 		}
 		fmt.Fprintf(in.out, "  %-7s %s %s\n", p.label+":", status, p.dest)
 	}
-	for _, note := range agentNotes(a.Name) {
+	for _, note := range agentNotes(a.Name, a) {
 		fmt.Fprintf(in.out, "  next:  %s\n", note)
 	}
 	return nil
@@ -576,12 +644,17 @@ func (r fileResult) describe(what string) string {
 }
 
 // agentNotes lists the steps that remain for the user after installation.
-func agentNotes(agentName string) []string {
+func agentNotes(agentName string, a agent) []string {
 	switch agentName {
 	case "claude":
 		return []string{
 			"restart Claude Code and start it with `claude --dangerously-load-development-channels server:rhizome`; accept the channel and hook prompts it shows.",
 			"a project .mcp.json entry named rhizome takes precedence over this user-scope registration; a project .claude/settings.json that also carries the Rhizome hooks runs them twice, so keep them in one place.",
+		}
+	case "cursor":
+		return []string{
+			"reload Cursor (or start a new `agent` CLI session; run `agent mcp enable rhizome` once), approve the rhizome MCP server, then submit a prompt in a chat to bind it.",
+			"the beforeMCPExecution hook auto-allows Rhizome's own tools so several chats in one window can be told apart; remove that entry if you prefer Cursor's approval prompt (see docs/cursor.md).",
 		}
 	case "codex":
 		return []string{

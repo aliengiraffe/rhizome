@@ -48,13 +48,14 @@ var openCodeTUIPlugin []byte
 // agent is a coding agent Rhizome knows how to serve and where its user-scope
 // skill, MCP server registration and hooks live.
 type agent struct {
-	Name     string // CLI/flag identifier: claude, codex, opencode
-	Label    string // human-readable name
-	Skills   string // directory that holds <skill>/SKILL.md
-	Plugin   string // OpenCode plugin destination; empty for other agents
-	TUI      string // OpenCode TUI plugin destination; empty for other agents
-	MCP      string // file holding the user-scope MCP server registration
-	Hooks    string // file holding the user-scope hooks
+	Name     string   // CLI/flag identifier: claude, codex, opencode, cursor
+	Label    string   // human-readable name
+	Skills   string   // directory that holds <skill>/SKILL.md
+	Plugin   string   // OpenCode plugin destination; empty for other agents
+	TUI      string   // OpenCode TUI plugin destination; empty for other agents
+	MCP      string   // file holding the user-scope MCP server registration
+	Hooks    string   // file holding the user-scope hooks
+	Binaries []string // executables that indicate the agent is installed
 	Detected bool
 	Reason   string // why it was (not) detected
 }
@@ -66,11 +67,13 @@ type agent struct {
 // (CLAUDE_CONFIG_DIR) and Codex's home (CODEX_HOME).
 func detectAgents(c config.Config, lookPath func(string) (string, error)) []agent {
 	home, _ := os.UserHomeDir()
-	claudeDir, codexDir, openCodeDir := c.Claude.ConfigDir, c.Codex.Home, openCodeConfigDir(os.Getenv, os.UserHomeDir)
+	claudeDir, codexDir, openCodeDir, cursorDir := c.Claude.ConfigDir, c.Codex.Home, openCodeConfigDir(os.Getenv, os.UserHomeDir), c.Cursor.ConfigDir
 	agents := []agent{
-		{Name: "claude", Label: "Claude Code", Skills: filepath.Join(claudeDir, "skills"), MCP: claudeGlobalConfig(claudeDir, home), Hooks: filepath.Join(claudeDir, "settings.json")},
-		{Name: "codex", Label: "Codex", Skills: filepath.Join(codexDir, "skills"), MCP: filepath.Join(codexDir, "config.toml"), Hooks: filepath.Join(codexDir, "hooks.json")},
-		{Name: "opencode", Label: "OpenCode", Skills: filepath.Join(openCodeDir, "skills"), Plugin: filepath.Join(openCodeDir, "plugins", "rhizome.js"), TUI: filepath.Join(openCodeDir, "plugins", "rhizome-tui", "tui.js")},
+		{Name: "claude", Label: "Claude Code", Skills: filepath.Join(claudeDir, "skills"), MCP: claudeGlobalConfig(claudeDir, home), Hooks: filepath.Join(claudeDir, "settings.json"), Binaries: []string{"claude"}},
+		{Name: "codex", Label: "Codex", Skills: filepath.Join(codexDir, "skills"), MCP: filepath.Join(codexDir, "config.toml"), Hooks: filepath.Join(codexDir, "hooks.json"), Binaries: []string{"codex"}},
+		{Name: "opencode", Label: "OpenCode", Skills: filepath.Join(openCodeDir, "skills"), Plugin: filepath.Join(openCodeDir, "plugins", "rhizome.js"), TUI: filepath.Join(openCodeDir, "plugins", "rhizome-tui", "tui.js"), Binaries: []string{"opencode"}},
+		// The Cursor CLI binary is `agent` (formerly `cursor-agent`); `cursor` is the IDE launcher.
+		{Name: "cursor", Label: "Cursor", Skills: filepath.Join(cursorDir, "skills"), MCP: filepath.Join(cursorDir, "mcp.json"), Hooks: filepath.Join(cursorDir, "hooks.json"), Binaries: []string{"cursor", "agent", "cursor-agent"}},
 	}
 	for i := range agents {
 		a := &agents[i]
@@ -79,11 +82,15 @@ func detectAgents(c config.Config, lookPath func(string) (string, error)) []agen
 			a.Detected, a.Reason = true, "found "+dir
 			continue
 		}
-		if p, err := lookPath(a.Name); err == nil {
-			a.Detected, a.Reason = true, "found "+p+" on PATH"
-			continue
+		for _, bin := range a.Binaries {
+			if p, err := lookPath(bin); err == nil {
+				a.Detected, a.Reason = true, "found "+p+" on PATH"
+				break
+			}
 		}
-		a.Reason = "no " + dir + " and no " + a.Name + " on PATH"
+		if !a.Detected {
+			a.Reason = "no " + dir + " and no " + strings.Join(a.Binaries, "/") + " on PATH"
+		}
 	}
 	return agents
 }
@@ -304,7 +311,7 @@ func parseAgentFlag(value string, agents []agent) ([]bool, error) {
 
 func setup(args []string) error {
 	opts := flag.NewFlagSet("setup", flag.ContinueOnError)
-	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex, opencode) or \"all\": installs the skill, and for Claude and Codex also registers the MCP server and hooks at user scope (OpenCode: skill and plugins; its MCP entry is added by hand, see docs/opencode.md); omit for an interactive picker")
+	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex, opencode, cursor) or \"all\": installs the skill, and for Claude, Codex and Cursor also registers the MCP server and hooks at user scope (OpenCode: skill and plugins; its MCP entry is added by hand, see docs/opencode.md); omit for an interactive picker")
 	config.Bind(opts, "runtime-dir", "gateway-mode", "gateway-listen", "gateway-advertise")
 	opts.Lookup("gateway-mode").Usage = "configure service-owned gateway pairing: off, lan or tailscale; requires local MCP networking"
 	opts.Lookup("gateway-listen").Usage = "gateway concrete listen IP:port; blank selects automatically"
@@ -412,7 +419,7 @@ func setup(args []string) error {
 			return err
 		}
 	default:
-		return fmt.Errorf("stdin is not a terminal; pass --agents claude,codex,opencode or --agents all")
+		return fmt.Errorf("stdin is not a terminal; pass --agents claude,codex,opencode,cursor or --agents all")
 	}
 	selected := false
 	for _, ok := range checked {

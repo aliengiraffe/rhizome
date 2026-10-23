@@ -270,7 +270,7 @@ func TestGatewayCorruptStateFailsClosed(t *testing.T) {
 	}
 }
 func TestGatewayIdentityBounds(t *testing.T) {
-	for _, agent := range []string{"claude", "codex", "opencode"} {
+	for _, agent := range []string{"claude", "codex", "opencode", "cursor"} {
 		if !validGatewayIdentity(&pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: agent}) {
 			t.Fatalf("rejected valid %s identity", agent)
 		}
@@ -620,19 +620,24 @@ func TestGatewayFailureClassification(t *testing.T) {
 	}
 }
 
-// TestGatewayOpenCodeNegotiation proves OpenCode sessions are exported only to
-// peers that negotiated the OpenCode subprotocol, in both dial directions;
-// builds that predate OpenCode select none and drop links over unknown agents.
-func TestGatewayOpenCodeNegotiation(t *testing.T) {
+// TestGatewayAgentNegotiation proves OpenCode and Cursor sessions are exported
+// only to peers that negotiated a subprotocol covering them, in both dial
+// directions: builds that predate OpenCode select none, builds that know only
+// OpenCode select its subprotocol, and both drop links over unknown agents.
+func TestGatewayAgentNegotiation(t *testing.T) {
+	openCodeOnly := []string{gatewaySubprotocolOpenCode}
 	for _, tc := range []struct {
-		name     string
-		server   *websocket.Upgrader
-		dialer   func() *websocket.Dialer
-		wantOpen bool
+		name       string
+		server     *websocket.Upgrader
+		dialer     func() *websocket.Dialer
+		wantOpen   bool
+		wantCursor bool
 	}{
-		{"both new", newGatewayUpgrader(), func() *websocket.Dialer { return newGatewayDialer(nil) }, true},
-		{"old server", &websocket.Upgrader{}, func() *websocket.Dialer { return newGatewayDialer(nil) }, false},
-		{"old dialer", newGatewayUpgrader(), func() *websocket.Dialer { return &websocket.Dialer{} }, false},
+		{"both new", newGatewayUpgrader(), func() *websocket.Dialer { return newGatewayDialer(nil) }, true, true},
+		{"opencode server", &websocket.Upgrader{Subprotocols: openCodeOnly}, func() *websocket.Dialer { return newGatewayDialer(nil) }, true, false},
+		{"opencode dialer", newGatewayUpgrader(), func() *websocket.Dialer { return &websocket.Dialer{Subprotocols: openCodeOnly} }, true, false},
+		{"old server", &websocket.Upgrader{}, func() *websocket.Dialer { return newGatewayDialer(nil) }, false, false},
+		{"old dialer", newGatewayUpgrader(), func() *websocket.Dialer { return &websocket.Dialer{} }, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := make(chan string, 1)
@@ -653,8 +658,8 @@ func TestGatewayOpenCodeNegotiation(t *testing.T) {
 			defer c.Close()
 			res.Body.Close()
 			for side, got := range map[string]string{"dialer": c.Subprotocol(), "server": <-server} {
-				if (got == gatewaySubprotocolOpenCode) != tc.wantOpen {
-					t.Fatalf("%s subprotocol %q, want opencode=%v", side, got, tc.wantOpen)
+				if open, cursor := gatewayAcceptsOpenCode(got), got == gatewaySubprotocolCursor; open != tc.wantOpen || cursor != tc.wantCursor {
+					t.Fatalf("%s subprotocol %q: opencode=%v cursor=%v, want opencode=%v cursor=%v", side, got, open, cursor, tc.wantOpen, tc.wantCursor)
 				}
 			}
 		})
@@ -665,13 +670,15 @@ func TestGatewayPeerAccepts(t *testing.T) {
 	for _, tc := range []struct {
 		agent    string
 		opencode bool
+		cursor   bool
 		want     bool
 	}{
-		{"claude", false, true}, {"codex", false, true}, {"opencode", false, false},
-		{"claude", true, true}, {"codex", true, true}, {"opencode", true, true},
+		{"claude", false, false, true}, {"codex", false, false, true}, {"opencode", false, false, false}, {"cursor", false, false, false},
+		{"claude", true, false, true}, {"codex", true, false, true}, {"opencode", true, false, true}, {"cursor", true, false, false},
+		{"claude", true, true, true}, {"codex", true, true, true}, {"opencode", true, true, true}, {"cursor", true, true, true},
 	} {
-		if got := gatewayPeerAccepts(&pb.Identity{AgentType: tc.agent}, tc.opencode); got != tc.want {
-			t.Errorf("%s opencode=%v: got %v, want %v", tc.agent, tc.opencode, got, tc.want)
+		if got := gatewayPeerAccepts(&pb.Identity{AgentType: tc.agent}, tc.opencode, tc.cursor); got != tc.want {
+			t.Errorf("%s opencode=%v cursor=%v: got %v, want %v", tc.agent, tc.opencode, tc.cursor, got, tc.want)
 		}
 	}
 }

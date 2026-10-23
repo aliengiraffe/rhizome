@@ -75,6 +75,13 @@ type pending struct {
 	generation   uint64
 }
 type counters struct{ Suppressed, Received, Queued, Written, Dropped, Pauses, ParserSkips, QueueHandoffs, QueueFailures, CollectionGaps uint64 }
+
+// outboxEntry is one delivered notification waiting for a Cursor hook to
+// inject it into the conversation.
+type outboxEntry struct {
+	content string
+	meta    map[string]string
+}
 type Node struct {
 	bridge *gatewayProxy // immutable; only service-owned remote proxies
 
@@ -90,6 +97,16 @@ type Node struct {
 	external       bool
 	directSequence uint64
 	discovered     map[string]*pb.Identity
+	// hookPull marks a Cursor node: delivery parks notifications in outbox
+	// until a hook drains them, and peerTurn suppresses hook-reported activity
+	// for a turn that a Rhizome envelope started. Guarded by mu.
+	hookPull    bool
+	outbox      []outboxEntry
+	outboxBytes int
+	peerTurn    bool
+	// cursorRegistry is the Cursor registration directory, fixed before the
+	// node is published, so status can count live Cursor MCP processes.
+	cursorRegistry string
 	pb.UnimplementedChannelServer
 	ctx    context.Context
 	cancel context.CancelFunc

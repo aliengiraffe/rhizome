@@ -2,12 +2,13 @@
 
 ## Orientation
 
-Rhizome is a Go MCP bridge for local coding agent sessions (Claude Code, Codex
-and OpenCode). It binds verified session identities, collects selected activity,
+Rhizome is a Go MCP bridge for local coding agent sessions (Claude Code, Codex,
+OpenCode and Cursor). It binds verified session identities, collects selected activity,
 discovers peers through memberlist, and delivers events over authenticated
 loopback gRPC. Claude uses channel notifications; Codex uses per-thread nodes and
 local queue delivery; OpenCode uses an embedded plugin over a private Unix socket
-bridge. An optional per-user service observes coding agent logs independently of MCP
+bridge; Cursor uses per-conversation nodes bound by `rhizome hook --agent cursor`
+and hook-pull delivery (see [docs/cursor.md](docs/cursor.md)). An optional per-user service observes coding agent logs independently of MCP
 and maintains the local session-history catalog behind `search_sessions` and
 `read_session_history`; see [docs/service.md](docs/service.md) for lifecycle,
 boundaries, and validation and [docs/history.md](docs/history.md) for the
@@ -26,7 +27,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), and the OpenCode bridge (`opencode*.go`). |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, Cursor hook binding and hook-pull delivery (`cursor.go`, `cursor_hook.go`), session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), and the OpenCode bridge (`opencode*.go`). |
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
@@ -51,6 +52,7 @@ python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts
 python3 scripts/smoke_service.py    # Separate observer/MCP processes, handoffs, history catalog.
 python3 scripts/smoke_tui.py        # Unix PTYs; isolated setup/service/peers UI and restoration.
 python3 scripts/smoke_stdio.py --lan # Same scenario in LAN mode: pinned TLS, separate registries.
+python3 scripts/smoke_cursor.py     # Cursor mode: synthetic hook payloads, tickets, hook-pull delivery.
 git diff --check                   # Check whitespace errors.
 task proto                         # Requires protoc; installs pinned generators in .bin.
 python3 scripts/smoke_codex.py --help # Inspect live smoke prerequisites/options.
@@ -58,7 +60,8 @@ python3 scripts/smoke_opencode.py --help # Inspect OpenCode live smoke options.
 ```
 
 Before marking a change done, build, check (including race tests), both stdio
-smokes (loopback and `--lan`), the service smoke, and the whitespace check must pass.
+smokes (loopback and `--lan`), the service smoke, the Cursor smoke, and the
+whitespace check must pass.
 Toolchain or dependency bumps must also pass `govulncheck ./...`.
 Format touched Go files with `gofmt`; run targeted package tests first. Regenerate
 protobufs only for protocol changes
@@ -90,7 +93,9 @@ a real tailnet; the two-device Tailscale checklist in
 before apply must not write skills, config, or service state. The opt-in
 "install and start" service step (`setup_service.go`) follows the configuration
 whether it was created, replaced, or kept; it runs the normal install lifecycle
-through an injectable `serviceInstaller`, reports running only after
+through an injectable `serviceInstaller` (which replaces an outdated definition
+by stopping, rewriting and starting the service, and refuses only a runtime
+directory change while the observer runs), reports running only after
 `service.Inspect` confirms the observer lock, distinguishes an installed
 definition from a running observer on failure, and is never run by `--list` or
 by `--network` without the interactive questions. Use `config.Preview`
@@ -137,7 +142,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
-  CLI usage: `rhizome --version | mcp | setup | service | config | token | invite | join | peers | files | demo [flags]`.
+  CLI usage: `rhizome --version | mcp | hook | setup | service | config | token | invite | join | peers | files | demo [flags]`.
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
   `mcp` only, with flag > env > file > default. `rhizome setup` is the only
@@ -157,9 +162,11 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   service flags are opt-in and separate from MCP networking, which stays local
   when pairing is enabled. The service bridges remote sessions through protocol-2
   proxies (`gateway_host`); only local identities with `gateway_version = 1`
-  are exported, and `opencode` sessions only over links that negotiated the
-  `rhizome.gateway.opencode.v1` subprotocol (older peers drop links over unknown agent
-  types). Never forward proxy advertisements, trust peer-supplied endpoints,
+  are exported, `opencode` sessions only over links that negotiated the
+  `rhizome.gateway.opencode.v1` subprotocol or a later one, and `cursor` sessions
+  only over `rhizome.gateway.cursor.v1` (preferred, implies OpenCode); older peers
+  drop links over unknown agent types, so every new exported agent type needs
+  its own subprotocol. Never forward proxy advertisements, trust peer-supplied endpoints,
   or expose the admin API or history except through the opt-in peer-history policy below. Cross-host ID collisions fail closed.
   Revocation closes connections and invalidates queued events via local trust
   grants; old invitations cannot restore revoked trust. Every link end logs a
@@ -189,11 +196,13 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   skill, the MCP registration and the binding hooks: Claude in
   `~/.claude.json` (`<CLAUDE_CONFIG_DIR>/.claude.json` for a non-default
   directory) plus `<config dir>/settings.json`, Codex in `<CODEX_HOME>/config.toml`
-  plus `hooks.json`. The entry is the absolute executable with `mcp --agent
+  plus `hooks.json`, Cursor in `<cursor dir>/mcp.json` plus `hooks.json`
+  (`version: 1`; command entries `<exe> hook --agent cursor`, shell-quoted,
+  identified on merge by that command). The entry is the absolute executable with `mcp --agent
   <name>`, `--config` only for an explicit existing file, `--codex-bin` when
   resolvable, and the agent home in `env` only when non-default; never a token.
-  Hook templates in `setup_agents.go` must equal `.claude/settings.json` and
-  `examples/codex/hooks.json` (tested). Merges touch only Rhizome entries,
+  Hook templates in `setup_agents.go` must equal `.claude/settings.json`,
+  `examples/codex/hooks.json` and `examples/cursor/hooks.json` (tested). Merges touch only Rhizome entries,
   keep everything else, back up changed files as `<file>.bak-<timestamp>`,
   follow symlinks, reject malformed files without replacing them and skip
   unchanged files. OpenCode gets the skill and its two plugins only (no hooks;
@@ -239,9 +248,32 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   derive a name from prompts or transcript content, and a name-only change must
   not touch generation, streams, subscriptions, cursors, or queues
   (`internal/channel/name.go`, [reference "Session names"](docs/reference.md#session-names)).
+- **Cursor binds through hooks, never through `tools/call`.** Cursor sends no
+  conversation identity in MCP requests and cannot be woken when idle. `rhizome
+  mcp --agent cursor` hosts one node per `conversation_id`, registers a private
+  0600 socket under `<runtime>/cursor/` with its PID, working directory and
+  `roots/list`, and
+  `rhizome hook --agent cursor` (run by `~/.cursor/hooks.json`) forwards a
+  minimized payload: never the prompt, tool bodies, transcripts or `user_email`.
+  The hook ranks processes against `workspace_roots` (exact, then most
+  specific parent, then child; home and `/` never claim nested workspaces),
+  contacts exactly one best candidate, and otherwise answers Cursor's default (`{}`, `continue`, `ask`)
+  with exit 0; it must never block Cursor. Tool calls resolve by a single-use
+  `beforeMCPExecution` ticket (tool name + canonical input digest, 5 s) or the
+  single bound conversation; anything else is `identity_ambiguous`. Collection
+  is hook push only (`afterAgentResponse`, `postToolUse*`, `stop`), with the
+  shared `isPeerInput` suppression; no transcript tailing and no history
+  indexing of Cursor logs. Delivery is hook pull through a bounded per-node
+  outbox (32 entries, 64 KiB, 8 KiB per injection): `postToolUse*`
+  `additional_context` always, `stop` `followup_message` unless
+  `[cursor] followup_delivery = false` (file-only, default true; one per
+  completed turn with `loop_count` 0, marked peer-only). `rhizome setup --agents cursor` installs the skill, the
+  MCP entry and the hooks (see the setup invariant); `examples/cursor/` holds
+  the same definitions for manual or project-scope merges. Live Cursor behavior is unverified:
+  keep `docs/cursor.md` and the checklist in `docs/verification.md` honest.
 - **Never manually invoke `observe_session` or invent an ID.** Trusted hooks,
   verified transport identity, and authoritative log metadata own binding;
-  synthetic test harnesses are not a user workflow (`internal/channel/node.go`, `internal/channel/codex.go`).
+  synthetic test harnesses are not a user workflow (`internal/channel/node.go`, `internal/channel/codex.go`, `internal/channel/cursor.go`).
 - **Never log or advertise the cluster token.** It authenticates trusted peers;
   keep runtime files private (`internal/channel/discovery.go`, README).
 - **Preserve loopback-only defaults and behavior without `--lan`.** Without

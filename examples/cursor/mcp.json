@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rhizome": {
+      "type": "stdio",
+      "command": "/absolute/path/to/rhizome/rhizome",
+      "args": ["mcp", "--agent", "cursor"]
+    }
+  }
+}

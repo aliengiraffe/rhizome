@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "timeout": 10, "failClosed": false }
+    ],
+    "sessionEnd": [
+      { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "timeout": 10, "failClosed": false }
+    ],
+    "beforeSubmitPrompt": [
+      { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "timeout": 10, "failClosed": false }
+    ],
+    "beforeMCPExecution": [
+      { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "matcher": "rhizome", "timeout": 10, "failClosed": false }
+    ],
+    "postToolUse": [
+      { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "timeout": 10, "failClosed": false }
+    ],
+    "postToolUseFailure": [
+      { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "timeout": 10, "failClosed": false }
+    ],
+    "afterAgentResponse": [
+      { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "timeout": 10, "failClosed": false }
+    ],
+    "stop": [
+      { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "timeout": 10, "failClosed": false, "loop_limit": 1 }
+    ]
+  }
+}
