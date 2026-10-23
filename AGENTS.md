@@ -269,8 +269,10 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   `[cursor] followup_delivery = false` (file-only, default true; one per
   completed turn with `loop_count` 0, marked peer-only). `rhizome setup --agents cursor` installs the skill, the
   MCP entry and the hooks (see the setup invariant); `examples/cursor/` holds
-  the same definitions for manual or project-scope merges. Live Cursor behavior is unverified:
-  keep `docs/cursor.md` and the checklist in `docs/verification.md` honest.
+  the same definitions for manual or project-scope merges. Live behavior is verified only for the Cursor CLI
+  (binding, collection, tool-result and end-of-turn delivery); the IDE, two
+  chats per window, disabled followup and two devices are not: keep
+  `docs/cursor.md` and the checklist results in `docs/verification.md` honest.
 - **Never manually invoke `observe_session` or invent an ID.** Trusted hooks,
   verified transport identity, and authoritative log metadata own binding;
   synthetic test harnesses are not a user workflow (`internal/channel/node.go`, `internal/channel/codex.go`, `internal/channel/cursor.go`).

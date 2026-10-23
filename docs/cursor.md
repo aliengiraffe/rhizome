@@ -10,10 +10,13 @@ Claude and Codex. Cursor mode does not advertise `claude/channel` and offers no
 `observe_session` tool: binding comes from Cursor's shell hooks.
 
 **Status:** implemented and verified with synthetic hook payloads
-(`scripts/smoke_cursor.py`, race tests). The live checks against a Cursor
-install are a manual checklist in [verification.md](verification.md) and have
-not been recorded yet; the version contracts below are taken from the Cursor
-hooks reference as of 2026-10-20 (`hooks.json` `version: 1`).
+(`scripts/smoke_cursor.py`, race tests). The live checklist in
+[verification.md](verification.md) has been run against the Cursor CLI
+(`agent` 2026.10.22-27dcf5f) only: binding, collection, tool-result and
+end-of-turn delivery passed. The IDE, two chats in one window, disabled
+followup delivery and a second device are not verified live yet. The version
+contracts below are taken from the Cursor hooks reference as of 2026-10-20
+(`hooks.json` `version: 1`).
 
 ## Why Cursor is different
 
@@ -181,15 +184,21 @@ redacted fixtures exist.
 
 ## Known limitations and live checks
 
-- Cursor's process layout, hook payload stability across releases, the
-  `beforeMCPExecution` matcher semantics and MCP tool naming in `tool_name` are
-  unverified live; run the checklist in [verification.md](verification.md) after
-  installing or upgrading Cursor.
+- The CLI's process layout matches the description above (verified live with
+  `agent` 2026.10.22-27dcf5f). The IDE's layout, hook payload stability across
+  releases, the `beforeMCPExecution` matcher semantics and MCP tool naming in
+  `tool_name` are unverified live; run the checklist in
+  [verification.md](verification.md) after installing or upgrading Cursor.
 - Cursor loads third-party Claude Code hooks from `~/.claude/settings.json`
   when that option is enabled (always, for the CLI). Rhizome's Claude hooks are
-  `mcp_tool` entries, which Cursor documents no support for; confirm they are
-  ignored and that Cursor never launches a Claude-mode `rhizome mcp`. If it did,
-  that process would stay UNBOUND and fail closed.
+  `mcp_tool` entries, which Cursor documents no support for. The CLI was
+  observed ignoring them and launching only the Cursor-mode `rhizome mcp`;
+  confirm the same in the IDE. If Cursor ever launched a Claude-mode process,
+  it would stay UNBOUND and fail closed.
+- Cursor does not display `additional_context` in the chat, so a peer event
+  delivered after a tool result is visible only through the model's reaction.
+  An end-of-turn follow-up appears in the CLI like a user prompt, truncated to
+  its first line.
 - Two IDE windows on the same workspace, or a window whose MCP client does not
   answer `roots/list` alongside another live process, fail closed for hooks.
 - There is no idle wake. Peer events reach a chat at its next tool result or

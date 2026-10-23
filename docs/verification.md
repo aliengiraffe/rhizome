@@ -693,9 +693,9 @@ Cursor mode (no `claude/channel`, no `observe_session`, UNBOUND and
 `rhizome hook --agent cursor` subprocesses against a Cursor-mode process and a
 Claude-mode peer with synthetic payloads; it launches no model.
 
-Not verified live. Cursor is installed on the development machine but no model
-turn was driven from the automated session. Run after installing or upgrading
-Cursor, and record the Cursor version:
+Live results are recorded after the checklist; only the Cursor CLI has been
+checked so far. Run after installing or upgrading Cursor, and record the Cursor
+version:
 
 1. Run `rhizome setup --agents cursor`, check `~/.cursor/mcp.json` and
    `~/.cursor/hooks.json`, reload Cursor, approve the server, open one chat, submit a prompt, ask for `list_sessions`: expect
@@ -722,3 +722,32 @@ Cursor, and record the Cursor version:
    Rhizome's `mcp_tool` hooks in `~/.claude/settings.json` and does not spawn a
    Claude-mode `rhizome mcp`.
 8. LAN or Tailscale: repeat step 2 from a second device.
+
+Live run, 2026-10-23, Cursor CLI `agent` 2026.10.22-27dcf5f on macOS, with the
+default `followup_delivery = true` and a Claude Code peer on the same machine
+started with `--dangerously-load-development-channels server:rhizome`:
+
+- Step 1 passed in part: the conversation bound as `agent_type: cursor` with the
+  fallback name, and `~/.rhizome/run/cursor/` held one registration.
+  `collection_state` and `delivery_mode` were not inspected.
+- Step 2 passed: the subscriber received `Tool completed: Shell` and the
+  assistant text, never the prompt. Cursor reports only completions (no
+  `Tool started` line), and the turn marker is consumed without delivery, as
+  for every agent.
+- Step 3 passed: a direct message reached the model after the next tool result
+  in the same turn, was treated as informational, and caused no end-of-turn
+  follow-up. The injected block is not shown in Cursor's chat.
+- Step 4 passed with followup delivery enabled: a message queued during a turn
+  without tools produced exactly one follow-up, the model treated it as
+  informational, and its reply was not delivered to the subscriber. The CLI
+  shows the follow-up like a user prompt, truncated to its first line. The
+  `followup_delivery = false` half was not run.
+- Step 6 passed: the CLI started `rhizome mcp --agent cursor` in the workspace
+  as a child of `agent`, with no `roots` in the registration.
+- Step 7 passed for the CLI: `agent` launched only the Cursor-mode process and
+  no Claude-mode `rhizome mcp`.
+- Not run: step 5 (needs the IDE) and step 8 (needs a second device); steps
+  1-4 also remain to be repeated in the IDE.
+- Found: the model acknowledged a delivered peer event in its own answer, which
+  subscribers then received. The `sessionStart` instructions now ask it not to
+  mention peer events unless the user asks; not yet re-checked live.
