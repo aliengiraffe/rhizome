@@ -322,6 +322,7 @@ func setup(args []string) error {
 	gossipPort := opts.Int("gossip-port", 0, "with --network tailscale: well-known gossip port (default 7946)")
 	discovery := opts.String("discovery-interval", "", "with --network tailscale: peer discovery interval (default 20s)")
 	replaceConfig := opts.Bool("replace-config", false, "with --network or --gateway-mode: update selected settings, preserving others (old file backed up)")
+	autoUpdate := opts.String("auto-update", "", "with --network or --gateway-mode: true or false, whether the background service installs verified updates ([update].enabled; default true)")
 	if err := opts.Parse(args); err != nil {
 		return err
 	}
@@ -332,7 +333,7 @@ func setup(args []string) error {
 	opts.Visit(func(f *flag.Flag) { visited[f.Name] = true })
 	noninteractive := visited["network"] || visited["gateway-mode"]
 	if !noninteractive {
-		for _, name := range []string{"hostname", "join", "bind-addr", "advertise-addr", "mdns", "gossip-port", "discovery-interval", "replace-config", "gateway-listen", "gateway-advertise", "runtime-dir"} {
+		for _, name := range []string{"hostname", "join", "bind-addr", "advertise-addr", "mdns", "gossip-port", "discovery-interval", "replace-config", "gateway-listen", "gateway-advertise", "runtime-dir", "auto-update"} {
 			if visited[name] {
 				return fmt.Errorf("--%s requires --network or --gateway-mode", name)
 			}
@@ -367,6 +368,13 @@ func setup(args []string) error {
 			Network:    config.Network{Mode: *network, BindAddr: *bindAddr, AdvertiseAddr: *advertiseAddr, Join: join, GossipPort: *gossipPort, DiscoveryInterval: *discovery}}
 		if visited["mdns"] {
 			a.Network.MDNS = mdns
+		}
+		if visited["auto-update"] {
+			enabled, err := config.ParseUpdateEnabled(*autoUpdate)
+			if err != nil {
+				return fmt.Errorf("--auto-update: %w", err)
+			}
+			a.AutoUpdate = &enabled
 		}
 		if err := a.Network.Validate(); err != nil {
 			return fmt.Errorf("--network %s: %w", *network, err)

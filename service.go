@@ -28,7 +28,7 @@ func serviceCommand(args []string) error {
 	}
 	fs := flag.NewFlagSet("service "+args[0], flag.ContinueOnError)
 	if args[0] == "install" || args[0] == "run" {
-		config.Bind(fs, "runtime-dir", "claude-root", "codex-root", "opencode-root", "gateway-mode", "gateway-listen", "gateway-advertise")
+		config.Bind(fs, "runtime-dir", "claude-root", "codex-root", "opencode-root", "gateway-mode", "gateway-listen", "gateway-advertise", "update", "update-check-interval")
 	} else {
 		config.Bind(fs)
 	}
