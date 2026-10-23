@@ -516,7 +516,8 @@ yet; when it lands, its predicate must also gate these reads.
   `opencode_schema` warning, never read through a fallback.
 - Native titles refresh as the observer indexes new bytes of the log; explicit
   overrides are read from `<runtime_dir>/names/` at query time, so a
-  `set_session_name` call is visible immediately.
+  `set_session_name` call is visible immediately, including one that names a
+  not-live catalog session by `session_id`.
 
 ## Service lifecycle and storage
 

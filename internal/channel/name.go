@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	pb "rhizome/proto"
 )
 
 // maxSessionName bounds every advertised session name in UTF-8 bytes. Explicit
@@ -157,9 +159,9 @@ func (n *Node) setNativeTitle(gen uint64, custom bool, title string) {
 // and returns the effective name with its source. Empty or whitespace-only
 // input clears the override.
 func (n *Node) setSessionName(name string) (map[string]string, error) {
-	cleaned := normalizeName(name)
-	if len(cleaned) > maxSessionName {
-		return nil, fmt.Errorf("session name exceeds %d UTF-8 bytes after whitespace normalization", maxSessionName)
+	cleaned, err := validName(name)
+	if err != nil {
+		return nil, err
 	}
 	n.gate.Lock()
 	defer n.gate.Unlock()
@@ -187,6 +189,125 @@ func (n *Node) setSessionName(name string) (map[string]string, error) {
 		slog.Info("session_name", "source", out["source"], "session_id", session)
 	}
 	return out, nil
+}
+
+// validName normalizes explicit input and enforces the byte bound.
+func validName(name string) (string, error) {
+	cleaned := normalizeName(name)
+	if len(cleaned) > maxSessionName {
+		return "", fmt.Errorf("session name exceeds %d UTF-8 bytes after whitespace normalization", maxSessionName)
+	}
+	return cleaned, nil
+}
+
+// Errors for a rename that targets another session by exact session_id.
+var (
+	errRenameNotFound = errors.New("NOT_FOUND: no session with this exact session_id in this device's history catalog or local runtime")
+	errRenameNotOwned = errors.New("PERMISSION_DENIED: session is not on this device; only this device's sessions can be renamed")
+)
+
+// renameSession applies an explicit override to another session of this
+// device's user, identified by its exact session ID. The caller's own session
+// takes the bound path. A target is owned when this runtime's history catalog
+// indexes it from local logs, or when a node registered in this runtime
+// directory advertises it without a gateway host. Paired-host and direct
+// LAN/Tailscale sessions are refused, and unknown IDs are not found; neither
+// writes anything. The owning live node picks the override up from disk.
+func (n *Node) renameSession(h *historyService, session, name string) (map[string]string, error) {
+	if session == "" || len(session) > 128 || !utf8.ValidString(session) {
+		return nil, errors.New("session_id must be an exact session ID of 1 to 128 bytes")
+	}
+	cleaned, err := validName(name)
+	if err != nil {
+		return nil, err
+	}
+	n.mu.Lock()
+	self, runtime := n.identity.SessionId, n.runtime
+	n.mu.Unlock()
+	if self == session {
+		return n.setSessionName(name)
+	}
+	var row *historySession
+	if h != nil {
+		if c, _, herr := h.catalog.load(); herr == nil {
+			for k, s := range c.sessions() {
+				if k.Session == session && (row == nil || k.Agent < row.AgentType) {
+					row = s
+				}
+			}
+		}
+	}
+	var live *pb.Identity
+	foreign := false
+	for _, p := range n.peers() {
+		if p.SessionId != session {
+			continue
+		}
+		if p.GatewayHost == "" && registeredLocally(runtime, p.NodeId) {
+			live = p
+		} else {
+			foreign = true
+		}
+	}
+	switch {
+	case row == nil && live == nil && foreign:
+		return nil, errRenameNotOwned
+	case row == nil && live == nil:
+		return nil, errRenameNotFound
+	}
+	if err := storeOverride(runtime, session, cleaned); err != nil {
+		return nil, err
+	}
+	out := map[string]string{"session_id": session, "session_name": cleaned, "source": "explicit"}
+	if cleaned == "" {
+		if row != nil {
+			out["session_name"], out["source"] = h.effectiveName(row, nil)
+		} else {
+			out["session_name"], out["source"] = fallbackName(live.DisplayName, live.AgentType, session), "fallback"
+		}
+	}
+	slog.Info("session_name", "source", out["source"], "session_id", session, "target", "other")
+	return out, nil
+}
+
+// registeredLocally reports whether nodeID holds a registration in the private
+// runtime directory, which only processes of this device's user can write.
+func registeredLocally(runtime, nodeID string) bool {
+	if runtime == "" || registryNodeID(nodeID+".json", ".json") == "" {
+		return false
+	}
+	st, err := os.Lstat(registrationPath(runtime, nodeID))
+	return err == nil && st.Mode().IsRegular()
+}
+
+// syncOverride reloads the persisted explicit name of the bound session, so a
+// rename issued by another local session reaches this node and its discovery
+// metadata. Transitions in progress skip the tick; the next one retries.
+func (n *Node) syncOverride() {
+	if !n.gate.TryLock() {
+		return
+	}
+	defer n.gate.Unlock()
+	n.mu.Lock()
+	session, runtime, gen := n.identity.SessionId, n.runtime, n.identity.Generation
+	n.mu.Unlock()
+	if session == "" {
+		return
+	}
+	explicit := loadOverride(runtime, session)
+	n.mu.Lock()
+	if n.identity.SessionId != session || n.identity.Generation != gen || n.names.explicit == explicit {
+		n.mu.Unlock()
+		return
+	}
+	n.names.explicit = explicit
+	changed := n.resolveNameLocked()
+	source := n.nameSourceLocked()
+	n.mu.Unlock()
+	if changed {
+		n.advertise()
+		slog.Info("session_name", "source", source, "generation", gen, "reason", "override_sync")
+	}
 }
 
 // Overrides live in <runtime>/names, one private file per exact session ID.

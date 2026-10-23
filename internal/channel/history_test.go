@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -941,5 +942,49 @@ func TestHistoryDocsMatchImplementation(t *testing.T) {
 		if _, err := os.Stat(filepath.Join("..", "..", "docs", path)); err != nil {
 			t.Fatalf("documentation link target missing: %s", path)
 		}
+	}
+}
+
+func TestHistoryRenameNotLiveSession(t *testing.T) {
+	hh := newHistoryHarness(t)
+	codexDir := filepath.Join(hh.o.opts.CodexRoot, "2026", "10", "03")
+	if err := os.MkdirAll(codexDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	appendLog(t, filepath.Join(codexDir, "rollout-x.jsonl"), codexMeta("s-codex", "/work/other", "2026-10-03T08:00:00Z")+codexAssistant("m1", "2026-10-03T08:00:02Z", "done"))
+	hh.index()
+	hh.n.runtime = hh.scope.Runtime
+	out, err := hh.n.renameSession(hh.h, "s-codex", "Cursor integration")
+	if err != nil || out["session_name"] != "Cursor integration" || out["source"] != "explicit" {
+		t.Fatalf("rename %v %v", out, err)
+	}
+	row := func(h *historyService) map[string]any {
+		t.Helper()
+		res, herr := h.search(context.Background(), hh.n, json.RawMessage(`{"session_id":"s-codex"}`))
+		if herr != nil {
+			t.Fatal(herr)
+		}
+		rows := sessionsOf(roundTrip(t, res))
+		if len(rows) != 1 {
+			t.Fatalf("rows %v", rows)
+		}
+		return rows[0]
+	}
+	if r := row(hh.h); r["session_name"] != "Cursor integration" || r["name_source"] != "explicit" || r["live_status"] != "not_discovered" {
+		t.Fatalf("renamed row %v", r)
+	}
+	// A restarted reader over the same runtime still sees the override.
+	if r := row(newHistoryService(hh.scope)); r["session_name"] != "Cursor integration" {
+		t.Fatalf("override lost on restart %v", r)
+	}
+	out, err = hh.n.renameSession(hh.h, "s-codex", "")
+	if err != nil || out["session_name"] != "other · codex · s-codex" || out["source"] != "fallback" {
+		t.Fatalf("clear %v %v", out, err)
+	}
+	if r := row(hh.h); r["name_source"] != "fallback" {
+		t.Fatalf("cleared row %v", r)
+	}
+	if _, err := hh.n.renameSession(hh.h, "s-unknown", "x"); !errors.Is(err, errRenameNotFound) {
+		t.Fatalf("unknown session %v", err)
 	}
 }

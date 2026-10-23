@@ -24,7 +24,7 @@ def historical(path, session, ts, uid, text, role='assistant'):
                            'cwd': '/work/past', 'message': {'role': role, 'content': content}}) + '\n')
 
 
-def history_checks(client, running):
+def history_checks(client, running, past_name=('Past work', 'native')):
     """Search and read the pre-existing session; the agent process never existed."""
     opencode_checks(client)
     found = client.tool('search_sessions', {'project_path': '/work/past', 'agent_type': 'claude'})
@@ -34,7 +34,7 @@ def history_checks(client, running):
     assert catalog['coverage_complete'] is running, catalog
     assert [s['session_id'] for s in found['sessions']] == ['past'], found
     past = found['sessions'][0]
-    assert past['session_name'] == 'Past work' and past['name_source'] == 'native', past
+    assert (past['session_name'], past['name_source']) == past_name, past
     assert past['live_status'] == 'not_discovered' and past['delivery_capable'] is False, past
     assert past['history_availability'] == 'available', past
     assert past['started_at'] == '2026-09-01T10:00:00Z' and past['last_activity_at'] == '2026-09-01T10:05:00Z', past
@@ -171,6 +171,12 @@ def main():
                         if s['identity']['session_id'] == 'observed']
             until(lambda: len(session()) == 1)
             assert not session()[0]['delivery_capable']
+            # Another local session names the observe-only session; its observer
+            # publisher re-reads the override and re-advertises it.
+            renamed = subscriber.tool('set_session_name', {'session_id': 'observed', 'name': 'Observed rename'})
+            assert renamed == {'session_id': 'observed', 'session_name': 'Observed rename', 'source': 'explicit'}, renamed
+            until(lambda: session()[0]['identity'].get('session_name') == 'Observed rename')
+            assert 'NOT_FOUND' in subscriber.tool_error('set_session_name', {'session_id': 'nope', 'name': 'x'})
             subscriber.tool('subscribe', {'session_id': 'observed'})
             until(lambda: subscriber.tool('list_sessions')['subscriptions']['observed']['state'] == 'following')
             append(transcript, 'passive', 'passive-marker')
@@ -193,15 +199,23 @@ def main():
             append(transcript, 'resume-human', 'continue', 'user')
             append(transcript, 'resumed', 'resumed-marker')
             subscriber.event('resumed-marker')
+            # A not-live catalog session is renamed by exact ID from another session.
+            renamed = subscriber.tool('set_session_name', {'session_id': 'past', 'name': 'Renamed past'})
+            assert renamed['session_name'] == 'Renamed past' and renamed['source'] == 'explicit', renamed
             observer.terminate()
             assert observer.wait(timeout=15) == 0
             processes.remove(observer)
             # A stopped service serves a visibly stale catalog; reads still work.
-            history_checks(subscriber, running=False)
+            history_checks(subscriber, running=False, past_name=('Renamed past', 'explicit'))
             start()
             until(lambda: catalog_ready(subscriber))
+            history_checks(subscriber, running=True, past_name=('Renamed past', 'explicit'))
+            cleared = subscriber.tool('set_session_name', {'session_id': 'past', 'name': ''})
+            assert cleared['session_name'] == 'Past work' and cleared['source'] == 'native', cleared
             append(transcript, 'restart-human', 'continue again', 'user')
             until(lambda: len(session()) == 1)
+            # The override survives the restart and reaches the new publisher.
+            until(lambda: session()[0]['identity'].get('session_name') == 'Observed rename')
             # A new observer stream starts live, without replaying old log content.
             subscriber.event('Collection owner changed')
             append(transcript, 'restart', 'restart-marker')
@@ -223,7 +237,7 @@ def main():
                 process.terminate()
                 process.wait(timeout=15)
     print('PASS: observer discovery, direct handoff/delivery, passive takeover, restart without duplicate replay, '
-          'historical catalog search/read, stale catalog while stopped')
+          'historical catalog search/read, stale catalog while stopped, renaming other local sessions')
 
 
 if __name__ == '__main__':
