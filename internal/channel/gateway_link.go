@@ -27,7 +27,8 @@ type gatewayFrame struct {
 	Error      string            `json:"error,omitempty"`
 }
 type gatewayLink struct {
-	opencode     bool // the peer negotiated gatewaySubprotocolOpenCode
+	opencode     bool // the peer negotiated gatewaySubprotocolOpenCode or a later subprotocol
+	cursor       bool // the peer negotiated gatewaySubprotocolCursor
 	lastSnapshot time.Time
 	established  time.Time
 	stopOnce     sync.Once
@@ -110,7 +111,7 @@ func (g *gateway) attach(host string, c *websocket.Conn, outgoing bool) bool {
 		<-old.done
 	}
 	ctx, cancel := context.WithCancel(g.ctx)
-	l := &gatewayLink{opencode: c.Subprotocol() == gatewaySubprotocolOpenCode, lastSnapshot: time.Now(), established: time.Now(), g: g, host: host, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
+	l := &gatewayLink{opencode: gatewayAcceptsOpenCode(c.Subprotocol()), cursor: c.Subprotocol() == gatewaySubprotocolCursor, lastSnapshot: time.Now(), established: time.Now(), g: g, host: host, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
 	g.mu.Lock()
 	if reason := g.attachRejection(host, outgoing, true); reason != "" {
 		g.mu.Unlock()
@@ -314,7 +315,7 @@ func (l *gatewayLink) advertise() {
 		sessions := []*pb.Identity{}
 		scanCtx, stopScan := context.WithTimeout(l.ctx, 3*time.Second)
 		for _, p := range logicalPeers(l.g.base.peers()) {
-			if !gatewayExportable(p) || !gatewayPeerAccepts(p, l.opencode) {
+			if !gatewayExportable(p) || !gatewayPeerAccepts(p, l.opencode, l.cursor) {
 				continue
 			}
 			// Probe before export: stale gossip never establishes remote authority.
@@ -632,17 +633,39 @@ func (p *gatewayProxy) close() {
 // OpenCode sessions.
 const gatewaySubprotocolOpenCode = "rhizome.gateway.opencode.v1"
 
+// gatewaySubprotocolCursor is offered ahead of gatewaySubprotocolOpenCode by
+// builds that also accept Cursor sessions; selecting it implies OpenCode
+// support. Each side prefers it, so two such builds select it, while a build
+// that knows only OpenCode still selects gatewaySubprotocolOpenCode and never
+// gets Cursor sessions.
+const gatewaySubprotocolCursor = "rhizome.gateway.cursor.v1"
+
+// gatewaySubprotocols lists the offered subprotocols in order of preference.
+var gatewaySubprotocols = []string{gatewaySubprotocolCursor, gatewaySubprotocolOpenCode}
+
 func newGatewayUpgrader() *websocket.Upgrader {
-	return &websocket.Upgrader{HandshakeTimeout: 5 * time.Second, Subprotocols: []string{gatewaySubprotocolOpenCode}, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}
+	return &websocket.Upgrader{HandshakeTimeout: 5 * time.Second, Subprotocols: gatewaySubprotocols, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}
 }
 
 func newGatewayDialer(tlsCfg *tls.Config) *websocket.Dialer {
-	return &websocket.Dialer{TLSClientConfig: tlsCfg, HandshakeTimeout: 5 * time.Second, Proxy: nil, Subprotocols: []string{gatewaySubprotocolOpenCode}}
+	return &websocket.Dialer{TLSClientConfig: tlsCfg, HandshakeTimeout: 5 * time.Second, Proxy: nil, Subprotocols: gatewaySubprotocols}
+}
+
+// gatewayAcceptsOpenCode reports whether a negotiated subprotocol lets
+// snapshots carry OpenCode sessions.
+func gatewayAcceptsOpenCode(subprotocol string) bool {
+	return subprotocol == gatewaySubprotocolOpenCode || subprotocol == gatewaySubprotocolCursor
 }
 
 // gatewayPeerAccepts reports whether a snapshot sent to a peer may include p.
-func gatewayPeerAccepts(p *pb.Identity, opencode bool) bool {
-	return opencode || p.AgentType != "opencode"
+func gatewayPeerAccepts(p *pb.Identity, opencode, cursor bool) bool {
+	switch p.AgentType {
+	case "opencode":
+		return opencode
+	case "cursor":
+		return cursor
+	}
+	return true
 }
 
 func gatewayExportable(p *pb.Identity) bool {

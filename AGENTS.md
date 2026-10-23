@@ -162,9 +162,11 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   service flags are opt-in and separate from MCP networking, which stays local
   when pairing is enabled. The service bridges remote sessions through protocol-2
   proxies (`gateway_host`); only local identities with `gateway_version = 1`
-  are exported, and `opencode` sessions only over links that negotiated the
-  `rhizome.gateway.opencode.v1` subprotocol (older peers drop links over unknown agent
-  types). Never forward proxy advertisements, trust peer-supplied endpoints,
+  are exported, `opencode` sessions only over links that negotiated the
+  `rhizome.gateway.opencode.v1` subprotocol or a later one, and `cursor` sessions
+  only over `rhizome.gateway.cursor.v1` (preferred, implies OpenCode); older peers
+  drop links over unknown agent types, so every new exported agent type needs
+  its own subprotocol. Never forward proxy advertisements, trust peer-supplied endpoints,
   or expose the admin API or history except through the opt-in peer-history policy below. Cross-host ID collisions fail closed.
   Revocation closes connections and invalidates queued events via local trust
   grants; old invitations cannot restore revoked trust. Every link end logs a

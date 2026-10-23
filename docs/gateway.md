@@ -19,7 +19,12 @@ over links whose websocket handshake negotiated the `rhizome.gateway.opencode.v1
 subprotocol. A paired host whose build predates OpenCode support selects none, so
 the link stays up and that host sees only Claude and Codex sessions; upgrade both
 hosts to share OpenCode sessions. Without this negotiation such a host would
-reject the snapshot and drop the link.
+reject the snapshot and drop the link. Bound Cursor sessions
+(`agent_type: "cursor"`) follow the same rule with the
+`rhizome.gateway.cursor.v1` subprotocol, which builds with Cursor support offer
+ahead of the OpenCode one and which implies OpenCode support. A host whose
+build knows OpenCode but not Cursor still negotiates the OpenCode subprotocol
+and sees every session except Cursor ones.
 
 On each host, setup can save these settings without a terminal:
 
