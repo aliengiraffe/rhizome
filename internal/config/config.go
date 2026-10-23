@@ -39,12 +39,14 @@ type Config struct {
 		DataDir     string      `toml:"data_dir"`     // Directory holding opencode.db; default $XDG_DATA_HOME/opencode or ~/.local/share/opencode.
 		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for OpenCode-sourced history.
 	} `toml:"opencode"`
-	Gateway     Gateway           `toml:"gateway"`
-	Network     Network           `toml:"network"`
-	PeerHistory HistoryPolicy     `toml:"-"` // Effective policy for paired hosts reading local history.
-	Path        string            `toml:"-"`
-	Found       bool              `toml:"-"`
-	Sources     map[string]string `toml:"-"`
+	Gateway      Gateway           `toml:"gateway"`
+	Network      Network           `toml:"network"`
+	Sessions     Sessions          `toml:"sessions"`
+	PeerHistory  HistoryPolicy     `toml:"-"` // Effective policy for paired hosts reading local history.
+	RecentWindow time.Duration     `toml:"-"` // Effective [sessions].recent_window; zero disables recent-only rows.
+	Path         string            `toml:"-"`
+	Found        bool              `toml:"-"`
+	Sources      map[string]string `toml:"-"`
 }
 
 // Network selects how `rhizome mcp` peers. Mode "local" (the default) is
@@ -219,9 +221,12 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	}
 	// TOML keys are case-sensitive even though the decoder can match Go fields
 	// case-insensitively. Reject alternate spellings instead of losing their source.
-	known := map[string]bool{"claude": true, "codex": true, "opencode": true, "network": true, "gateway": true}
+	known := map[string]bool{"claude": true, "codex": true, "opencode": true, "network": true, "gateway": true, "sessions": true}
 	for _, k := range networkKeys {
 		known["network."+k] = true
+	}
+	for _, k := range sessionsKeys {
+		known["sessions."+k] = true
 	}
 	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history"} {
 		known[table] = true
@@ -266,6 +271,14 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 			}
 			c.Sources[table+"."+k] = source
 		}
+	}
+	c.Sessions, c.RecentWindow = raw.Sessions, DefaultRecentWindow
+	c.Sources["sessions.recent_window"] = "default"
+	if md.IsDefined("sessions", "recent_window") {
+		if c.RecentWindow, err = ParseRecentWindow(raw.Sessions.RecentWindow); err != nil {
+			return c, fmt.Errorf("config %s: %w", path, err)
+		}
+		c.Sources["sessions.recent_window"] = "file"
 	}
 	c.Network = raw.Network
 	for _, k := range networkKeys {
@@ -427,6 +440,9 @@ func (c Config) Write(w io.Writer) error {
 		if _, err := fmt.Fprintf(w, "%s = %s # source: %s\n", l.key, l.value, c.Sources[l.key]); err != nil {
 			return err
 		}
+	}
+	if _, err := fmt.Fprintf(w, "sessions.recent_window = %q # source: %s\n", c.RecentWindow.String(), c.Sources["sessions.recent_window"]); err != nil {
+		return err
 	}
 	// Peer history shows the effective, inherited policy, not only file values.
 	if _, err := fmt.Fprintf(w, "gateway.history.enabled = %t # source: %s\n", c.PeerHistory.Enabled, c.Sources["gateway.history.enabled"]); err != nil {

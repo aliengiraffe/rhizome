@@ -44,6 +44,8 @@ type gateway struct {
 	shortLink, staleAfter              time.Duration
 	log                                *slog.Logger
 	files                              *gatewayFiles
+	recent                             *gatewayRecent  // paired hosts' recent-only rows for local MCP processes
+	recentWindow                       time.Duration   // this host's advertised window; read at service start
 	history                            *historyService // serves paired hosts; separate from MCP processes
 	historyPolicy                      config.HistoryPolicy
 	historyMu                          sync.Mutex
@@ -126,14 +128,16 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway, history
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	g := &gateway{history: newHistoryService(historyScope{Runtime: runtime, ClaudeRoot: history.ClaudeRoot, CodexRoot: history.CodexRoot, OpenCodeRoot: history.OpenCodeRoot}), historyPolicy: history.Policy, historyActive: map[string]int{}, retry: map[string]gatewayRetry{}, proxySlots: make(chan struct{}, 128), enrollmentRate: rate.NewLimiter(4, 8), ctx: ctx, cancel: cancel, cfg: cfg, runtime: runtime, host: host, endpoint: endpoint, cert: cert, statePath: statePath, state: state, links: map[string]*gatewayLink{}, dialing: map[string]bool{}}
+	g := &gateway{recent: newGatewayRecent(dir), recentWindow: history.RecentWindow, history: newHistoryService(historyScope{Runtime: runtime, ClaudeRoot: history.ClaudeRoot, CodexRoot: history.CodexRoot, OpenCodeRoot: history.OpenCodeRoot}), historyPolicy: history.Policy, historyActive: map[string]int{}, retry: map[string]gatewayRetry{}, proxySlots: make(chan struct{}, 128), enrollmentRate: rate.NewLimiter(4, 8), ctx: ctx, cancel: cancel, cfg: cfg, runtime: runtime, host: host, endpoint: endpoint, cert: cert, statePath: statePath, state: state, links: map[string]*gatewayLink{}, dialing: map[string]bool{}}
 	g.files, err = newGatewayFiles(runtime)
 	if err != nil {
 		return err
 	}
 	defer g.files.close()
+	g.recent.close() // never serve entries left by an earlier service instance
+	defer g.recent.close()
 	g.base = newNode(ctx)
-	if err := g.base.start(Options{Runtime: runtime}); err != nil {
+	if err := g.base.start(Options{Runtime: runtime, Hostname: history.Hostname}); err != nil {
 		g.base.close()
 		return err
 	}
@@ -765,4 +769,23 @@ func gatewayAddresses(ctx context.Context, cfg config.Gateway, ts tailscaleClien
 		return "", "", err
 	}
 	return address, endpoint, nil
+}
+
+// recentExport lists this host's own recent-only sessions for one snapshot.
+// It reads only the local catalog, so entries learned from other paired hosts
+// are never forwarded, and it advertises nothing while the observer is stopped.
+func (g *gateway) recentExport(now time.Time) []recentSession {
+	if g.recentWindow <= 0 || g.history == nil {
+		return nil
+	}
+	c, running, herr := g.history.catalog.load()
+	if herr != nil || !running {
+		return nil
+	}
+	overrides := g.history.names()
+	rows, _ := recentFromCatalog(c, g.recentWindow, now, g.base.local().Host, func(s *historySession) string {
+		name, _ := g.history.effectiveName(s, overrides)
+		return name
+	})
+	return rows
 }

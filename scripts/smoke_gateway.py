@@ -62,6 +62,10 @@ def main():
         def sessions(client):
             return {s['identity']['session_id'] for s in client.tool('list_sessions')['sessions']}
 
+        def row(client, session):
+            rows = [s for s in client.tool('list_sessions')['sessions'] if s['identity']['session_id'] == session]
+            return rows[0] if rows else None
+
         try:
             for name in ('a', 'b', 'c'):
                 directory = base / name
@@ -94,6 +98,20 @@ def main():
             paired = json.loads(command(b, 'join', code))
             command(c, 'join', code, ok=False)
             until(lambda: 'gateway-b' in sessions(ca) and 'gateway-a' in sessions(cb))
+            host_a = paired['host_id']
+            # A's sessions that ended an hour ago are advertised to B as recent metadata
+            # stamped with A's authenticated host; they are never a delivery destination.
+            until(lambda: row(cb, 'hist-a') is not None and row(cb, 'hist-codex') is not None)
+            recent = row(cb, 'hist-a')
+            assert recent['status'] == 'recent' and recent['delivery_capable'] is False and recent['host_id'] == host_a, recent
+            assert recent['identity']['gateway_host'] == host_a and 'node_id' not in recent['identity'], recent
+            assert row(cb, 'hist-codex')['identity']['agent_type'] == 'codex'
+            local = row(ca, 'hist-a')
+            assert local['status'] == 'recent' and 'host_id' not in local, local
+            refused = cb.call('tools/call', {'name': 'send', 'arguments': {'session_id': 'hist-a', 'text': 'nobody home'}})
+            assert refused.get('isError') and 'recent, not live' in refused['content'][0]['text'], refused
+            offer_refused = cb.call('tools/call', {'name': 'send_file', 'arguments': {'session_id': 'hist-a', 'path': str(base / 'b' / 'config.toml')}})
+            assert offer_refused.get('isError') and 'live' in offer_refused['content'][0]['text'], offer_refused
             # Explicit binary attachment: offer metadata, immutable staging, acceptance,
             # verified local file, sender receipt, CLI listing and cancellation.
             payload = bytes(range(256)) * 2051
@@ -113,7 +131,6 @@ def main():
             cb.tool('cancel_file', {'transfer_id': offer['id']})
             assert not Path(received['path']).exists()
             # Opt-in history: B reads A's catalog within A's policy; A cannot read B's.
-            host_a = paired['host_id']
             until(lambda: 'hist-a' in cb.call('tools/call', {'name': 'search_sessions', 'arguments': {'host_id': host_a}})['content'][0]['text'])
             found = cb.tool('search_sessions', {'host_id': host_a})
             assert [r['session_id'] for r in found['sessions']] == ['hist-a'], found
@@ -156,13 +173,14 @@ def main():
             until(lambda: 'gateway-b' in sessions(cc) and 'gateway-c' in sessions(cb))
             assert 'gateway-a' not in sessions(cc)
             assert 'gateway-c' not in sessions(ca)
+            assert 'hist-a' not in sessions(cc)  # recent entries are never forwarded through B
             # History selection is direct only: C reaches B but never A through B.
             assert cc.error('search_sessions', {'host_id': host_a})['code'] == 'PEER_UNAVAILABLE'
             command(b, 'peers', 'revoke', paired['host_id'])
-            until(lambda: 'gateway-a' not in sessions(cb))
+            until(lambda: 'gateway-a' not in sessions(cb) and 'hist-a' not in sessions(cb))
             assert cb.call('tools/call', {'name': 'send', 'arguments': {'session_id': 'gateway-a', 'text': 'must fail'}}).get('isError')
             assert [(h['run'] / 'token').read_bytes() for h in hosts] == tokens
-            print('gateway smoke: PASS (pairing, distinct tokens, bidirectional routing, file transfers, opt-in history, activity, restart, non-transitivity, revocation)')
+            print('gateway smoke: PASS (pairing, distinct tokens, bidirectional routing, file transfers, opt-in history, recent-only advertisements, activity, restart, non-transitivity, revocation)')
         finally:
             for client in clients:
                 client.close()

@@ -63,6 +63,8 @@ type codexNodes struct {
 	nodes          map[string]*Node
 	binary, socket string
 	opts           Options
+	history        *historyService // shared read-only catalog client for every thread node
+	recentWindow   time.Duration
 }
 
 func (m *codexNodes) resolve(r *mcp.CallToolRequest) (*Node, error) {
@@ -82,6 +84,8 @@ func (m *codexNodes) resolve(r *mcp.CallToolRequest) (*Node, error) {
 	n.identity.AgentType = "codex"
 	n.ready = true
 	n.external = true
+	n.archive = m.history
+	n.recentWindow = m.recentWindow
 	n.collectionState = "waiting for session hook"
 	n.codex = newCodexCollector(thread, &appReader{socket: m.socket})
 	n.notify = func(ctx context.Context, text string, meta map[string]string) error {
@@ -252,9 +256,9 @@ func RunCodex(c config.Config, o Options) error {
 	home := c.Codex.Home
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, binary: resolved, socket: filepath.Join(home, "app-server-control", "app-server-control.sock"), opts: o}
-	defer manager.close()
 	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
+	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, binary: resolved, socket: filepath.Join(home, "app-server-control", "app-server-control.sock"), opts: o, history: history, recentWindow: c.RecentWindow}
+	defer manager.close()
 	server := makeServer(manager.resolve, agentCodex, func() {}, history)
 	session, err := server.Connect(ctx, &mcp.StdioTransport{}, nil)
 	if err != nil {

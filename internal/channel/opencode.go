@@ -54,16 +54,18 @@ type openCodeSessionState struct {
 // openCodeNodes keeps one Node per bound top-level OpenCode session. Binding
 // comes only from the plugin bridge; tool calls only select an existing node.
 type openCodeNodes struct {
-	ctx      context.Context
-	runtime  string
-	opts     Options // network and hostname settings shared by every session node
-	bridge   *bridge
-	store    *openCodeStore // nil disables restoration (tests)
-	limit    int
-	now      func() time.Time
-	frameMu  sync.Mutex // serializes frame processing; guards closed with mu
-	mu       sync.Mutex // lock order: frameMu, then mu, then Node.mu
-	sessions map[string]*openCodeSessionState
+	ctx          context.Context
+	runtime      string
+	history      *historyService
+	recentWindow time.Duration
+	opts         Options // network and hostname settings shared by every session node
+	bridge       *bridge
+	store        *openCodeStore // nil disables restoration (tests)
+	limit        int
+	now          func() time.Time
+	frameMu      sync.Mutex // serializes frame processing; guards closed with mu
+	mu           sync.Mutex // lock order: frameMu, then mu, then Node.mu
+	sessions     map[string]*openCodeSessionState
 	// restoring maps IDs of the last restore list to their stored activity
 	// time, so a restored bind keeps it instead of looking fresh. Guarded by
 	// frameMu.
@@ -516,6 +518,8 @@ func (m *openCodeNodes) bind(f bridgeFrame) error {
 
 func (m *openCodeNodes) newSessionNode(sid string) (*Node, error) {
 	n := newNode(m.ctx)
+	n.archive = m.history
+	n.recentWindow = m.recentWindow
 	n.identity.AgentType = "opencode"
 	n.ready = true
 	n.external = true
@@ -708,7 +712,10 @@ func RunOpenCode(c config.Config, o Options) error {
 	if err != nil {
 		return err
 	}
+	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
 	manager := newOpenCodeNodes(ctx, runtime)
+	manager.history = history
+	manager.recentWindow = c.RecentWindow
 	manager.opts = o
 	manager.store = store
 	b, err := listenBridge(path, manager)
@@ -722,7 +729,6 @@ func RunOpenCode(c config.Config, o Options) error {
 	manager.wg.Add(1)
 	go func() { defer manager.wg.Done(); manager.sweepLoop(ctx) }()
 	slog.Info("ready", "agent", "opencode", "binding", "plugin")
-	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
 	session, err := makeServer(manager.resolve, agentOpenCode, func() {}, history).Connect(ctx, &mcp.StdioTransport{}, nil)
 	if err != nil {
 		cancel()

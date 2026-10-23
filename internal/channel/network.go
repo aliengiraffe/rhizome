@@ -147,6 +147,10 @@ func (n *Node) send(ctx context.Context, session, text, reply string) (*pb.Accep
 	n.mu.Unlock()
 	target, err := n.resolve(ctx, session)
 	if err != nil {
+		// Recent-only sessions have no live route; nothing is queued or deferred.
+		if n.recentOnly(session) {
+			return nil, fmt.Errorf("session %q is recent, not live: it recorded activity within the recent window but no process currently owns it, so the message was not queued and will not be delivered later", session)
+		}
 		return nil, err
 	}
 	conn, err := n.dial(target)

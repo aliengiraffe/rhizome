@@ -26,7 +26,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), and the OpenCode bridge (`opencode*.go`). |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), recent-only advertisements (`recent.go`), and the OpenCode bridge (`opencode*.go`). |
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
@@ -133,7 +133,8 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   MCP and service share `runtime_dir` through `~/.rhizome/config.toml`; tokens
   never enter configuration. Keys are grouped per agent (`[claude]`, `[codex]`);
   which agent a process serves is the per-launch `rhizome mcp --agent` flag and
-  must never become a configuration key. `RHIZOME_CONFIG`/`--config` select an
+  must never become a configuration key. `[sessions].recent_window` is file-only
+  (`internal/config/sessions.go`). `RHIZOME_CONFIG`/`--config` select an
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
@@ -343,6 +344,29 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   snapshots for 15 minutes), signed single-use forward-only cursors, and the
   stable error codes in `docs/history.md`. Live status comes only from current
   discovery; never derive `delivery_capable` from a catalog row.
+- **Recent sessions are metadata, never routes.** `list_sessions` rows carry
+  `status` `live` (verified current route), `observed (liveness unknown)`,
+  `recent` or `ambiguous`. `recent` rows (`internal/channel/recent.go`) are
+  computed for Claude Code and Codex on the owning host from the observer's catalog
+  (OpenCode callers can list them, but OpenCode history is not advertised): `now -
+  last_activity_at <= [sessions].recent_window` (default `24h`, `0s` disables),
+  inclusive, UTC, from recorded log timestamps only; unknown timestamps never
+  qualify and timestamps more than five minutes in the future fail closed.
+  Nothing renews recency except recorded activity. They have no node, generation,
+  endpoint, lease, listener or queue, are `delivery_capable: false`, and are
+  withdrawn while the observer service is stopped. A verified live/observed
+  identity wins its (host, agent, session) key; keep one logical row per key and
+  the existing ambiguity handling. `send` must refuse recent-only targets before
+  queueing (never defer, never route to an observer); file and other
+  live-recipient paths keep resolving live identities only. Selection is newest
+  first, capped at 64 per host with a visible `omitted` count. Paired hosts
+  receive them as a bounded `recent` list in snapshot frames from the sender's
+  own catalog only (never forwarded), stamped with the authenticated `host_id`
+  on receipt, stored in private `<runtime>/gateway/recent.json` for local MCP
+  processes only while the link and gateway live; they never become proxies and
+  grant no history access. `recentExportable` must be extended together with
+  `gatewayExportable` when session privacy (#37) lands. README "Session status"
+  is the user contract; restart applies configuration changes.
 - **Peer history is opt-in, serving-host enforced and direct.** File-only keys
   `[gateway.history]` (`enabled` default false, `lookback` default `30d`) and
   `[claude|codex|opencode.peer_history]` overrides resolve to `config.HistoryPolicy`.

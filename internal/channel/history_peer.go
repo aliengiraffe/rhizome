@@ -25,11 +25,15 @@ const (
 	maxPeerHistoryReply  = 2 * 1024 * 1024
 )
 
-// GatewayHistory is what the service's gateway needs to serve peer history:
-// the observer's log roots and the effective policy read at service start.
+// GatewayHistory is what the service's gateway needs from the shared
+// configuration beyond [gateway]: the observer's log roots and peer-history
+// policy, the recent window it advertises to paired hosts, and the device's
+// display label. All of it is read once at service start.
 type GatewayHistory struct {
 	ClaudeRoot, CodexRoot, OpenCodeRoot string
 	Policy                              config.HistoryPolicy
+	RecentWindow                        time.Duration
+	Hostname                            string
 }
 
 // historyAccess narrows one request from an authenticated paired host. now is

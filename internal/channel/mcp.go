@@ -9,6 +9,7 @@ import (
 	"rhizome/internal/config"
 	"sort"
 	"syscall"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -82,6 +83,79 @@ func (n *Node) status() map[string]any {
 	}
 	return map[string]any{"binding": binding, "identity": cloneIdentity(n.identity), "subscriptions": feeds, "queue_depth": len(n.incoming), "delivery_paused": n.paused, "counters": n.stats, "collection_state": n.collectionState, "delivery_error": n.deliveryError}
 }
+
+// listSessions merges current discovery with recent-only metadata. Verified
+// live and observed identities come first and win their logical
+// (host, agent, session) key; recent rows fill in sessions whose process ended
+// but whose recorded activity is inside the window. One row per key.
+func (n *Node) listSessions() map[string]any {
+	state := n.status()
+	if err := n.bound(); err != nil {
+		return state
+	}
+	now := time.Now()
+	if n.archive != nil {
+		now = n.archive.clock()
+	}
+	peers := logicalPeers(n.peers())
+	counts := map[string]int{}
+	for _, p := range peers {
+		if p.SessionId != "" {
+			counts[p.SessionId]++
+		}
+	}
+	sort.Slice(peers, func(i, j int) bool { return peers[i].SessionId < peers[j].SessionId })
+	local, activity, recent := n.recentSessions(now)
+	remote := gatewayRecentPeers(n.runtime, now)
+	recent.Advertised, recent.PeerAdvertised = 0, 0
+	seen := map[string]bool{}
+	sessions := []any{}
+	for _, p := range peers {
+		if p.SessionId == "" {
+			continue
+		}
+		if p.AgentType == "" {
+			p.AgentType = "claude"
+		}
+		status := "live"
+		if p.ObservationOnly {
+			status = "observed (liveness unknown)"
+		}
+		if counts[p.SessionId] > 1 {
+			status = "ambiguous"
+		}
+		seen[p.GatewayHost+"\x00"+p.AgentType+"\x00"+p.SessionId] = true
+		row := map[string]any{"identity": p, "status": status, "delivery_capable": !p.ObservationOnly, "last_activity_at": nil}
+		if p.GatewayHost != "" {
+			row["host_id"] = p.GatewayHost
+		} else if t, ok := activity[sessionKey{p.AgentType, p.SessionId}]; ok {
+			row["last_activity_at"] = rfc3339(&t)
+		}
+		sessions = append(sessions, row)
+	}
+	for _, r := range append(local, remote...) {
+		key := r.HostID + "\x00" + r.AgentType + "\x00" + r.SessionID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if r.HostID == "" {
+			recent.Advertised++
+		} else {
+			recent.PeerAdvertised++
+		}
+		identity := map[string]any{"session_id": r.SessionID, "agent_type": r.AgentType, "display_name": r.DisplayName, "project": r.Project, "session_name": r.SessionName, "host": r.Host}
+		row := map[string]any{"identity": identity, "status": "recent", "delivery_capable": false, "last_activity_at": rfc3339(&r.LastActivityAt), "recent_until": rfc3339(&r.ExpiresAt)}
+		if r.HostID != "" {
+			identity["gateway_host"] = r.HostID
+			row["host_id"] = r.HostID
+		}
+		sessions = append(sessions, row)
+	}
+	state["sessions"] = sessions
+	state["recent_sessions"] = recent
+	return state
+}
 func (n *Node) mcpServer() *mcp.Server {
 	return makeServer(func(*mcp.CallToolRequest) (*Node, error) { return n, nil }, agentClaude, func() { n.mu.Lock(); n.ready = true; n.mu.Unlock() }, n.archive)
 }
@@ -126,42 +200,12 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 	}
 
 	addFileTools(s, resolve)
-	mcp.AddTool(s, &mcp.Tool{Name: "list_sessions", Description: "List bound local sessions, exact IDs, untrusted session_name labels, conflicts, subscriptions and operational status."}, func(ctx context.Context, r *mcp.CallToolRequest, in empty) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "list_sessions", Description: "List discovered sessions with exact IDs, untrusted session_name labels, conflicts, subscriptions and operational status. status live means a verified current route; recent means recorded activity within the configured window with no live process (delivery_capable false, cannot receive messages); observed means a passive log observer."}, func(ctx context.Context, r *mcp.CallToolRequest, in empty) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)
 		if resolveErr != nil {
 			return result(nil, resolveErr)
 		}
-		state := n.status()
-		if err := n.bound(); err != nil {
-			return result(state, nil)
-		}
-		peers := logicalPeers(n.peers())
-		counts := map[string]int{}
-		for _, p := range peers {
-			if p.SessionId != "" {
-				counts[p.SessionId]++
-			}
-		}
-		sort.Slice(peers, func(i, j int) bool { return peers[i].SessionId < peers[j].SessionId })
-		var sessions []any
-		for _, p := range peers {
-			if p.SessionId == "" {
-				continue
-			}
-			if p.AgentType == "" {
-				p.AgentType = "claude"
-			}
-			status := "live"
-			if p.ObservationOnly {
-				status = "observed (liveness unknown)"
-			}
-			if counts[p.SessionId] > 1 {
-				status = "ambiguous"
-			}
-			sessions = append(sessions, map[string]any{"identity": p, "status": status, "delivery_capable": !p.ObservationOnly})
-		}
-		state["sessions"] = sessions
-		return result(state, nil)
+		return result(n.listSessions(), nil)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "subscribe", Description: "Follow exact session_id; idempotent, retains intent while absent, explicitly resumes that origin's paused feed."}, func(ctx context.Context, r *mcp.CallToolRequest, in sessionInput) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)
@@ -196,7 +240,7 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 		}
 		return result(n.renameSession(history, in.SessionID, in.Name))
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "send", Description: "Send text to an exact live session_id; success means accepted in receiver's bounded queue, not read."}, func(ctx context.Context, r *mcp.CallToolRequest, in sendInput) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "send", Description: "Send text to an exact live session_id; success means accepted in receiver's bounded queue, not read. Recent-only sessions are refused without queueing."}, func(ctx context.Context, r *mcp.CallToolRequest, in sendInput) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)
 		if resolveErr != nil {
 			return result(nil, resolveErr)
@@ -220,6 +264,7 @@ func Run(c config.Config, o Options) error {
 	n := newNode(ctx)
 	defer n.close()
 	n.archive = newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
+	n.recentWindow = c.RecentWindow
 	if err := n.start(o); err != nil {
 		return err
 	}
