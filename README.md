@@ -192,8 +192,10 @@ with host pairing in the same configuration.
 
 ### What gets shared
 
-Subscriptions carry selected assistant text, tool names/status, and turn markers.
-Automatic collection excludes user prompts, reasoning, full tool bodies,
+Subscriptions carry selected assistant text and tool names/status. Turn
+markers are recorded (and returned by `read_session_history`) but never
+delivered live, so a finished turn on its own never wakes a subscriber; the
+last delivered text is the only sign a turn ended. Automatic collection excludes user prompts, reasoning, full tool bodies,
 subagent transcripts, and received peer traffic. Explicit `send` and `publish`
 calls carry the text the sender chooses. Collected assistant text can still
 contain project-sensitive information.
