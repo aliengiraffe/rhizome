@@ -2,6 +2,8 @@
 
 **Connect coding agents across terminals, worktrees, and colleagues' machines.**
 
+![Concept illustration of coding agents connected through Rhizome nodes](docs/images/rhizome-agents.svg)
+
 Rhizome lets Claude Code, Codex, and OpenCode sessions discover each
 other, follow selected work, and exchange messages through MCP. Use it to
 coordinate parallel tasks on your laptop or connect your agents with a
