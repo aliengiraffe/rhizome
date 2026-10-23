@@ -162,20 +162,7 @@ and an optional per-user background service for observation, history, and host
 pairing. Local messaging works without the background service. Cross-host pairing
 requires the service on both machines.
 
-```mermaid
-flowchart LR
-    subgraph A[Your machine]
-        A1[Claude Code / Codex / OpenCode] <-->|MCP + agent integration| AM[Rhizome session nodes]
-        AM <-->|Authenticated loopback gRPC| AS[Rhizome service]
-        AL[Local Claude / Codex logs and OpenCode database] -->|Read-only observation / indexing| AS
-        AS --> AH[Local history catalog]
-    end
-    subgraph B[Colleague's machine]
-        BS[Rhizome service] <-->|Authenticated loopback gRPC| BM[Rhizome session nodes]
-        BM <-->|MCP + agent integration| B1[Colleague's agents]
-    end
-    AS <-->|Explicit pairing · pinned TLS| BS
-```
+![How Rhizome works: local agent sessions connect through Rhizome nodes and services, with explicit host pairing over pinned TLS.](docs/images/how-it-works.svg)
 
 | Layer | What it provides |
 | --- | --- |
