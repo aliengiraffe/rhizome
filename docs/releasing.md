@@ -10,7 +10,8 @@ release pipeline in `aliengiraffe/env-manager`. It uses native `codesign` and
 | --- | --- |
 | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | Jobs: `meta` → `build` → `smoke` matrix → `publish`. |
 | [`.goreleaser.yaml`](../.goreleaser.yaml) | Cross-builds, darwin fusion and signing hook, archives. Never publishes. |
-| [`internal/release/`](../internal/release) | Tag validation, asset matrix, checksum manifest, archive smoke (`releasetool`). |
+| [`internal/release/`](../internal/release) | Tag validation, asset matrix, checksum manifest, manifest signing and trusted keys, archive smoke (`releasetool`). |
+| [`internal/update/`](../internal/update) | The auto-updater that consumes these assets ([service.md](service.md#automatic-updates)). |
 | [`scripts/release/`](../scripts/release) | Signing, notarization, `.pkg` build, payload verification, release notes. |
 
 ## Assets
@@ -24,7 +25,8 @@ replaced by `.` because GitHub rewrites `+` in asset names.
 | `rhizome_<v>_macos.pkg` | The same signed binary at `/usr/local/bin/rhizome` | Developer ID Installer, notarized, stapled |
 | `rhizome_<v>_linux_{amd64,arm64}.tar.gz` | `rhizome` | Unsigned |
 | `rhizome_<v>_windows_{amd64,arm64}.zip` | `rhizome.exe` | Unsigned; no Authenticode, SmartScreen may warn |
-| `rhizome_<v>_checksums.txt` | SHA-256 of every asset above | Covered by the release's integrity only |
+| `rhizome_<v>_checksums.txt` | SHA-256 of every asset above | Signed by the detached signature below |
+| `rhizome_<v>_checksums.txt.sig` | Ed25519 signature over the manifest | [Release signing key](#release-signing-key); verified offline by the auto-updater and `releasetool verify -signed` |
 
 Every binary reports its identity with `rhizome --version`, for example
 `rhizome 1.3.0-rc.1 (commit <full sha>, built <commit date>)`. The command reads
@@ -82,7 +84,12 @@ Snapshots are versioned `0.0.0-snapshot+<12-char commit>`.
    without installing it. It requires exactly one payload file,
    `usr/local/bin/rhizome`, and no installer scripts. The payload must be
    byte-identical to the archive binary and must run. Checksums are written
-   last.
+   last and, in production, signed with the release key
+   (`releasetool sign`, seed from the `RHIZOME_RELEASE_SIGNING_KEY` secret);
+   `releasetool verify -exact -signed` then checks the signature against the
+   public keys compiled into the checkout, so a key missing from
+   `internal/release/keys.go` fails the build rather than every later update.
+   Snapshots are not signed.
 3. **smoke** downloads the assets on native hosts: Linux amd64 and arm64,
    Windows amd64 and arm64, macOS arm64 and Intel. Each host verifies the
    manifest, extracts its archive and runs `--version`, which must report the
@@ -93,9 +100,10 @@ Snapshots are versioned `0.0.0-snapshot+<12-char commit>`.
    `Accepted` verdict is enforced in the build job.
 4. **publish** (`contents: write`, no signing secrets) runs only for tags and
    only after every build and smoke job succeeds. It verifies the artifact set
-   exactly and confirms the tag still names the built commit. It stages a
-   **draft** with every asset, downloads the draft's assets and re-verifies
-   them against the manifest, then publishes. A run that fails at any point
+   exactly, including the manifest signature, and confirms the tag still names
+   the built commit. It stages a **draft** with every asset, downloads the
+   draft's assets and re-verifies them (manifest, signature and byte-identical
+   signature file), then publishes. A run that fails at any point
    leaves no public release.
 
 Notarization fails unless `notarytool` exits zero **and** its JSON response is
@@ -140,6 +148,7 @@ to this repository. Never paste their values into source, issues or logs.
    | `APPLE_NOTARY_API_KEY_P8_BASE64` | base64 of the App Store Connect API key `.p8` (Developer role) |
    | `APPLE_NOTARY_API_KEY_ID` | the key's id |
    | `APPLE_NOTARY_API_ISSUER_ID` | the issuer id |
+   | `RHIZOME_RELEASE_SIGNING_KEY` | base64 Ed25519 seed from `releasetool keygen` ([release signing key](#release-signing-key)) |
 
 3. Optional **environment variables** pin the identities when the keychain
    holds more than one: `APPLE_DEVELOPER_ID_IDENTITY`
@@ -154,6 +163,52 @@ secret before using any of them, and fails with the names of any that are
 missing. Certificates go into a throwaway keychain under `$RUNNER_TEMP`. The
 `.p12` files are deleted right after import, and an `always()` step deletes the
 keychain and the `.p8` key whether the job succeeds or fails.
+
+## Release signing key
+
+Linux and Windows archives are unsigned, and the checksum manifest downloaded
+from the same place as an asset proves integrity only. The detached Ed25519
+signature `rhizome_<v>_checksums.txt.sig` is what makes a release
+authenticatable offline on every platform: the public keys are compiled into
+the binary (`internal/release/keys.go`) and the private seed exists only as the
+`RHIZOME_RELEASE_SIGNING_KEY` secret of the `release` environment. The
+[auto-updater](service.md#automatic-updates) accepts a release only when its
+manifest verifies against one of those keys; the format is one line,
+`rhizome-release-signature v1 <key id> <base64 signature>`, where the key id
+is the first eight bytes of the public key's SHA-256. Standard-library
+cryptography only; no external verifier is needed.
+
+Generate the key once on a trusted machine, never in CI or an agent session:
+
+```sh
+go run ./internal/release/releasetool keygen -key-file /secure/path/rhizome-release.seed
+```
+
+The command refuses to overwrite, writes the seed with mode 0600 and prints
+the public key and key id. Store the seed's content as the
+`RHIZOME_RELEASE_SIGNING_KEY` environment secret on `release` (never a
+repository secret, never in source, issues or logs), then add the printed
+public key to `trustedKeys` in `internal/release/keys.go` and commit. Until
+both exist, production builds fail at the signing step and no binary can
+auto-update, which is the intended fail-closed state.
+
+Verify a download by hand with
+`go run ./internal/release/releasetool verify -tag v<v> -dir <download dir> -signed`
+from a checkout that lists the key.
+
+**Rotation.** Binaries trust the list compiled into them, so rotate in two
+releases: add the new public key to `keys.go` and publish a release still
+signed by the old key (installed binaries learn the new key when they update
+to it), then switch the secret to the new seed. Remove the old key from
+`keys.go` once no supported release needs it.
+
+**Revocation.** Remove the compromised key from `keys.go` and switch the
+secret immediately. Binaries built after the removal reject releases signed
+by that key. Binaries built before it still trust it; they can only be moved
+forward by a release signed by a key they already trust, so publish one
+promptly and tell users of older builds to verify and install it by hand.
+Published releases are immutable, so a release signed by a compromised key is
+not unpublished but should be marked as a prerelease with a note.
 
 ## Validating before a stable release
 
@@ -191,12 +246,21 @@ keychain and the `.p8` key whether the job succeeds or fails.
   Gatekeeper checks its notarization online on first run. Choose the `.pkg`
   for offline installs. Archives downloaded with a browser get a quarantine
   attribute; downloads made with `curl` or `gh` do not.
-- **Upgrading a running observer**: the service keeps running the old binary
-  until restarted. Run `rhizome service stop` and then `rhizome service start`,
-  and restart MCP clients so they launch the new binary. The service
-  definition records the binary's absolute path. If the path changes (for
-  example when moving from a source build to the package), run
-  `rhizome service uninstall` with the old binary, then
+- **Automatic updates**: an installed observer with `[update] enabled = true`
+  (the default) finds newer stable releases, verifies them (manifest
+  signature, SHA-256, macOS Developer ID and Team ID, `--version`) and
+  restarts itself onto them; see [service.md](service.md#automatic-updates).
+  `rhizome update` reports and `rhizome update --apply` installs on demand.
+  The updater needs write access to the binary's directory; for the package
+  at `/usr/local/bin` it reports `not_writable` and you install the next
+  package yourself. Releases before the updater existed must be upgraded by
+  hand once.
+- **Upgrading a running observer by hand**: the service keeps running the old
+  binary until restarted. Run `rhizome service stop` and then
+  `rhizome service start`, and restart MCP clients so they launch the new
+  binary. The service definition records the binary's absolute path. If the
+  path changes (for example when moving from a source build to the package),
+  run `rhizome service uninstall` with the old binary, then
   `rhizome service install` with the new one.
 - **Uninstalling the package**: run `rhizome service uninstall` if you
   installed the service. Then run `sudo rm /usr/local/bin/rhizome` and
@@ -225,6 +289,9 @@ keychain and the `.p8` key whether the job succeeds or fails.
 ## Not included
 
 There is no Windows Authenticode signing or MSI, no Linux packages (deb/rpm),
-no Homebrew tap, no public mirror and no auto-updater. The macOS package is
-CLI-only, with no menu-bar app and no launch agents. Linux and Windows assets
-are unsigned; verify them with the checksum manifest.
+no Homebrew tap and no public mirror. The auto-updater updates the `rhizome`
+binary only, never agent clients, skills, hooks or plugins (`rhizome setup`
+owns those), with no delta updates and no rollback beyond the single previous
+binary kept for one cycle. The macOS package is CLI-only, with no menu-bar app
+and no launch agents. Linux and Windows binaries are unsigned; the signed
+checksum manifest is their authenticity check.

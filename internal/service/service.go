@@ -17,6 +17,7 @@ import (
 	"rhizome/internal/channel"
 	"rhizome/internal/config"
 	"rhizome/internal/localstate"
+	"rhizome/internal/update"
 )
 
 // Config contains the resolved observer settings and selected TOML path.
@@ -26,12 +27,14 @@ type Config struct {
 	PeerHistory  config.HistoryPolicy // Served to paired hosts by the gateway; read at service start.
 	RecentWindow time.Duration        // [sessions].recent_window the gateway advertises; read at service start.
 	Debug        bool                 // debug-level observer diagnostics; read at service start.
+	AutoUpdate   config.UpdatePolicy  // [update] policy; only the observer's background loop acts on it.
 	Observer     channel.ObserverOptions
 }
 
-// FromConfig adapts resolved configuration for the observer.
+// FromConfig adapts resolved configuration for the observer. The observer
+// reports the build identity set by SetBuild in its health file.
 func FromConfig(c config.Config) Config {
-	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, RecentWindow: c.RecentWindow, Debug: c.Debug, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir}}
+	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, RecentWindow: c.RecentWindow, Debug: c.Debug, AutoUpdate: c.AutoUpdate, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, Version: build.version}}
 }
 
 type command struct {
@@ -266,6 +269,9 @@ func (m *manager) manage(ctx context.Context, action string, c Config) error {
 	if action == "status" {
 		b, readErr := os.ReadFile(filepath.Join(c.Observer.Runtime, "observer-health.json"))
 		if readErr == nil {
+			fmt.Println(string(b))
+		}
+		if b, err := readJSON(filepath.Join(c.Observer.Runtime, update.StateFile), "update state"); err == nil && b != nil {
 			fmt.Println(string(b))
 		}
 		if !running(c.Observer.Runtime) {
