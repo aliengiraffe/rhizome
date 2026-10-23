@@ -95,7 +95,7 @@ Each row:
 | `session_name`, `name_source` | Effective name and its provenance: `explicit` (a `set_session_name` override stored under `<runtime_dir>/names/`, read at query time), `native` (Claude `custom-title`, else `ai-title`, as indexed from the log), or `fallback` (`<display_name> · <agent_type> · <first 8 characters of session_id>`). Codex logs carry no thread title, so Codex rows are `explicit` or `fallback`. Names are bounded to 96 UTF-8 bytes on a rune boundary and are labels, never addresses. |
 | `started_at`, `last_activity_at` | Earliest and latest timestamps of supported records seen while indexing (Claude `user`/`assistant`; Codex `session_meta`, `response_item`, `event_msg`, `turn_context`). They are evidence of recorded activity, not process start or exit, and may stem from records whose content history reads exclude. |
 | `history_availability` | `available` (a single readable source), `partial` (readable with known gaps; see `availability_reasons`: `oversized_record`, `read_error`), `missing` (source removed; metadata retained as a tombstone), `unsupported` (source is no longer a regular file: `source_not_regular`), or `ambiguous` (`duplicate_sources`: several files claim the identity). `available` does not promise nonempty permitted content. |
-| `live_status` | From the current gossip snapshot only: `live` (exactly one direct integration), `observed` (only passive observer publishers; liveness unknown), `not_discovered` (no current peer; not proof the agent exited), or `ambiguous` (several direct integrations). Rows from a paired host are always `not_reported`. |
+| `live_status` | From the current gossip snapshot only, with the same derivation as `list_sessions`: `live` (one or more direct integrations; `delivery_capable` only when exactly one on one host reports it and it is not the caller), `recent` (only passive observer publishers; liveness unknown), or `not_discovered` (no current peer; not proof the agent exited). Rows from a paired host are always `not_reported`. With `--debug`, `live` and `recent` carry a substatus such as `live (direct x2)` or `recent (observer)`. |
 | `delivery_capable` | `true` only for `live` rows that are not the caller's own session. It is a point-in-time observation; `send` still performs its full routing checks. Never inferred from the catalog. |
 
 Rows are ordered by `last_activity_at` descending, unknown timestamps last,
@@ -317,7 +317,7 @@ Unknown ID, with coverage attached:
 Interpreting a live match: if a search row shows `live_status: "live"` and
 `delivery_capable: true`, the same exact `session_id` can be used with
 `subscribe` or `send`, which still verify identity over authenticated gRPC at
-that moment. `observed` means a passive observer sees log activity and nothing
+that moment. `recent` means a passive observer sees log activity and nothing
 can be delivered; `not_discovered` means nothing more than "no current peer".
 
 ## Paired-host history (opt-in)

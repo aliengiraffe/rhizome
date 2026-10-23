@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	pb "rhizome/proto"
 )
 
 // channelTransport captures the SDK's concurrency-safe connection. Protocol
@@ -87,7 +88,9 @@ func (n *Node) status() map[string]any {
 // listSessions merges current discovery with recent-only metadata. Verified
 // live and observed identities come first and win their logical
 // (host, agent, session) key; recent rows fill in sessions whose process ended
-// but whose recorded activity is inside the window. One row per key.
+// but whose recorded activity is inside the window. Several processes claiming
+// one session_id collapse into a single row whose identity prefers this
+// process, then a direct process, then the lowest node ID.
 func (n *Node) listSessions() map[string]any {
 	state := n.status()
 	if err := n.bound(); err != nil {
@@ -97,18 +100,33 @@ func (n *Node) listSessions() map[string]any {
 	if n.archive != nil {
 		now = n.archive.clock()
 	}
+	self := n.local().NodeId
 	peers := logicalPeers(n.peers())
-	counts := map[string]int{}
-	for _, p := range peers {
-		if p.SessionId != "" {
-			counts[p.SessionId]++
+	infos := liveInfos(peers, self)
+	rank := func(p *pb.Identity) int {
+		switch {
+		case p.NodeId == self:
+			return 0
+		case !p.ObservationOnly:
+			return 1
 		}
+		return 2
 	}
-	sort.Slice(peers, func(i, j int) bool { return peers[i].SessionId < peers[j].SessionId })
+	sort.Slice(peers, func(i, j int) bool {
+		a, b := peers[i], peers[j]
+		if a.SessionId != b.SessionId {
+			return a.SessionId < b.SessionId
+		}
+		if rank(a) != rank(b) {
+			return rank(a) < rank(b)
+		}
+		return a.NodeId < b.NodeId
+	})
 	local, activity, recent := n.recentSessions(now)
 	remote := gatewayRecentPeers(n.runtime, now)
 	recent.Advertised, recent.PeerAdvertised = 0, 0
 	seen := map[string]bool{}
+	listed := map[string]bool{}
 	sessions := []any{}
 	for _, p := range peers {
 		if p.SessionId == "" {
@@ -117,15 +135,13 @@ func (n *Node) listSessions() map[string]any {
 		if p.AgentType == "" {
 			p.AgentType = "claude"
 		}
-		status := "live"
-		if p.ObservationOnly {
-			status = "observed (liveness unknown)"
-		}
-		if counts[p.SessionId] > 1 {
-			status = "ambiguous"
-		}
 		seen[p.GatewayHost+"\x00"+p.AgentType+"\x00"+p.SessionId] = true
-		row := map[string]any{"identity": p, "status": status, "delivery_capable": !p.ObservationOnly, "last_activity_at": nil}
+		if listed[p.SessionId] {
+			continue
+		}
+		listed[p.SessionId] = true
+		status, routable := infos[p.SessionId].status(n.debug)
+		row := map[string]any{"identity": p, "status": status, "delivery_capable": routable, "last_activity_at": nil}
 		if p.GatewayHost != "" {
 			row["host_id"] = p.GatewayHost
 		} else if t, ok := activity[sessionKey{p.AgentType, p.SessionId}]; ok {
@@ -145,7 +161,7 @@ func (n *Node) listSessions() map[string]any {
 			recent.PeerAdvertised++
 		}
 		identity := map[string]any{"session_id": r.SessionID, "agent_type": r.AgentType, "display_name": r.DisplayName, "project": r.Project, "session_name": r.SessionName, "host": r.Host}
-		row := map[string]any{"identity": identity, "status": "recent", "delivery_capable": false, "last_activity_at": rfc3339(&r.LastActivityAt), "recent_until": rfc3339(&r.ExpiresAt)}
+		row := map[string]any{"identity": identity, "status": recentCatalogStatus(n.debug), "delivery_capable": false, "last_activity_at": rfc3339(&r.LastActivityAt), "recent_until": rfc3339(&r.ExpiresAt)}
 		if r.HostID != "" {
 			identity["gateway_host"] = r.HostID
 			row["host_id"] = r.HostID
@@ -200,7 +216,7 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 	}
 
 	addFileTools(s, resolve)
-	mcp.AddTool(s, &mcp.Tool{Name: "list_sessions", Description: "List discovered sessions with exact IDs, untrusted session_name labels, conflicts, subscriptions and operational status. status live means a verified current route; recent means recorded activity within the configured window with no live process (delivery_capable false, cannot receive messages); observed means a passive log observer."}, func(ctx context.Context, r *mcp.CallToolRequest, in empty) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "list_sessions", Description: "List discovered sessions with exact IDs, untrusted session_name labels, conflicts, subscriptions and operational status. status live means one or more current processes report the session (delivery_capable true only when exactly one route exists); recent means it is known only through a passive log observer or recorded activity within the configured window (delivery_capable false, cannot receive messages)."}, func(ctx context.Context, r *mcp.CallToolRequest, in empty) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)
 		if resolveErr != nil {
 			return result(nil, resolveErr)
@@ -258,13 +274,14 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 func Run(c config.Config, o Options) error {
 	o.Runtime = c.RuntimeDir
 	o.Hostname = c.Hostname
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, LogOptions(c.Debug))))
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	n := newNode(ctx)
 	defer n.close()
 	n.archive = newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
 	n.recentWindow = c.RecentWindow
+	n.debug = c.Debug
 	if err := n.start(o); err != nil {
 		return err
 	}

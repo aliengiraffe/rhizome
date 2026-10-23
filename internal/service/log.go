@@ -44,7 +44,7 @@ func Run(ctx context.Context, c Config) error {
 	}
 	previous := slog.Default()
 	defer slog.SetDefault(previous)
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&rotatingLog{path: filepath.Join(c.Observer.Runtime, "observer.log")}, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&rotatingLog{path: filepath.Join(c.Observer.Runtime, "observer.log")}, channel.LogOptions(c.Debug))))
 	return RunForeground(ctx, c)
 }
 

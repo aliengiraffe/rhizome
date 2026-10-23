@@ -272,3 +272,68 @@ func TestTarget(t *testing.T) {
 		t.Fatal(p, explicit, err)
 	}
 }
+
+func TestDebugPrecedence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RHIZOME_CONFIG", "")
+	t.Setenv("RHIZOME_DEBUG", "")
+	on, off := fixture(t, "debug = true\n"), fixture(t, "debug = false\n")
+	for _, tc := range []struct {
+		name, path, env, flag string
+		want                  bool
+		source                string
+	}{
+		{"default", "", "", "", false, "default"},
+		{"file", on, "", "", true, "file"},
+		{"env over file", off, "1", "", true, "env"},
+		{"env off over file", on, "0", "", false, "env"},
+		{"flag over env", on, "1", "false", false, "flag"},
+		{"flag over default", "", "", "true", true, "flag"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flags := map[string]string{}
+			if tc.path != "" {
+				flags["config"] = tc.path
+			}
+			if tc.flag != "" {
+				flags["debug"] = tc.flag
+			}
+			c, err := Resolve(flags, func(k string) string {
+				if k == "RHIZOME_DEBUG" {
+					return tc.env
+				}
+				return ""
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Debug != tc.want || c.Sources["debug"] != tc.source {
+				t.Fatalf("debug %v from %s, want %v from %s", c.Debug, c.Sources["debug"], tc.want, tc.source)
+			}
+		})
+	}
+	if _, err := Resolve(nil, func(k string) string {
+		if k == "RHIZOME_DEBUG" {
+			return "maybe"
+		}
+		return ""
+	}); err == nil {
+		t.Fatal("invalid RHIZOME_DEBUG accepted")
+	}
+	if _, err := Resolve(map[string]string{"config": fixture(t, "debug = \"yes\"\n")}, noenv); err == nil {
+		t.Fatal("string debug accepted")
+	}
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	Bind(fs, "debug")
+	if err := fs.Parse([]string{"--debug"}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := FromFlags(fs)
+	if err != nil || !c.Debug || c.Sources["debug"] != "flag" {
+		t.Fatalf("--debug: %v %v", c.Debug, err)
+	}
+	var out bytes.Buffer
+	if err := c.Write(&out); err != nil || !strings.Contains(out.String(), "debug = true # source: flag") {
+		t.Fatal(out.String(), err)
+	}
+}

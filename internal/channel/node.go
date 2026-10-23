@@ -81,6 +81,7 @@ type Node struct {
 	collectionLease  *os.File
 	archive          *historyService // read-only history catalog client; nil in parser tests
 	recentWindow     time.Duration   // [sessions].recent_window; zero disables recent-only rows
+	debug            bool            // append substatus to session statuses
 	suppressActivity bool
 	codex            *codexCollector
 	collectionState  string

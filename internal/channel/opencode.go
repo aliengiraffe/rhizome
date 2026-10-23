@@ -58,6 +58,7 @@ type openCodeNodes struct {
 	runtime      string
 	history      *historyService
 	recentWindow time.Duration
+	debug        bool
 	opts         Options // network and hostname settings shared by every session node
 	bridge       *bridge
 	store        *openCodeStore // nil disables restoration (tests)
@@ -520,6 +521,7 @@ func (m *openCodeNodes) newSessionNode(sid string) (*Node, error) {
 	n := newNode(m.ctx)
 	n.archive = m.history
 	n.recentWindow = m.recentWindow
+	n.debug = m.debug
 	n.identity.AgentType = "opencode"
 	n.ready = true
 	n.external = true
@@ -688,7 +690,7 @@ func (m *openCodeNodes) close() {
 func RunOpenCode(c config.Config, o Options) error {
 	o.Runtime = c.RuntimeDir
 	o.Hostname = c.Hostname
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, LogOptions(c.Debug))))
 	runtime, err := runtimeDir(c.RuntimeDir)
 	if err != nil {
 		return err
@@ -716,6 +718,7 @@ func RunOpenCode(c config.Config, o Options) error {
 	manager := newOpenCodeNodes(ctx, runtime)
 	manager.history = history
 	manager.recentWindow = c.RecentWindow
+	manager.debug = c.Debug
 	manager.opts = o
 	manager.store = store
 	b, err := listenBridge(path, manager)

@@ -128,8 +128,8 @@ and 64 active observed publishers. Capacity exhaustion is visible as degraded
 coverage; narrow roots or restart after moving old logs outside the watched tree.
 Publisher and subscriber limits from the main README are unchanged. Historical
 files are not advertised until activity is observed. Publishers idle for ten
-minutes retire; a later append recreates one. “Observed (liveness unknown)” means
-log activity was seen, not proof that the agent process remains alive.
+minutes retire; a later append recreates one. A `recent` row reported by the observer
+(`recent (observer)` with `--debug`) means log activity was seen, not proof that the agent process remains alive.
 
 Replacement/truncation baselines at current EOF with a gap instead of replaying
 potentially duplicated history. Observer restart also baselines existing files.

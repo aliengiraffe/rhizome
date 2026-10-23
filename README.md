@@ -239,10 +239,16 @@ visibility nor a label implies that a person will read a message.
 
 | `status` | Meaning | `delivery_capable` |
 | --- | --- | --- |
-| `live` | Exactly one direct integration currently owns the session; a verified route exists at the time of listing. | `true` |
-| `observed (liveness unknown)` | Only the [background observer](docs/service.md) saw log activity; it can be subscribed to but cannot deliver. | `false` |
-| `recent` | The session recorded activity within `sessions.recent_window` (default a rolling 24 hours) but no process currently owns it. Metadata only: no node ID, generation or endpoint. | `false` |
-| `ambiguous` | Several direct integrations claim the ID; routing fails closed. | as advertised, but `send` refuses |
+| `live` | One or more direct integrations currently report the session. Several processes sharing one `session_id` (for example a reloaded instance or a duplicate MCP process) collapse into a single row. | `true` only when exactly one direct integration on one host reports it; with duplicates, routing fails closed and `send` refuses |
+| `recent` | Liveness unknown. Either only the [background observer](docs/service.md) saw log activity (the row keeps its node identity and can be subscribed to), or the session recorded activity within `sessions.recent_window` (default a rolling 24 hours) and no process currently reports it (metadata only: no node ID, generation or endpoint). | `false` |
+
+Statuses carry no parentheses by default. With `--debug` (`RHIZOME_DEBUG=1`
+or top-level `debug = true`), each status gets a substatus that keeps the
+underlying detail visible: `live (direct)`, `live (direct, self)`,
+`live (direct x2)`, `live (direct, observer, hosts x2)` for a cross-host
+collision, `recent (observer)`, `recent (observer x2)` and `recent (catalog)`.
+Match on the leading word: `observed (liveness unknown)` and `ambiguous` are no
+longer emitted (earlier releases reported them).
 
 Recent rows currently cover Claude Code and Codex sessions; OpenCode callers
 can list them, but OpenCode history is not advertised as recent.
@@ -266,7 +272,7 @@ process exits, its row downgrades to `recent` if it qualifies and disappears
 otherwise; when a process reconnects, the row upgrades to `live` without a
 duplicate. A live session idle for longer than the window stays `live`; the
 window only bounds recent-only retention. `last_activity_at` is also attached
-to local `live`/`observed` rows when the catalog knows it.
+to local observer-reported and `live` rows when the catalog knows it.
 
 `send` to a `recent` session fails before anything is queued, with an explicit
 "recent, not live" error; nothing is deferred for a later restart and nothing is

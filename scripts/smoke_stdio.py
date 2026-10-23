@@ -217,7 +217,7 @@ def opencode_scenario(directory, claude):
         plugin.send({'type': 'bind', 'sessionID': 'ses_smokeAlpha1', 'parentID': '', 'directory': str(project), 'title': 'smoke title'})
         until(lambda: not oc.call('tools/call', {'name': 'list_sessions', 'arguments': {}, '_meta': alpha}).get('isError'))
         # Wait until discovery shows only the new process's node for the session.
-        until(lambda: [s['identity']['node_id'] != old_node and s['status'] == 'live'
+        until(lambda: [s['identity']['node_id'] != old_node and s['status'] == 'live' and s['delivery_capable']
                        for s in claude.tool('list_sessions')['sessions']
                        if s['identity']['session_id'] == 'ses_smokeAlpha1'] == [True])
         claude.tool('send', {'session_id': 'ses_smokeAlpha1', 'text': 'restored-marker'})
@@ -244,6 +244,18 @@ def main():
             until(lambda: len(b.tool('list_sessions')['sessions']) == 2)
             assert all(s['identity']['host'] == 'Smoke device'
                        for s in b.tool('list_sessions')['sessions'])
+            # --debug appends a substatus; MCP stdout stays JSON-RPC only and
+            # processes without it keep the plain vocabulary.
+            d = Client(directory, join=a.gossip(), env={'RHIZOME_DEBUG': '1'})
+            clients.append(d)
+            d.bind('delta', directory)
+            def statuses(client):
+                return {s['identity']['session_id']: s['status'] for s in client.tool('list_sessions')['sessions']}
+            until(lambda: statuses(d) == {'alpha': 'live (direct)', 'beta': 'live (direct)', 'delta': 'live (direct, self)'})
+            until(lambda: statuses(b) == {'alpha': 'live', 'beta': 'live', 'delta': 'live'})
+            d.close()
+            clients.remove(d)
+            until(lambda: len(b.tool('list_sessions')['sessions']) == 2)
             fallback = directory.name + ' \u00b7 claude \u00b7 beta'
             assert b.tool('list_sessions')['identity']['session_name'] == fallback
             assert a.tool('set_session_name', {'name': '  alpha-task-name  '})['session_name'] == 'alpha-task-name'
@@ -285,7 +297,7 @@ def main():
             for client in clients:
                 client.close()
         assert not list(directory.glob('run*/*.json')), 'EOF left registrations'
-    print('PASS%s: MCP stdout, unbound startup, two-session routing, session names, transcript, restart gap, rebind, EOF, OpenCode bridge identity, activity, delivery and restore after reload'
+    print('PASS%s: MCP stdout (also with --debug), unbound startup, debug substatus, two-session routing, session names, transcript, restart gap, rebind, EOF, OpenCode bridge identity, activity, delivery and restore after reload'
           % (' (LAN mode, pinned TLS, separate registries)' if LAN else ''))
 
 if __name__ == '__main__':

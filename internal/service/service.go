@@ -25,12 +25,13 @@ type Config struct {
 	Gateway      config.Gateway
 	PeerHistory  config.HistoryPolicy // Served to paired hosts by the gateway; read at service start.
 	RecentWindow time.Duration        // [sessions].recent_window the gateway advertises; read at service start.
+	Debug        bool                 // debug-level observer diagnostics; read at service start.
 	Observer     channel.ObserverOptions
 }
 
 // FromConfig adapts resolved configuration for the observer.
 func FromConfig(c config.Config) Config {
-	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, RecentWindow: c.RecentWindow, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir}}
+	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, RecentWindow: c.RecentWindow, Debug: c.Debug, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir}}
 }
 
 type command struct {

@@ -259,6 +259,25 @@ func TestGatewayNonTransitiveAndConsumedInvitation(t *testing.T) {
 	collision.mu.Unlock()
 	collision.advertise()
 	gatewayUntil(t, func() bool { _, err := nb.resolve(context.Background(), "mesh-a"); return err != nil })
+	// The collision still reads as one live row, never sendable.
+	meshA := func() (int, map[string]any) {
+		n, last := 0, map[string]any{}
+		for _, s := range nb.listSessions()["sessions"].([]any) {
+			row := s.(map[string]any)
+			if id, _ := row["identity"].(*pb.Identity); id.GetSessionId() == "mesh-a" {
+				n, last = n+1, row
+			}
+		}
+		return n, last
+	}
+	nb.debug = true
+	gatewayUntil(t, func() bool {
+		n, row := meshA()
+		return n == 1 && row["status"] == "live (direct, observer, hosts x2)" && row["delivery_capable"] == false
+	})
+	if _, err := nb.send(context.Background(), "mesh-a", "collision", ""); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("cross-host collision send: %v", err)
+	}
 }
 func TestGatewayCorruptStateFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")

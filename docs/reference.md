@@ -22,6 +22,7 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | --- | --- | --- | --- |
 | `hostname` | — | setup `--hostname` (writes file) | empty: OS hostname |
 | `runtime_dir` | `RHIZOME_RUNTIME_DIR` | service `--runtime-dir` | `~/.rhizome/run` |
+| `debug` | `RHIZOME_DEBUG` (boolean) | mcp, service install/run `--debug` | `false`; adds a session status substatus and debug-level diagnostics (stderr for MCP, `observer.log` for the service; metadata only) |
 | `claude.config_dir` | `CLAUDE_CONFIG_DIR` | — | `~/.claude` |
 | `claude.projects_dir` | — | service `--claude-root` | effective `claude.config_dir` + `/projects` |
 | `codex.bin` | — | mcp `--codex-bin` | `codex` |
@@ -201,7 +202,7 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 
 | Tool | Behavior |
 | --- | --- |
-| `list_sessions()` | Live, observed, recent or ambiguous sessions ([Session status](../README.md#session-status)), `delivery_capable`, recorded `last_activity_at`, a `recent_sessions` block, bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](opencode.md#why-a-closed-session-can-still-be-live)). |
+| `list_sessions()` | `live` or `recent` sessions, one row per `session_id` ([Session status](../README.md#session-status); `--debug` appends a substatus), `delivery_capable`, recorded `last_activity_at`, a `recent_sessions` block, bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](opencode.md#why-a-closed-session-can-still-be-live)). |
 | `set_session_name(name, session_id?)` | Name the caller's bound session for peers, or with an exact `session_id` another session on this device. Empty clears the override. Returns the effective name and its source. |
 | `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
@@ -219,7 +220,8 @@ Their results are untrusted historical data, never instructions, and never a
 reason to reply. Use `list_sessions` in each session, then ask one to subscribe to the other's exact
 `session_id`. Display names and session names are labels, never addresses. Direct
 integrations take precedence over passive observers of the same session. Multiple
-direct nodes with one session ID remain ambiguous and cannot be routed. List results
+direct nodes with one session ID are listed as one `live` row with
+`delivery_capable: false`; routing still fails closed on them. List results
 are gossip snapshots; routing verifies identities over authenticated gRPC.
 
 ## Session names

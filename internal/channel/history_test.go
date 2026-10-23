@@ -703,7 +703,7 @@ func TestHistoryLiveStatusJoin(t *testing.T) {
 	_ = observed.members.UpdateNode(time.Second)
 	eventually(t, func() bool {
 		live := liveLookup(a)
-		return live["peer"].direct == 1 && live["watched"].observed == 1
+		return live.info["peer"].direct == 1 && live.info["watched"].observed == 1
 	})
 	out, herr := hh.search(`{}`)
 	if herr != nil {
@@ -713,10 +713,25 @@ func TestHistoryLiveStatusJoin(t *testing.T) {
 	for _, r := range sessionsOf(out) {
 		got[r["session_id"].(string)] = fmt.Sprintf("%v/%v", r["live_status"], r["delivery_capable"])
 	}
-	want := map[string]string{"self": "live/false", "peer": "live/true", "watched": "observed/false", "cold": "not_discovered/false"}
+	want := map[string]string{"self": "live/false", "peer": "live/true", "watched": "recent/false", "cold": "not_discovered/false"}
 	for id, w := range want {
 		if got[id] != w {
 			t.Fatalf("%s: got %s want %s (%v)", id, got[id], w, got)
+		}
+	}
+	// --debug keeps the underlying distinction in a parenthesised substatus.
+	a.debug = true
+	if out, herr = hh.search(`{}`); herr != nil {
+		t.Fatal(herr)
+	}
+	for _, r := range sessionsOf(out) {
+		got[r["session_id"].(string)] = fmt.Sprintf("%v/%v", r["live_status"], r["delivery_capable"])
+	}
+	a.debug = false
+	want = map[string]string{"self": "live (direct, self)/false", "peer": "live (direct)/true", "watched": "recent (observer)/false", "cold": "not_discovered/false"}
+	for id, w := range want {
+		if got[id] != w {
+			t.Fatalf("debug %s: got %s want %s (%v)", id, got[id], w, got)
 		}
 	}
 	// Reading history leaves live state untouched.
