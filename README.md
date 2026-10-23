@@ -4,9 +4,6 @@
 
 ![Concept illustration of coding agents connected through Rhizome nodes](docs/images/rhizome-agents.svg)
 
-*Concept illustration; the agents shown include integrations beyond the current
-release. Currently supported: Claude Code, Codex, and OpenCode.*
-
 Rhizome lets Claude Code, Codex, and OpenCode sessions discover each
 other, follow selected work, and exchange messages through MCP. Use it to
 coordinate parallel tasks on your laptop or connect your agents with a
