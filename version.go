@@ -16,6 +16,13 @@ var (
 // versionLine reports the build identity without touching configuration,
 // runtime state, the network or an agent daemon.
 func versionLine() string {
+	v, c, d := buildIdentity()
+	return fmt.Sprintf("rhizome %s (commit %s, built %s)", v, c, d)
+}
+
+// buildIdentity returns the version, commit and date the binary reports.
+// Release builds carry exact values from ldflags; local builds report "dev".
+func buildIdentity() (string, string, string) {
 	v, c, d := version, commit, date
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		var dirty bool
@@ -46,5 +53,5 @@ func versionLine() string {
 	if d == "" {
 		d = "unknown"
 	}
-	return fmt.Sprintf("rhizome %s (commit %s, built %s)", v, c, d)
+	return v, c, d
 }

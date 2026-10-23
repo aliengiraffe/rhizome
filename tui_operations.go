@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"rhizome/internal/channel"
 	"rhizome/internal/config"
 	"rhizome/internal/service"
+	"rhizome/internal/update"
 )
 
 type peerRow struct {
@@ -33,6 +35,45 @@ func peersPanel(c config.Config) *panelModel {
 		return panelResult{body: "No paired hosts.", peers: peers}
 	}}
 }
+
+// updateSummary renders the recorded auto-update state with sanitized text.
+func updateSummary(raw json.RawMessage) string {
+	version, _ := service.Build()
+	if version == "" {
+		version = "dev"
+	}
+	out := "Version: " + safeText(version)
+	if len(raw) == 0 {
+		return out + "\nUpdates: no check recorded"
+	}
+	var s update.State
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return out + "\nUpdates: state unreadable"
+	}
+	if !s.LastCheckAt.IsZero() {
+		out += "\nLast update check: " + s.LastCheckAt.UTC().Format(time.RFC3339)
+	}
+	if s.LastOutcome != "" {
+		out += "\nLast update outcome: " + safeText(s.LastOutcome)
+		if s.LastDetail != "" {
+			out += " (" + safeText(s.LastDetail) + ")"
+		}
+	}
+	if s.Available != "" {
+		out += "\nUpdate available: " + safeText(s.Available)
+	}
+	if s.Blocked != "" {
+		out += "\nUpdate blocked: " + safeText(s.Blocked)
+	}
+	if s.Pending != nil {
+		out += "\nUpdate pending restart: " + safeText(s.Pending.From) + " -> " + safeText(s.Pending.To)
+	}
+	if !s.NextCheckAt.IsZero() {
+		out += "\nNext update check: " + s.NextCheckAt.UTC().Format(time.RFC3339)
+	}
+	return out
+}
+
 func servicePanel(c config.Config, readOnly bool) *panelModel {
 	sc := service.FromConfig(c)
 	return &panelModel{work: newUIWork(), title: "Rhizome service", readOnly: readOnly, width: 80, height: 24, act: func(ctx context.Context, action string) error { return service.ManageQuiet(ctx, action, sc) }, load: func(ctx context.Context) panelResult {
@@ -52,6 +93,7 @@ func servicePanel(c config.Config, readOnly bool) *panelModel {
 		} else {
 			body += "\nObserver health unavailable."
 		}
+		body += "\n" + updateSummary(s.Update)
 		return panelResult{body: body, err: err}
 	}}
 }

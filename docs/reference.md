@@ -38,6 +38,8 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `network.discovery_interval` | `RHIZOME_DISCOVERY_INTERVAL` | mcp `--discovery-interval` | `20s` (Tailscale only) |
 | `sessions.recent_window` | — | — | `24h`; `0s` disables recent-only rows ([Session status](../README.md#session-status)) |
 | `sessions.share_prompts_and_tools` | — | — | `false`: no prompts or tool inputs/outputs ([Activity](#activity-replay-and-bounded-delivery)) |
+| `update.enabled` | `RHIZOME_UPDATE` | service `--update`, setup `--auto-update` (writes file) | `true`: the observer installs verified releases ([Automatic updates](service.md#automatic-updates)) |
+| `update.check_interval` | `RHIZOME_UPDATE_CHECK_INTERVAL` | service `--update-check-interval` | `24h`; between `1h` and `720h` |
 | `gateway.history.enabled` | — | — | `false`: paired hosts cannot search or read history |
 | `gateway.history.lookback` | — | — | `30d`; positive whole days or `all` |
 | `claude.peer_history.enabled`, `codex.peer_history.enabled` | — | — | inherit `gateway.history.enabled`; can only narrow it |
@@ -61,6 +63,12 @@ sessions_dir = ""
 # Optional. Omit the table, or use mode = "local", for loopback only.
 [network]
 mode = "local"   # or "lan", or "tailscale"
+
+# Optional. The background service checks GitHub Releases for newer signed
+# builds; set enabled = false to make it contact nothing.
+[update]
+enabled = true
+check_interval = "24h"
 ```
 
 `hostname` controls the `host` label in session listings for both supported agents
@@ -106,6 +114,16 @@ tool inputs and outputs, after secret redaction, in live activity and in the
 history this host serves (to local agents and, under `[gateway.history]`, to
 paired hosts). The serving host's value decides; paired hosts and subscribers
 cannot widen it. Like `recent_window`, it is read once at process start.
+
+The `[update]` table controls the observer's [automatic updates](service.md#automatic-updates).
+It is the only setting that makes Rhizome contact a remote host, and only the
+service does so: `mcp`, `config`, `setup` and `--version` never check for
+updates, and `rhizome update` (explicit check or `--apply`) works whatever the
+setting. `enabled` defaults to `true`; `check_interval` accepts a Go duration
+from `1h` to `720h`. `RHIZOME_UPDATE=0` (also `false`, `no`, `off`) and
+`service run --update=false` disable it with the standard precedence, and
+`rhizome config` shows the effective values and sources. There is no per-agent
+update key.
 
 The `gateway.history` and `*.peer_history` keys are file-only. They let directly
 [paired hosts](gateway.md) search and read this device's session history
@@ -720,10 +738,14 @@ which setup may create):
    advisory in the wizard; startup still fails closed if the daemon is unavailable.
 3. **Hostname override**: Enter keeps the stored label; `-` clears it to use the
    OS hostname. Optional gateway endpoints also accept `-` for automatic selection.
-4. **Directories**: optionally change runtime scope, Claude config directory,
+4. **Automatic updates**: whether the background service installs verified
+   releases (default yes, or the stored value). Answering the default on a file
+   that never set the key leaves the key out; any other answer writes
+   `[update] enabled`. See [automatic updates](service.md#automatic-updates).
+5. **Directories**: optionally change runtime scope, Claude config directory,
    Codex home or executable. Changing runtime scope selects different token,
    host identity and pairing state; the old state remains in the old directory.
-5. **Service**: asks whether to install and start the background service
+6. **Service**: asks whether to install and start the background service
    (default no). The question follows the configuration step whether the file
    was created, updated, or kept, and runs the same lifecycle as
    `rhizome service install --config <path>`: a missing service is installed
@@ -751,13 +773,15 @@ Without a terminal, use `--network` or `--gateway-mode`:
 ./rhizome setup --gateway-mode off --replace-config
 ./rhizome setup --network local --hostname "Work laptop"
 ./rhizome setup --network local --hostname "" --replace-config # restore OS hostname
+./rhizome setup --network local --auto-update false --replace-config # service never contacts GitHub
 ./rhizome setup --network lan --join 192.168.1.20:7946 --mdns=false
 ./rhizome setup --network tailscale --gossip-port 7950 --discovery-interval 45s
 ```
 
 `--gateway-advertise IP:port` sets a separate reachable endpoint; an explicit
 empty gateway endpoint restores automatic selection. `--runtime-dir /absolute/path`
-changes stored runtime scope. Omitted flags preserve stored values. To switch an
+changes stored runtime scope. `--auto-update true|false` writes
+`[update] enabled`. Omitted flags preserve stored values. To switch an
 existing legacy network to pairing, explicitly pass `--network local`; to switch
 back, pass `--gateway-mode off` with the desired `--network`. History sharing is
 never enabled by setup; its policies remain file-only.
