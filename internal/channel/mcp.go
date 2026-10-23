@@ -54,7 +54,8 @@ type sendInput struct {
 	ReplyTo   string `json:"reply_to,omitempty"`
 }
 type nameInput struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	SessionID string `json:"session_id,omitempty" jsonschema:"optional exact session_id of another session on this device; omitted renames the calling session"`
 }
 
 func result(value any, err error) (*mcp.CallToolResult, any, error) {
@@ -185,12 +186,15 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 		}
 		return result(map[string]string{"status": "published"}, n.announce(in.Text, in.ReplyTo))
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "set_session_name", Description: "Name this bound session for peers (label only, never an address; at most 96 UTF-8 bytes, single line). Overrides the agent's native title, persists across restarts, and is shared with trusted peers through discovery. Empty clears the override and reverts to the native title or the stable fallback. Returns the effective name."}, func(ctx context.Context, r *mcp.CallToolRequest, in nameInput) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "set_session_name", Description: "Name a session for peers (label only, never an address; at most 96 UTF-8 bytes, single line). Without session_id it names this bound session; with an exact session_id it names another session on this device (in the local history catalog or registered by a local process, including observe-only and not-live sessions), never a paired-host or LAN peer's. Overrides the agent's native title, persists across restarts, and is shared with trusted peers through discovery. Empty clears the override and reverts to the native title or the stable fallback. Returns the effective name."}, func(ctx context.Context, r *mcp.CallToolRequest, in nameInput) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)
 		if resolveErr != nil {
 			return result(nil, resolveErr)
 		}
-		return result(n.setSessionName(in.Name))
+		if in.SessionID == "" {
+			return result(n.setSessionName(in.Name))
+		}
+		return result(n.renameSession(history, in.SessionID, in.Name))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "send", Description: "Send text to an exact live session_id; success means accepted in receiver's bounded queue, not read."}, func(ctx context.Context, r *mcp.CallToolRequest, in sendInput) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)

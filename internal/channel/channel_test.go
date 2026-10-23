@@ -431,6 +431,10 @@ func TestMCPHandshakeAndTools(t *testing.T) {
 	if json.Unmarshal([]byte(r.Content[0].(*mcp.TextContent).Text), &named) != nil || named["session_name"] != "Rhizome: naming test" || named["source"] != "explicit" {
 		t.Fatalf("unexpected naming result %v", named)
 	}
+	r, err = cs.CallTool(n.ctx, &mcp.CallToolParams{Name: "set_session_name", Arguments: map[string]any{"name": "x", "session_id": "missing-session"}})
+	if err != nil || !r.IsError || !strings.Contains(r.Content[0].(*mcp.TextContent).Text, "NOT_FOUND") {
+		t.Fatalf("unknown session_id %v %v", r, err)
+	}
 	r, err = cs.CallTool(n.ctx, &mcp.CallToolParams{Name: "list_sessions", Arguments: map[string]any{}})
 	if err != nil || r.IsError || !strings.Contains(r.Content[0].(*mcp.TextContent).Text, `"session_name":"Rhizome: naming test"`) {
 		t.Fatalf("list_sessions missing name %v %v", r, err)

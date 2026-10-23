@@ -28,6 +28,10 @@ import (
 // registration and restores it when it was removed or altered.
 const defaultRegistrationRefresh = 30 * time.Second
 
+// defaultNameRefresh is how often a live node re-reads its own persisted name
+// override, so renames issued by another local session reach discovery.
+const defaultNameRefresh = 2 * time.Second
+
 func registrationPath(runtime, nodeID string) string {
 	return filepath.Join(runtime, nodeID+".json")
 }
@@ -95,17 +99,25 @@ func (n *Node) register(runtime string) error {
 	if every <= 0 {
 		every = defaultRegistrationRefresh
 	}
+	names := n.nameRefresh
+	if names <= 0 {
+		names = defaultNameRefresh
+	}
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
+		nameTicker := time.NewTicker(names)
+		defer nameTicker.Stop()
 		for {
 			select {
 			case <-n.ctx.Done():
 				return
 			case <-ticker.C:
 				n.healRegistration()
+			case <-nameTicker.C:
+				n.syncOverride()
 			}
 		}
 	}()

@@ -3,11 +3,13 @@ package channel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -377,5 +379,128 @@ func TestCodexNativeTitleAndThreadIsolation(t *testing.T) {
 	a.codex.scan(ctx, a, gen)
 	if got := a.local().SessionName; got != filepath.Base(dir)+" · codex · "+threadA[:8] {
 		t.Fatalf("removed title did not fall back: %q", got)
+	}
+}
+
+// namedPair starts two bound nodes in one runtime that re-read their name
+// overrides quickly, so cross-session renames converge within the test.
+func namedPair(t *testing.T) (*Node, *Node, string) {
+	t.Helper()
+	a, b := node(t), node(t)
+	a.nameRefresh, b.nameRefresh = 10*time.Millisecond, 10*time.Millisecond
+	dir := t.TempDir()
+	runtime := filepath.Join(dir, "runtime")
+	for _, n := range []*Node{a, b} {
+		if err := n.start(Options{Runtime: runtime}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bind(t, a, "session-a", dir)
+	bind(t, b, "session-b", dir)
+	eventually(t, func() bool { _, err := b.resolve(context.Background(), "session-a"); return err == nil })
+	return a, b, dir
+}
+
+func TestRenameAnotherLocalLiveSession(t *testing.T) {
+	a, b, dir := namedPair(t)
+	gen := a.local().Generation
+	seen := func(n *Node, name string) bool {
+		for _, p := range n.peers() {
+			if p.SessionId == "session-a" && p.SessionName == name {
+				return true
+			}
+		}
+		return false
+	}
+	out, err := b.renameSession(nil, "session-a", " Cursor\nintegration ")
+	if err != nil || out["session_id"] != "session-a" || out["session_name"] != "Cursor integration" || out["source"] != "explicit" {
+		t.Fatalf("rename %v %v", out, err)
+	}
+	if b.local().SessionName != filepath.Base(dir)+" · claude · session-" {
+		t.Fatal("renaming another session renamed the caller")
+	}
+	eventually(t, func() bool { return a.local().SessionName == "Cursor integration" && seen(b, "Cursor integration") })
+	if a.local().Generation != gen {
+		t.Fatal("rename changed the target's binding generation")
+	}
+	for _, bad := range []string{strings.Repeat("a", maxSessionName+1), strings.Repeat("é", 49)} {
+		if _, err := b.renameSession(nil, "session-a", bad); err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("oversized name accepted: %v", err)
+		}
+	}
+	if loadOverride(b.runtime, "session-a") != "Cursor integration" {
+		t.Fatal("rejected name modified the override")
+	}
+	// Empty clears the override; the live target reverts to its fallback.
+	fallback := filepath.Base(dir) + " · claude · session-"
+	out, err = b.renameSession(nil, "session-a", "  ")
+	if err != nil || out["session_name"] != fallback || out["source"] != "fallback" {
+		t.Fatalf("clear %v %v", out, err)
+	}
+	eventually(t, func() bool { return a.local().SessionName == fallback && seen(b, fallback) })
+	// Targeting the caller's own session takes the bound path immediately.
+	out, err = b.renameSession(nil, "session-b", "Self")
+	if err != nil || out["source"] != "explicit" || b.local().SessionName != "Self" {
+		t.Fatalf("self target %v %v", out, err)
+	}
+}
+
+func TestRenameRejectsUnknownAndForeignSessions(t *testing.T) {
+	_, b, _ := namedPair(t)
+	foreign := []*pb.Identity{
+		{NodeId: strings.Repeat("1", 32), SessionId: "paired-host", GatewayHost: strings.Repeat("f", 64)},
+		{NodeId: strings.Repeat("2", 32), SessionId: "lan-peer", CertFingerprint: "fp"},
+	}
+	b.mu.Lock()
+	for _, p := range foreign {
+		b.discovered[p.NodeId] = p
+	}
+	b.mu.Unlock()
+	cases := []struct {
+		session string
+		want    error
+	}{
+		{"missing-session", errRenameNotFound},
+		{"paired-host", errRenameNotOwned},
+		{"lan-peer", errRenameNotOwned},
+	}
+	for _, c := range cases {
+		if _, err := b.renameSession(nil, c.session, "taken"); !errors.Is(err, c.want) {
+			t.Fatalf("%s: %v, want %v", c.session, err, c.want)
+		}
+		if _, err := os.Stat(overridePath(b.runtime, c.session)); !os.IsNotExist(err) {
+			t.Fatalf("%s: refused rename wrote an override", c.session)
+		}
+	}
+	for _, bad := range []string{"", strings.Repeat("s", 129), "\xff"} {
+		if _, err := b.renameSession(nil, bad, "x"); err == nil {
+			t.Fatalf("invalid session_id %q accepted", bad)
+		}
+	}
+}
+
+func TestObservedNodeAdoptsOverride(t *testing.T) {
+	n := node(t)
+	n.identity.SessionId = "observed"
+	n.identity.Generation = 1
+	n.identity.AgentType = "codex"
+	n.identity.DisplayName = "app"
+	n.identity.ObservationOnly = true
+	if err := n.start(Options{Runtime: filepath.Join(t.TempDir(), "runtime")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeOverride(n.runtime, "observed", "Observed work"); err != nil {
+		t.Fatal(err)
+	}
+	n.syncOverride()
+	if n.local().SessionName != "Observed work" {
+		t.Fatalf("observed node name %q", n.local().SessionName)
+	}
+	if err := storeOverride(n.runtime, "observed", ""); err != nil {
+		t.Fatal(err)
+	}
+	n.syncOverride()
+	if n.local().SessionName != "app · codex · observed" || n.local().Generation != 1 {
+		t.Fatalf("cleared observed node %v", n.local())
 	}
 }

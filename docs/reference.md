@@ -193,7 +193,7 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 | Tool | Behavior |
 | --- | --- |
 | `list_sessions()` | Bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](opencode.md#why-a-closed-session-can-still-be-live)). |
-| `set_session_name(name)` | Name the caller's bound session for peers. Empty clears the override. Returns the effective name and its source. |
+| `set_session_name(name, session_id?)` | Name the caller's bound session for peers, or with an exact `session_id` another session on this device. Empty clears the override. Returns the effective name and its source. |
 | `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
 | `publish(text, reply_to?)` | Announce to current subscribers. |
@@ -219,15 +219,26 @@ Every bound identity advertises an optional `session_name` so sessions sharing a
 directory can be told apart without comparing IDs. `display_name` stays the
 project-directory label. The effective name is resolved in this order:
 
-1. An explicit override set with `set_session_name(name)` by that session.
+1. An explicit override set with `set_session_name`, by that session or by
+   another session of the same user on the same device.
 2. The agent's native title: Claude's `/rename` title (`custom-title` transcript
    record), then Claude's automatic title (`ai-title`); for Codex the thread name
    reported by the App Server; for OpenCode the session title.
 3. A stable fallback `<display_name> · <agent_type> · <first 8 characters of
    session_id>`, identical across process restarts for the same session and project.
 
-`set_session_name` operates only on the caller's verified bound session; unbound
-calls fail. Input is trimmed, control characters and line breaks collapse to single
+Without `session_id`, `set_session_name` operates on the caller's verified bound
+session; unbound calls fail. With an exact `session_id` (no prefix or name
+matching) it names another session on this device: one that this runtime's
+history catalog indexes from local logs, or one advertised by a node registered
+in the same runtime directory without `gateway_host`. Observe-only and not-live
+sessions qualify. Paired-host sessions and direct LAN/Tailscale peers fail with
+`PERMISSION_DENIED`, an ID found nowhere fails with `NOT_FOUND`, and neither
+writes anything; ownership on other devices of the same user is not
+determined in this version. A live target's node re-reads its override within
+about two seconds and re-advertises it through discovery; when the target is
+neither the caller nor in the catalog, a cleared override reports the stable
+fallback even if the live node later advertises a native title. Input is trimmed, control characters and line breaks collapse to single
 spaces, and the result must fit **96 UTF-8 bytes** or the call is rejected. Native
 titles and fallbacks are cut on a rune boundary to the same limit. Empty or
 whitespace-only input clears the override and reverts to the native title or

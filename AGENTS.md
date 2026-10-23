@@ -234,8 +234,11 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   `set_session_name` override, then the agent's native title (Claude
   `custom-title`/`ai-title` records, Codex `thread.name`), then the stable fallback
   `<display_name> · <agent_type> · <8-char id>`. Keep `display_name` as the
-  directory label, the 96-byte UTF-8 bound, rune-safe trimming in gossip, caller-only
-  renaming, and overrides persisted under `<runtime>/names/`. Rhizome must never
+  directory label, the 96-byte UTF-8 bound, rune-safe trimming in gossip, and
+  overrides persisted under `<runtime>/names/`. Renaming defaults to the caller;
+  an exact `session_id` may name only this device's sessions (local catalog row
+  or a node registered in the same runtime without `gateway_host`), never a
+  paired-host or LAN peer's. Live nodes re-read their own override every 2 s. Rhizome must never
   derive a name from prompts or transcript content, and a name-only change must
   not touch generation, streams, subscriptions, cursors, or queues
   (`internal/channel/name.go`, [reference "Session names"](docs/reference.md#session-names)).
