@@ -762,3 +762,9 @@ started with `--dangerously-load-development-channels server:rhizome`:
   after a tool result was not mentioned in the answer and caused no follow-up,
   and when the user asked, the model reported it accurately. Not re-checked in
   the IDE.
+- Followup summary line, same CLI version, new conversation after restarting
+  `agent`: a direct message queued before a turn without tools produced one
+  follow-up whose visible line read `Rhizome: 1 message from 6532f0b2 —
+  "Summary-line check: …`, and the model treated it as informational. The CLI
+  also cuts the line to the terminal width with its own `...`, so long excerpts
+  usually end there before Rhizome's 80-byte limit. Not checked in the IDE.
