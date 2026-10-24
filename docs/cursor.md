@@ -13,8 +13,9 @@ Claude and Codex. Cursor mode does not advertise `claude/channel` and offers no
 (`scripts/smoke_cursor.py`, race tests). The live checklist in
 [verification.md](verification.md) has been run against the Cursor CLI
 (`agent` 2026.10.22-27dcf5f) only: binding, collection, tool-result and
-end-of-turn delivery passed. The IDE, two chats in one window, disabled
-followup delivery and a second device are not verified live yet. The version
+end-of-turn delivery passed, with followup delivery both enabled and
+disabled. The IDE, two chats in one window and a second device are not
+verified live yet. The version
 contracts below are taken from the Cursor hooks reference as of 2026-10-20
 (`hooks.json` `version: 1`).
 

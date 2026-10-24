@@ -747,8 +747,12 @@ started with `--dangerously-load-development-channels server:rhizome`:
 - Step 4 passed with followup delivery enabled: a message queued during a turn
   without tools produced exactly one follow-up, the model treated it as
   informational, and its reply was not delivered to the subscriber. The CLI
-  shows the follow-up like a user prompt, truncated to its first line. The
-  `followup_delivery = false` half was not run.
+  shows the follow-up like a user prompt, truncated to its first line. With
+  `[cursor] followup_delivery = false` (`rhizome config` reported source
+  `file`) and the MCP server restarted, a message queued before a turn without
+  tools produced no follow-up; it was delivered once after the next `pwd`
+  tool result, not mentioned in that answer, and quoted accurately when the
+  user asked.
 - Step 6 passed: the CLI started `rhizome mcp --agent cursor` in the workspace
   as a child of `agent`, with no `roots` in the registration.
 - Step 7 passed for the CLI: `agent` launched only the Cursor-mode process and
