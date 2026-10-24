@@ -713,8 +713,9 @@ version:
    collected by subscribers. Set `[cursor] followup_delivery = false`, restart
    the MCP server and repeat: expect no follow-up and delivery at the next tool
    result instead.
-5. Open a second chat in the same window: expect `identity_ambiguous` for tool
-   calls until the `beforeMCPExecution` hook runs; record whether the `matcher`
+5. Turn off auto-run ("Run Everything") first, or no approval prompt can
+   appear. Open a second chat in the same window: expect `identity_ambiguous`
+   for tool calls until the `beforeMCPExecution` hook runs; record whether the `matcher`
    scoped the hook, how MCP tools appear in `tool_name`, and whether
    `{"permission": "allow"}` suppressed Cursor's approval prompt.
 6. Repeat step 1 in the Cursor CLI (`agent`) and note the process layout.
@@ -750,4 +751,8 @@ started with `--dangerously-load-development-channels server:rhizome`:
   1-4 also remain to be repeated in the IDE.
 - Found: the model acknowledged a delivered peer event in its own answer, which
   subscribers then received. The `sessionStart` instructions now ask it not to
-  mention peer events unless the user asks; not yet re-checked live.
+  mention peer events unless the user asks. Re-checked on the same CLI version
+  with a new conversation after restarting `agent`: a direct message delivered
+  after a tool result was not mentioned in the answer and caused no follow-up,
+  and when the user asked, the model reported it accurately. Not re-checked in
+  the IDE.
