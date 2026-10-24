@@ -388,8 +388,9 @@ Automated on macOS:
   ignoring later appends, truncation and rename replacement (`SOURCE_CHANGED`),
   symlink refusal, tombstoned deletions and duplicate identities; response and
   record budgets (`event_too_large`, `oversized_record`, `incomplete_tail`)
-  with responses under 1 MiB; live-status join (`live`, `observed`,
-  `not_discovered`, self not delivery-capable) and untouched live state;
+  with responses under 1 MiB; live-status join (`live`, `recent`,
+  `not_discovered`, self not delivery-capable; shared derivation and `--debug`
+  substatus in `status_test.go`) and untouched live state;
   registration in both agent modes with schema/decoder agreement, Codex
   `CALLER_UNVERIFIED`; incremental checkpoints, replacement re-indexing, visible
   limits and path-free health output.

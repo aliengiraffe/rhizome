@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -24,7 +25,10 @@ import (
 type Config struct {
 	RuntimeDir string `toml:"runtime_dir"`
 	Hostname   string `toml:"hostname"`
-	Claude     struct {
+	// Debug appends a parenthesised substatus to session statuses and enables
+	// debug-level diagnostics on stderr (MCP) or observer.log (service).
+	Debug  bool `toml:"debug"`
+	Claude struct {
 		ConfigDir   string      `toml:"config_dir"`   // CLAUDE_CONFIG_DIR; skills and transcripts live under it.
 		ProjectsDir string      `toml:"projects_dir"` // Transcript root the observer watches; default <config_dir>/projects.
 		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for Claude-sourced history.
@@ -121,11 +125,15 @@ func (c *Config) settings() []setting {
 }
 
 // Bind adds configuration selection and the requested override flags.
+// "debug" binds the boolean --debug flag.
 func Bind(fs *flag.FlagSet, names ...string) {
 	fs.String("config", "", "configuration TOML path (default ~/.rhizome/config.toml)")
 	var c Config
-	for _, s := range c.settings() {
-		for _, name := range names {
+	for _, name := range names {
+		if name == "debug" {
+			fs.Bool("debug", false, "append a substatus to session statuses and log debug diagnostics (RHIZOME_DEBUG; overrides debug)")
+		}
+		for _, s := range c.settings() {
 			if s.flag == name {
 				fs.String(name, "", "override "+s.key)
 			}
@@ -221,7 +229,7 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	}
 	// TOML keys are case-sensitive even though the decoder can match Go fields
 	// case-insensitively. Reject alternate spellings instead of losing their source.
-	known := map[string]bool{"claude": true, "codex": true, "opencode": true, "network": true, "gateway": true, "sessions": true}
+	known := map[string]bool{"debug": true, "claude": true, "codex": true, "opencode": true, "network": true, "gateway": true, "sessions": true}
 	for _, k := range networkKeys {
 		known["network."+k] = true
 	}
@@ -279,6 +287,22 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 			return c, fmt.Errorf("config %s: %w", path, err)
 		}
 		c.Sources["sessions.recent_window"] = "file"
+	}
+	c.Debug, c.Sources["debug"] = raw.Debug, "default"
+	if md.IsDefined("debug") {
+		c.Sources["debug"] = "file"
+	}
+	if v := getenv("RHIZOME_DEBUG"); v != "" {
+		if c.Debug, err = strconv.ParseBool(v); err != nil {
+			return c, fmt.Errorf("RHIZOME_DEBUG %q must be a boolean such as 1 or 0", v)
+		}
+		c.Sources["debug"] = "env"
+	}
+	if v, ok := flags["debug"]; ok {
+		if c.Debug, err = strconv.ParseBool(v); err != nil {
+			return c, fmt.Errorf("--debug %q must be a boolean", v)
+		}
+		c.Sources["debug"] = "flag"
 	}
 	c.Network = raw.Network
 	for _, k := range networkKeys {
@@ -417,6 +441,9 @@ func (c Config) Write(w io.Writer) error {
 		if _, err := fmt.Fprintf(w, "%s = %q # source: %s\n", s.key, *s.value, c.Sources[s.key]); err != nil {
 			return err
 		}
+	}
+	if _, err := fmt.Fprintf(w, "debug = %t # source: %s\n", c.Debug, c.Sources["debug"]); err != nil {
+		return err
 	}
 	n := c.Network
 	mode := n.Mode

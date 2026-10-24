@@ -137,6 +137,31 @@ func TestConcurrentBootstrapAndAmbiguity(t *testing.T) {
 		_, err := nodes[0].resolve(context.Background(), "same")
 		return err != nil && strings.Contains(err.Error(), "ambiguous")
 	})
+	// Presentation collapses the duplicates into one live row that is not
+	// offered for delivery, because routing keeps failing closed.
+	sameRows := func() []map[string]any {
+		var out []map[string]any
+		for _, s := range nodes[0].listSessions()["sessions"].([]any) {
+			row := s.(map[string]any)
+			if id, _ := row["identity"].(*pb.Identity); id.GetSessionId() == "same" {
+				out = append(out, row)
+			}
+		}
+		return out
+	}
+	eventually(t, func() bool {
+		rows := sameRows()
+		return len(rows) == 1 && rows[0]["status"] == "live" && rows[0]["delivery_capable"] == false && rows[0]["identity"].(*pb.Identity).NodeId == nodes[0].local().NodeId
+	})
+	nodes[0].debug = true
+	eventually(t, func() bool {
+		rows := sameRows()
+		// The legacy peers' gossip updates are best effort; two suffice to conflict.
+		return len(rows) == 1 && (rows[0]["status"] == "live (direct x2, self)" || rows[0]["status"] == "live (direct x3, self)")
+	})
+	if _, err := nodes[0].send(context.Background(), "same", "x", ""); err == nil {
+		t.Fatal("send to duplicate direct identities succeeded")
+	}
 	conn, err := nodes[0].dial(nodes[0].local())
 	if err != nil {
 		t.Fatal(err)

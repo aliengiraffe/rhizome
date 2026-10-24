@@ -262,7 +262,7 @@ def main():
                 assert not any(marker in content for marker in
                                ['passive-marker', 'integrated-marker', 'resumed-marker', 'historical']), content
             # Indexing continues through native watches for live-written logs.
-            until(lambda: any(s['session_id'] == 'observed' and s['live_status'] == 'observed'
+            until(lambda: any(s['session_id'] == 'observed' and s['live_status'] == 'recent'
                               for s in subscriber.tool('search_sessions', {})['sessions']))
         finally:
             for client in clients:

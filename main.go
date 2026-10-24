@@ -44,7 +44,7 @@ func entry() error {
 	case "mcp":
 		opts := flag.NewFlagSet("mcp", flag.ContinueOnError)
 		agent := opts.String("agent", "claude", "delivery agent: claude, codex or opencode")
-		config.Bind(opts, "codex-bin")
+		config.Bind(opts, "codex-bin", "debug")
 		o, err := optionsFromEnv()
 		if err != nil {
 			return err

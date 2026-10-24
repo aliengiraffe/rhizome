@@ -243,7 +243,7 @@ func TestPeerHistoryCursorBinding(t *testing.T) {
 	narrowed.policy = peerPolicy(config.AgentHistory{Enabled: true, Days: 15}, d30)
 	for name, a := range map[string]*historyAccess{"other host": &other, "new grant": &regranted, "policy change": &narrowed, "local caller": nil} {
 		cursor := issue()
-		_, e := hh.h.searchWith(context.Background(), func() liveView { return liveView{} }, a, json.RawMessage(`{"limit":1,"cursor":"`+cursor+`"}`))
+		_, e := hh.h.searchWith(context.Background(), func() *liveView { return &liveView{} }, a, json.RawMessage(`{"limit":1,"cursor":"`+cursor+`"}`))
 		if e == nil || e.Code != "INVALID_CURSOR" {
 			t.Fatalf("%s reused cursor: %v", name, e)
 		}

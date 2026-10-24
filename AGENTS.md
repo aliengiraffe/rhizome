@@ -171,6 +171,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
   CLI usage: `rhizome --version | mcp | setup | service | config | token | invite | join | peers | files | demo [flags]`.
+  Top-level `debug` (`RHIZOME_DEBUG`, `--debug`) is the one boolean setting.
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
   `mcp` only, with flag > env > file > default. `rhizome setup` is the only
@@ -376,9 +377,19 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   snapshots for 15 minutes), signed single-use forward-only cursors, and the
   stable error codes in `docs/history.md`. Live status comes only from current
   discovery; never derive `delivery_capable` from a catalog row.
-- **Recent sessions are metadata, never routes.** `list_sessions` rows carry
-  `status` `live` (verified current route), `observed (liveness unknown)`,
-  `recent` or `ambiguous`. `recent` rows (`internal/channel/recent.go`) are
+- **Session statuses are `live` and `recent`; `delivery_capable` decides
+  routing.** One helper (`liveInfo.status`, `internal/channel/status.go`)
+  derives both `list_sessions` `status` and history `live_status`: `live` = one
+  or more direct processes, `recent` = only observer publishers or a catalog
+  window row (history adds `not_discovered`/`not_reported`). Several processes
+  or hosts claiming one `session_id` give one `live` row with
+  `delivery_capable: false`, because `Node.resolve` still fails closed on them;
+  never emit `ambiguous` or `observed` as a session status. `--debug`
+  (`RHIZOME_DEBUG`, top-level `debug`, on `mcp` and `service install|run`)
+  appends a substatus (`live (direct x2)`, `recent (observer)`,
+  `recent (catalog)`) and enables debug-level stderr/`observer.log` records,
+  which carry metadata only; no parentheses without it.
+- **Recent sessions are metadata, never routes.** `recent` rows (`internal/channel/recent.go`) are
   computed for Claude Code and Codex on the owning host from the observer's catalog
   (OpenCode callers can list them, but OpenCode history is not advertised): `now -
   last_activity_at <= [sessions].recent_window` (default `24h`, `0s` disables),
@@ -388,7 +399,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   endpoint, lease, listener or queue, are `delivery_capable: false`, and are
   withdrawn while the observer service is stopped. A verified live/observed
   identity wins its (host, agent, session) key; keep one logical row per key and
-  the existing ambiguity handling. `send` must refuse recent-only targets before
+  per live `session_id`. `send` must refuse recent-only targets before
   queueing (never defer, never route to an observer); file and other
   live-recipient paths keep resolving live identities only. Selection is newest
   first, capped at 64 per host with a visible `omitted` count. Paired hosts

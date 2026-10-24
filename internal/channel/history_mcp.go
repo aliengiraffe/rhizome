@@ -275,49 +275,30 @@ func (h *historyService) effectiveName(s *historySession, overrides map[string]b
 	return fallbackName(s.DisplayName, s.AgentType, s.SessionID), "fallback"
 }
 
-type liveInfo struct {
-	direct, observed int
-	self             bool
+// liveView is current discovery keyed by session_id; debug appends substatus.
+type liveView struct {
+	info  map[string]liveInfo
+	debug bool
 }
-type liveView map[string]liveInfo
 
 // liveNotReported marks paired-host rows: their live state is never inferred.
 const liveNotReported = "not_reported"
 
 // liveLookup joins catalog rows against current discovery only. Historical
 // metadata never creates identities, and the lookup never probes peers.
-func liveLookup(n *Node) liveView {
-	v := liveView{}
-	self := n.local().NodeId
-	for _, p := range logicalPeers(n.peers()) {
-		if p.SessionId == "" {
-			continue
-		}
-		li := v[p.SessionId]
-		if p.ObservationOnly {
-			li.observed++
-		} else {
-			li.direct++
-		}
-		li.self = li.self || p.NodeId == self
-		v[p.SessionId] = li
-	}
-	return v
-}
-func (v liveView) status(session string) (string, bool) {
-	li := v[session]
-	switch {
-	case li.direct > 1:
-		return "ambiguous", false
-	case li.direct == 1:
-		return "live", !li.self
-	case li.observed > 0:
-		return "observed", false
-	}
-	return "not_discovered", false
+func liveLookup(n *Node) *liveView {
+	return &liveView{info: liveInfos(logicalPeers(n.peers()), n.local().NodeId), debug: n.debug}
 }
 
-func (h *historyService) row(s *historySession, overrides map[string]bool, live liveView) sessionRow {
+// status shares list_sessions' derivation; the calling session itself is
+// never delivery capable from history.
+func (v *liveView) status(session string) (string, bool) {
+	li := v.info[session]
+	status, routable := li.status(v.debug)
+	return status, routable && !li.self
+}
+
+func (h *historyService) row(s *historySession, overrides map[string]bool, live *liveView) sessionRow {
 	name, source := h.effectiveName(s, overrides)
 	r := sessionRow{SessionID: s.SessionID, AgentType: s.AgentType, DisplayName: s.DisplayName, SessionName: name, NameSource: source, StartedAt: rfc3339(s.StartedAt), LastActivityAt: rfc3339(s.LastActivityAt), HistoryAvailability: s.Availability, AvailabilityReasons: append([]string{}, s.Reasons...)}
 	if s.ProjectPath != "" {
@@ -333,13 +314,13 @@ func (h *historyService) row(s *historySession, overrides map[string]bool, live 
 }
 
 func (h *historyService) search(ctx context.Context, n *Node, raw json.RawMessage) (any, *historyError) {
-	return h.searchWith(ctx, func() liveView { return liveLookup(n) }, nil, raw)
+	return h.searchWith(ctx, func() *liveView { return liveLookup(n) }, nil, raw)
 }
 
 // searchWith serves local callers (access == nil, live joined from discovery)
 // or one paired host, whose policy is applied before enumeration and on every
 // page so rows that aged out or became disallowed are never returned.
-func (h *historyService) searchWith(ctx context.Context, live func() liveView, access *historyAccess, raw json.RawMessage) (any, *historyError) {
+func (h *historyService) searchWith(ctx context.Context, live func() *liveView, access *historyAccess, raw json.RawMessage) (any, *historyError) {
 	q, cursor, e := parseSearch(raw)
 	if e != nil {
 		return nil, e
@@ -415,7 +396,7 @@ func (h *historyService) searchWith(ctx context.Context, live func() liveView, a
 	if end > len(keys) {
 		end = len(keys)
 	}
-	var view liveView
+	var view *liveView
 	if access == nil {
 		view = live()
 	}
@@ -461,14 +442,14 @@ type readInput struct {
 }
 
 func (h *historyService) read(ctx context.Context, n *Node, raw json.RawMessage) (any, *historyError) {
-	return h.readWith(ctx, func() liveView { return liveLookup(n) }, nil, raw)
+	return h.readWith(ctx, func() *liveView { return liveLookup(n) }, nil, raw)
 }
 
 // readWith is read_session_history for local callers or one paired host. For a
 // paired host, a disabled source agent is denied before any lookup, sessions
 // outside the window are indistinguishable from absent ones, and every page
 // re-applies the current cutoff to each event.
-func (h *historyService) readWith(ctx context.Context, live func() liveView, access *historyAccess, raw json.RawMessage) (any, *historyError) {
+func (h *historyService) readWith(ctx context.Context, live func() *liveView, access *historyAccess, raw json.RawMessage) (any, *historyError) {
 	var in readInput
 	if e := decodeArgs(raw, &in); e != nil {
 		return nil, e
@@ -563,7 +544,7 @@ func (h *historyService) readWith(ctx context.Context, live func() liveView, acc
 		h.snaps.release(snap, false)
 	}
 	captured := snap.created
-	var view liveView
+	var view *liveView
 	if access == nil {
 		view = live()
 	}

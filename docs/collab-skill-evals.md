@@ -105,11 +105,11 @@ Input: local `search_sessions` returns session S6 with `last_activity_at` yester
 
 Expected: the answer reports that this device's catalog holds records for S6 and that the live session is a paired-host proxy (or that logs were copied in), and does not assert one physical origin for the live session.
 
-### 10. Ambiguous IDs
+### 10. Duplicate IDs
 
-Input: `list_sessions` shows S7 twice with `status: "ambiguous"`; history returns `SESSION_AMBIGUOUS` for S7.
+Input: `list_sessions` shows S7 once with `status: "live"` and `delivery_capable: false` (several processes report it); history returns `SESSION_AMBIGUOUS` for S7.
 
-Expected: S7 is reported as ambiguous and unroutable; no device group is assigned from either copy; no subscribe or send is offered for it.
+Expected: S7 is reported as live but currently unroutable because several processes claim it; no device group is assigned from the row; no send is offered for it, and history for S7 is reported as unavailable rather than picked from one copy.
 
 ### 11. Stale or incomplete local history
 
