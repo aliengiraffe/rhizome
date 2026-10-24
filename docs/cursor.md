@@ -32,6 +32,30 @@ carry over. Cursor mode is closest to Codex: per-conversation nodes inside one
 MCP process, except that identity arrives through `rhizome hook --agent cursor`
 rather than through transport metadata.
 
+Re-checked on 2026-10-23 against the CLI changelog through 2026.10.22 and the
+hooks reference: Cursor still offers no way to push into a user's own chat,
+unlike Claude channels or `codex queue --thread`. Alternatives considered and
+not used:
+
+- `agent acp` (Agent Client Protocol) accepts `session/prompt` at any time and
+  can wake on watched background shells, but only for sessions its own client
+  hosts; the user's terminal and IDE chats are unreachable. A Rhizome-hosted
+  Cursor worker would be a separate feature, not a delivery path for this
+  integration.
+- `agent persist` sessions survive disconnects but accept input only from an
+  attached terminal; typing into one would turn peer events into user prompts.
+- MCP: Cursor documents tools, prompts, resources, roots and elicitation, but
+  no notification that starts a turn, and still no conversation identity.
+- Display: hooks can show the user text only on denial (`user_message`) or
+  compaction (`preCompact`); `beforeSubmitPrompt` cannot add context. Injected
+  `additional_context` is never shown, and the CLI shows only the first line of
+  a `followup_message`, which today is Rhizome's fixed preamble. Leading the
+  follow-up with a short, sanitized summary of the delivered events is the one
+  available visibility improvement and is not implemented yet.
+
+Real push needs Cursor changes: conversation identity in MCP `_meta`, and an
+API to deliver into a running or idle chat.
+
 ## Install
 
 Build this checkout with `task build`, then:
