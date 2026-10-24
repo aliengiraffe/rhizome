@@ -728,13 +728,19 @@ Live run, 2026-10-23, Cursor CLI `agent` 2026.10.22-27dcf5f on macOS, with the
 default `followup_delivery = true` and a Claude Code peer on the same machine
 started with `--dangerously-load-development-channels server:rhizome`:
 
-- Step 1 passed in part: the conversation bound as `agent_type: cursor` with the
-  fallback name, and `~/.rhizome/run/cursor/` held one registration.
-  `collection_state` and `delivery_mode` were not inspected.
+- Step 1 passed: the conversation bound as `agent_type: cursor` with the
+  fallback name, `~/.rhizome/run/cursor/` held one registration, and
+  `list_sessions` called from Cursor reported `BOUND`, `collection_state:
+  hooks` and `delivery_mode: hook_pull`. Rhizome tools called from Cursor
+  (`list_sessions`, `subscribe`) resolved to the single bound conversation.
 - Step 2 passed: the subscriber received `Tool completed: Shell` and the
   assistant text, never the prompt. Cursor reports only completions (no
   `Tool started` line), and the turn marker is consumed without delivery, as
-  for every agent.
+  for every agent. The reverse direction also passed: after Cursor subscribed
+  to the Claude session, the Claude assistant text reached Cursor at its next
+  turn, and with both sessions subscribed to each other, peer-started turns
+  on either side were withheld from the other (Cursor's `Suppressed` counter
+  rose), so no loop formed.
 - Step 3 passed: a direct message reached the model after the next tool result
   in the same turn, was treated as informational, and caused no end-of-turn
   follow-up. The injected block is not shown in Cursor's chat.
