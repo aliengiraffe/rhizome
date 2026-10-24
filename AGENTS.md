@@ -267,7 +267,9 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   outbox (32 entries, 64 KiB, 8 KiB per injection): `postToolUse*`
   `additional_context` always, `stop` `followup_message` unless
   `[cursor] followup_delivery = false` (file-only, default true; one per
-  completed turn with `loop_count` 0, marked peer-only). `rhizome setup --agents cursor` installs the skill, the
+  completed turn with `loop_count` 0, marked peer-only, led by a one-line
+  summary whose peer excerpt is sanitized and capped at 80 bytes, since the
+  CLI shows only that line). `rhizome setup --agents cursor` installs the skill, the
   MCP entry and the hooks (see the setup invariant); `examples/cursor/` holds
   the same definitions for manual or project-scope merges. Live behavior is verified only for the Cursor CLI
   (binding, collection, tool-result and end-of-turn delivery); the IDE, two

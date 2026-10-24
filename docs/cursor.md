@@ -49,9 +49,9 @@ not used:
 - Display: hooks can show the user text only on denial (`user_message`) or
   compaction (`preCompact`); `beforeSubmitPrompt` cannot add context. Injected
   `additional_context` is never shown, and the CLI shows only the first line of
-  a `followup_message`, which today is Rhizome's fixed preamble. Leading the
-  follow-up with a short, sanitized summary of the delivered events is the one
-  available visibility improvement and is not implemented yet.
+  a `followup_message`, so Rhizome leads the follow-up with a short, sanitized
+  summary of the delivered events (see Delivery). Events injected after tool
+  results remain invisible.
 
 Real push needs Cursor changes: conversation identity in MCP `_meta`, and an
 API to deliver into a running or idle chat.
@@ -182,7 +182,14 @@ it:
   caps it with `loop_limit: 1`, and the turn is marked peer-only so its output
   is not re-collected. This is on by default so queued peer events reach a chat
   as soon as its turn ends; set `[cursor] followup_delivery = false` to deliver
-  only alongside tool results (restart the MCP server to apply).
+  only alongside tool results (restart the MCP server to apply). Its first
+  line, the only one the CLI shows, summarizes what was delivered, for example
+  `Rhizome: 1 message from 6532f0b2 — "Wake up, Neo..."`: counts by kind
+  (message, announcement, update), the senders' first eight session-ID
+  characters, and one excerpt preferring a direct message or announcement.
+  Peer text there is untrusted, so it is reduced to its first line, stripped of
+  control and format characters, whitespace-collapsed, double quotes replaced,
+  and cut to 80 bytes on a rune boundary.
 - `sessionStart` returns static usage instructions only, never queued events.
 
 Events for an idle chat wait in the queue and outbox until the next turn.
@@ -222,7 +229,7 @@ redacted fixtures exist.
 - Cursor does not display `additional_context` in the chat, so a peer event
   delivered after a tool result is visible only through the model's reaction.
   An end-of-turn follow-up appears in the CLI like a user prompt, truncated to
-  its first line.
+  its first line, which is Rhizome's one-line summary of what was delivered.
 - Two IDE windows on the same workspace, or a window whose MCP client does not
   answer `roots/list` alongside another live process, fail closed for hooks.
 - There is no idle wake. Peer events reach a chat at its next tool result or

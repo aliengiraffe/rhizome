@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	pb "rhizome/proto"
@@ -343,7 +344,8 @@ func TestCursorDeliveryOutboxAndFollowup(t *testing.T) {
 		t.Fatal("followup delivered on an aborted turn")
 	}
 	follow, _ := m.handle(stop)["followup_message"].(string)
-	if !strings.HasPrefix(follow, cursorFollowupPrefix) || !strings.Contains(follow, "second") {
+	summary, rest, _ := strings.Cut(follow, "\n")
+	if !strings.HasPrefix(summary, "Rhizome: 1 ") || !strings.Contains(summary, `"second"`) || !strings.HasPrefix(rest, cursorFollowupPrefix) || !strings.Contains(rest, "second") {
 		t.Fatalf("followup: %q", follow)
 	}
 	n.mu.Lock()
@@ -370,11 +372,46 @@ func TestCursorDeliveryOutboxAndFollowup(t *testing.T) {
 	if st["queue_depth"].(int) != 1 || st["counters"].(counters).Dropped != 0 {
 		t.Fatalf("retained event was dropped: %+v", st)
 	}
-	drained := n.drainOutbox()
+	drained, _ := n.drainOutbox()
 	if drained == "" || !n.deliveryReady {
 		t.Fatal("drain did not re-arm delivery")
 	}
-	eventually(t, func() bool { return strings.Contains(n.drainOutbox(), "retained") })
+	eventually(t, func() bool { drained, _ := n.drainOutbox(); return strings.Contains(drained, "retained") })
+}
+
+func TestCursorSummary(t *testing.T) {
+	entry := func(kind, session, content string) outboxEntry {
+		return outboxEntry{content: content, meta: map[string]string{"kind": kind, "session_id": session}}
+	}
+	long := strings.Repeat("é", 60)
+	for _, tc := range []struct {
+		name    string
+		entries []outboxEntry
+		want    string
+	}{
+		{"empty", nil, ""},
+		{"one message", []outboxEntry{entry("direct", "6532f0b2-ad39-48ec", "[direct] Wake up, Neo...")}, `Rhizome: 1 message from 6532f0b2 — "Wake up, Neo..."`},
+		{"message preferred over activity", []outboxEntry{
+			entry("tool", "aaaaaaaa-1", "[tool] Tool completed: Shell\n[activity] done"),
+			entry("direct", "bbbbbbbb-2", "[direct] hello"),
+			entry("direct", "bbbbbbbb-2", "[direct] again"),
+		}, `Rhizome: 1 update, 2 messages from aaaaaaaa, bbbbbbbb — "hello" (+2 more)`},
+		{"activity only uses the first line", []outboxEntry{entry("activity", "cccccccc", "[activity] first line\nsecond line")}, `Rhizome: 1 update from cccccccc — "first line"`},
+		{"announcement", []outboxEntry{entry("announcement", "dddddddd", "[announcement] shipped")}, `Rhizome: 1 announcement from dddddddd — "shipped"`},
+		{"untrusted text is sanitized", []outboxEntry{entry("direct", "ee\u202eee\x1b", "[direct] \x1b[31mred\u200b  \t\"quoted\"\r")}, `Rhizome: 1 message from eeee — "[31mred 'quoted'"`},
+		{"missing metadata", []outboxEntry{{content: "plain"}}, `Rhizome: 1 update — "plain"`},
+		{"excerpt bounded on a rune boundary", []outboxEntry{entry("direct", "ffffffff", "[direct] "+long)}, `Rhizome: 1 message from ffffffff — "` + strings.Repeat("é", maxCursorExcerpt/2) + `…"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cursorSummary(tc.entries)
+			if got != tc.want {
+				t.Fatalf("got  %q\nwant %q", got, tc.want)
+			}
+			if strings.ContainsAny(got, "\n\r\x1b") || !utf8.ValidString(got) {
+				t.Fatalf("summary not a single clean line: %q", got)
+			}
+		})
+	}
 }
 
 func TestCursorResolveTickets(t *testing.T) {

@@ -21,6 +21,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -41,6 +43,7 @@ const (
 	maxCursorOutbox      = 32        // delivered-but-undrained notifications per node
 	maxCursorOutboxBytes = 64 * 1024 // bytes retained in the outbox
 	maxCursorContext     = 8 * 1024  // bytes injected per hook response
+	maxCursorExcerpt     = 80        // bytes of untrusted peer text in a followup summary
 	cursorSocketTimeout  = 5 * time.Second
 	maxCursorConns       = 16
 )
@@ -309,7 +312,7 @@ func (m *cursorNodes) handle(msg cursorMessage) map[string]any {
 			}
 			n.hookActivity("tool", "Tool "+result+": "+msg.ToolName)
 		}
-		if injected := n.drainOutbox(); injected != "" {
+		if injected, _ := n.drainOutbox(); injected != "" {
 			return map[string]any{"additional_context": injected}
 		}
 		return empty
@@ -328,9 +331,9 @@ func (m *cursorNodes) handle(msg cursorMessage) map[string]any {
 			n.hookActivity("turn", "Turn completed")
 		}
 		if m.followup && msg.Status == "completed" && msg.LoopCount == 0 {
-			if injected := n.drainOutbox(); injected != "" {
+			if injected, summary := n.drainOutbox(); injected != "" {
 				n.setPeerTurn(true)
-				return map[string]any{"followup_message": cursorFollowupPrefix + injected}
+				return map[string]any{"followup_message": summary + "\n" + cursorFollowupPrefix + injected}
 			}
 		}
 		n.setPeerTurn(false)
@@ -609,11 +612,13 @@ func (n *Node) outboxNotify(_ context.Context, content string, meta map[string]s
 }
 
 // drainOutbox returns up to maxCursorContext bytes of peer envelopes for one
-// hook response and re-arms delivery.
-func (n *Node) drainOutbox() string {
+// hook response, a one-line summary of the drained entries, and re-arms
+// delivery.
+func (n *Node) drainOutbox() (string, string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	var b strings.Builder
+	var drained []outboxEntry
 	for len(n.outbox) > 0 {
 		e := n.outbox[0]
 		block := peerEnvelope(e.content, e.meta)
@@ -622,11 +627,115 @@ func (n *Node) drainOutbox() string {
 		}
 		b.WriteString(block)
 		b.WriteString("\n")
+		drained = append(drained, e)
 		n.outbox = n.outbox[1:]
 		n.outboxBytes -= len(e.content)
 	}
 	n.deliveryReady = true
-	return strings.TrimSpace(b.String())
+	return strings.TrimSpace(b.String()), cursorSummary(drained)
+}
+
+// cursorSummary is the first line of a followup message, the only line the
+// Cursor CLI shows: counts by kind, the senders' short session IDs and one
+// sanitized excerpt, preferring a direct message or announcement.
+func cursorSummary(entries []outboxEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	var labels, senders []string
+	counts := map[string]int{}
+	seen := map[string]bool{}
+	excerpt := -1
+	for i, e := range entries {
+		label := "update"
+		switch e.meta["kind"] {
+		case "direct":
+			label = "message"
+		case "announcement":
+			label = "announcement"
+		}
+		if counts[label] == 0 {
+			labels = append(labels, label)
+		}
+		counts[label]++
+		if label != "update" && excerpt < 0 {
+			excerpt = i
+		}
+		if id := truncateRunes(cursorDisplay(e.meta["session_id"], 128), 8); id != "" && !seen[id] {
+			seen[id] = true
+			senders = append(senders, id)
+		}
+	}
+	if excerpt < 0 {
+		excerpt = 0
+	}
+	parts := make([]string, len(labels))
+	for i, label := range labels {
+		count := counts[label]
+		if count > 1 {
+			label += "s"
+		}
+		parts[i] = fmt.Sprintf("%d %s", count, label)
+	}
+	line := "Rhizome: " + strings.Join(parts, ", ")
+	if len(senders) > 0 {
+		line += " from " + strings.Join(senders, ", ")
+	}
+	if text := cursorDisplay(stripKind(entries[excerpt].content), maxCursorExcerpt); text != "" {
+		line += ` — "` + text + `"`
+		if len(entries) > 1 {
+			line += fmt.Sprintf(" (+%d more)", len(entries)-1)
+		}
+	}
+	return line
+}
+
+// stripKind removes the "[kind] " prefix delivery adds to each event line.
+func stripKind(content string) string {
+	if strings.HasPrefix(content, "[") {
+		if i := strings.Index(content, "] "); i > 0 {
+			return content[i+2:]
+		}
+	}
+	return content
+}
+
+// cursorDisplay reduces untrusted peer text to one short display line: the
+// first line only, without control or format characters, whitespace
+// collapsed, double quotes replaced, and at most limit bytes on a rune
+// boundary, marked with an ellipsis when cut.
+func cursorDisplay(s string, limit int) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsSpace(r):
+			return ' '
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+			return -1
+		case r == '"':
+			return '\''
+		}
+		return r
+	}, s)
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= limit {
+		return s
+	}
+	return strings.TrimSpace(truncateRunes(s, limit)) + "…"
+}
+
+// truncateRunes returns at most limit bytes of s, cut on a rune boundary.
+func truncateRunes(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	s = s[:limit]
+	for !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // RunCursor serves the Cursor channel: per-conversation nodes bound through

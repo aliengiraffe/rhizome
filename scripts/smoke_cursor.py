@@ -204,7 +204,9 @@ def main():
             assert 'followup_message' not in c.hook(payload('stop', 'conv-a', project, status='completed', loop_count=1))
             assert 'followup_message' not in c.hook(payload('stop', 'conv-a', project, status='aborted', loop_count=0))
             follow = c.hook(payload('stop', 'conv-a', project, status='completed', loop_count=0))['followup_message']
-            assert follow.startswith('Rhizome delivered queued peer activity') and 'queued-for-stop' in follow, follow
+            summary, _, rest = follow.partition('\n')
+            assert summary.startswith('Rhizome: 1 message from ') and '"queued-for-stop"' in summary, follow
+            assert rest.startswith('Rhizome delivered queued peer activity') and 'queued-for-stop' in rest, follow
             assert 'followup_message' not in c.hook(payload('stop', 'conv-a', project, status='completed', loop_count=0))
             c.hook(payload('afterAgentResponse', 'conv-a', project, text='followup-reply'))
             c.hook(payload('beforeSubmitPrompt', 'conv-a', project, prompt='next real prompt', attachments=[]))
