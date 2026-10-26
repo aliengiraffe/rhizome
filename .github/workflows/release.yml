@@ -2,8 +2,10 @@ name: Release
 
 # SemVer tag push  → signed, notarized, smoke-tested GitHub Release, staged as
 #                    a draft and published only after every gate passes.
+#                    Stable tags then update the Homebrew cask in
+#                    aliengiraffe/homebrew-spaceship.
 # Pull request / workflow_dispatch → the same build and smoke matrix as an
-#                    unsigned, ad-hoc snapshot: no secrets, no release.
+#                    unsigned, ad-hoc snapshot: no secrets, no release, no tap.
 # See docs/releasing.md for setup, tag conventions and recovery.
 
 on:
@@ -360,3 +362,91 @@ jobs:
             exit 1
           fi
           gh release view "$TAG" --json url -q .url
+
+  tap:
+    name: Update Homebrew cask
+    needs: [meta, publish]
+    # Stable tags only, and only once the release is public. Prereleases,
+    # pull requests and manual snapshots never touch the tap.
+    if: needs.meta.outputs.production == 'true' && needs.meta.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Tap credentials live only in the `homebrew-tap` environment. This job
+    # never enters `release`, so it cannot see signing secrets, and the
+    # signing jobs never see the tap credentials.
+    environment: homebrew-tap
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.meta.outputs.tag }}
+      TAP_REPO: aliengiraffe/homebrew-spaceship
+      CASK_PATH: Casks/rhizome.rb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # The cask points at what users download, so it is rendered from the
+      # published assets after re-verifying them against their manifest.
+      - name: Download and verify the published release
+        run: |
+          set -euo pipefail
+          state=$(gh release view "$TAG" --json isDraft,isPrerelease -q '"\(.isDraft) \(.isPrerelease)"')
+          if [ "$state" != "false false" ]; then
+            echo "::error::release $TAG is in state '$state', expected a published stable release"
+            exit 1
+          fi
+          gh release download "$TAG" --dir published
+          go run ./internal/release/releasetool verify -tag "$TAG" -dir published -exact
+      - name: Check tap credentials
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+        run: |
+          missing=""
+          [ -n "$APP_ID" ] || missing="$missing APP_ID"
+          [ -n "$APP_PRIVATE_KEY" ] || missing="$missing APP_PRIVATE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::the homebrew-tap environment is missing:$missing. See docs/releasing.md."
+            exit 1
+          fi
+      # A short-lived installation token, scoped to the tap repository's
+      # contents and revoked when the job ends. No personal access token.
+      - name: Mint a tap token
+        id: tap_token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: aliengiraffe
+          repositories: homebrew-spaceship
+          permission-contents: write
+      # Idempotent: an unchanged cask makes no commit, and a tap that already
+      # holds a newer release is kept (releasetool writes it back unchanged).
+      - name: Render and commit the cask
+        env:
+          GH_TOKEN: ${{ steps.tap_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          sha=()
+          if gh api "repos/$TAP_REPO/contents/$CASK_PATH" > current.json 2> current.err; then
+            jq -r .content current.json | base64 --decode > current.rb
+            sha=(-f "sha=$(jq -r .sha current.json)")
+          elif grep -q 'HTTP 404' current.err; then
+            : > current.rb
+          else
+            cat current.err >&2
+            exit 1
+          fi
+          go run ./internal/release/releasetool cask -tag "$TAG" -dir published -current current.rb > rendered.rb
+          cat rendered.rb
+          if cmp -s rendered.rb current.rb; then
+            echo "$TAP_REPO $CASK_PATH is already up to date; nothing to commit"
+            exit 0
+          fi
+          gh api -X PUT "repos/$TAP_REPO/contents/$CASK_PATH" \
+            -f message="rhizome $TAG" -f content="$(base64 -w0 rendered.rb)" "${sha[@]}" -q .commit.html_url

@@ -71,17 +71,24 @@ func WriteManifest(dir, assetVersion string) error {
 // dir must contain nothing besides those assets and the manifest, which is how
 // downloaded release assets are checked for strays.
 func VerifyManifest(dir, assetVersion string, exact bool) error {
+	_, err := verifiedSums(dir, assetVersion, exact)
+	return err
+}
+
+// verifiedSums verifies dir like VerifyManifest and returns the manifest's
+// digests by asset name.
+func verifiedSums(dir, assetVersion string, exact bool) (map[string]string, error) {
 	f, err := os.Open(filepath.Join(dir, ManifestName(assetVersion)))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxManifest+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(data) > maxManifest {
-		return errors.New("checksum manifest too large")
+		return nil, errors.New("checksum manifest too large")
 	}
 	want := Assets(assetVersion)
 	seen := map[string]string{}
@@ -89,47 +96,47 @@ func VerifyManifest(dir, assetVersion string, exact bool) error {
 	for sc.Scan() {
 		sum, name, ok := strings.Cut(sc.Text(), "  ")
 		if !ok || len(sum) != sha256.Size*2 || strings.ToLower(sum) != sum {
-			return fmt.Errorf("malformed manifest line %q", sc.Text())
+			return nil, fmt.Errorf("malformed manifest line %q", sc.Text())
 		}
 		if _, err := hex.DecodeString(sum); err != nil {
-			return fmt.Errorf("malformed digest for %s", name)
+			return nil, fmt.Errorf("malformed digest for %s", name)
 		}
 		if !slices.Contains(want, name) {
-			return fmt.Errorf("manifest lists unexpected asset %q", name)
+			return nil, fmt.Errorf("manifest lists unexpected asset %q", name)
 		}
 		if _, dup := seen[name]; dup {
-			return fmt.Errorf("manifest lists %s twice", name)
+			return nil, fmt.Errorf("manifest lists %s twice", name)
 		}
 		seen[name] = sum
 	}
 	if err := sc.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	for _, name := range want {
 		sum, ok := seen[name]
 		if !ok {
-			return fmt.Errorf("manifest is missing %s", name)
+			return nil, fmt.Errorf("manifest is missing %s", name)
 		}
 		got, err := fileSHA256(filepath.Join(dir, name))
 		if err != nil {
-			return fmt.Errorf("checksum %s: %w", name, err)
+			return nil, fmt.Errorf("checksum %s: %w", name, err)
 		}
 		if got != sum {
-			return fmt.Errorf("%s: digest %s does not match manifest %s", name, got, sum)
+			return nil, fmt.Errorf("%s: digest %s does not match manifest %s", name, got, sum)
 		}
 	}
 	if exact {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, e := range entries {
 			if e.Name() != ManifestName(assetVersion) && !slices.Contains(want, e.Name()) {
-				return fmt.Errorf("unexpected file %s alongside release assets", e.Name())
+				return nil, fmt.Errorf("unexpected file %s alongside release assets", e.Name())
 			}
 		}
 	}
-	return nil
+	return seen, nil
 }
 
 func fileSHA256(path string) (string, error) {

@@ -121,6 +121,11 @@ limitations](codex.md) and the samples in `examples/codex/`.
 
 ## Install
 
+Install stable releases with Homebrew on macOS or Linux:
+`brew install --cask aliengiraffe/spaceship/rhizome`. The cask installs the
+same release binary, never touches `~/.rhizome` and never installs or restarts
+the observer.
+
 Tagged releases on the [GitHub Releases page](https://github.com/aliengiraffe/rhizome/releases)
 ship a signed and notarized macOS installer (`rhizome_<version>_macos.pkg`, which
 installs `/usr/local/bin/rhizome`) and a universal macOS archive. They also ship
