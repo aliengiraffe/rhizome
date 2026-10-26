@@ -157,7 +157,7 @@ and peer events are injected at tool and turn boundaries (`additional_context`
 after tool results, and one auto-submitted `stop` follow-up per completed turn
 unless `[cursor] followup_delivery = false`). Each
 conversation gets its own node; several chats in one window need the
-`beforeMCPExecution` hook to attribute tool calls, otherwise they fail closed.
+`beforeMCPExecution` (CLI) or `preToolUse` (IDE) hook to attribute tool calls, otherwise they fail closed.
 Cursor logs are not indexed for history. `rhizome setup --agents cursor`
 installs the skill, the MCP registration and the hooks under `~/.cursor`. This
 integration is verified with synthetic hook payloads only; see [Cursor setup,

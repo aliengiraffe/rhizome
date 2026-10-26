@@ -256,10 +256,13 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   `rhizome hook --agent cursor` (run by `~/.cursor/hooks.json`) forwards a
   minimized payload: never the prompt, tool bodies, transcripts or `user_email`.
   The hook ranks processes against `workspace_roots` (exact, then most
-  specific parent, then child; home and `/` never claim nested workspaces),
-  contacts exactly one best candidate, and otherwise answers Cursor's default (`{}`, `continue`, `ask`)
+  specific parent, then child; home and `/` never claim nested workspaces;
+  processes started by the IDE agent worker, marked by `CURSOR_AGENT_WORKER_ID`,
+  are never selected; among equal matches reported roots beat a cwd-only match), contacts exactly one best candidate, and otherwise answers Cursor's default (`{}`, `continue`, `ask`)
   with exit 0; it must never block Cursor. Tool calls resolve by a single-use
-  `beforeMCPExecution` ticket (tool name + canonical input digest, 5 s) or the
+  `beforeMCPExecution` or `preToolUse` ticket (tool name + canonical input
+  digest, 5 s; the IDE runs only `preToolUse`, as `MCP:<tool>`, so only
+  Rhizome tool names qualify; same-conversation duplicates are one call) or the
   single bound conversation; anything else is `identity_ambiguous`. Collection
   is hook push only (`afterAgentResponse`, `postToolUse*`, `stop`), with the
   shared `isPeerInput` suppression; no transcript tailing and no history

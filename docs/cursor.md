@@ -66,7 +66,7 @@ Build this checkout with `task build`, then:
    a `cursor`, `agent` or `cursor-agent` executable on PATH, and installs at
    user scope: the skill (`~/.cursor/skills/rhizome-collab/SKILL.md`), the
    `rhizome` stdio server in `~/.cursor/mcp.json` (absolute binary path,
-   `mcp --agent cursor`), and the eight hook entries in `~/.cursor/hooks.json`
+   `mcp --agent cursor`), and the nine hook entries in `~/.cursor/hooks.json`
    (`version: 1`). Every hook entry runs `<binary> hook --agent cursor`, is
    non-blocking (`failClosed: false`, 10 s timeout); `beforeMCPExecution` has
    `matcher: "rhizome"` and `stop` sets `loop_limit: 1`. The merge touches only
@@ -91,7 +91,8 @@ Open a chat, submit a prompt and ask Cursor to call `list_sessions`. Expect
 Every Cursor agent hook payload carries `conversation_id` and
 `workspace_roots`. Rhizome uses `conversation_id` as the session ID and binds
 on `sessionStart`, `beforeSubmitPrompt`, `postToolUse`, `postToolUseFailure`,
-`afterAgentResponse`, `beforeMCPExecution` and `stop`; `sessionEnd` retires the
+`afterAgentResponse`, `beforeMCPExecution`, `preToolUse` (Rhizome tools only)
+and `stop`; `sessionEnd` retires the
 node, and the next hook for that conversation starts a fresh node with a new
 node ID and generation. Hooks with `subagent_id` or `parent_conversation_id`,
 `is_background_agent: true` payloads, `subagentStart`/`subagentStop` and every
@@ -108,9 +109,16 @@ The hook reads the registrations, drops dead PIDs, and ranks each one against
 the payload's `workspace_roots`: an exact match first, then a payload root
 inside a registered root (the most specific wins; the home directory and `/`
 never claim nested workspaces), then a registered root inside a payload root.
-Exactly one candidate must remain in the best tier; zero or several, including
-two windows or a window plus a CLI session on one workspace, fail closed: the
-hook answers with Cursor's own default and logs a counter to stderr.
+The IDE (3.27.14) also starts a second process from its built-in agent worker
+(the bridge for remote runs) in the workspace, without roots, alongside the
+chat's own process; that process sees `CURSOR_AGENT_WORKER_ID`, registers as
+`agent_worker` and is never selected, so it cannot take a chat's collection
+lease. As a second guard, among equally good matches one made through reported
+roots beats one made only through a working directory. Exactly one candidate must remain; zero or several, including two
+windows, or a CLI session plus a window whose MCP client did not answer
+`roots/list`, on one workspace, fail closed: the hook answers with Cursor's own
+default and logs a counter to stderr. A CLI session and an IDE window on the
+same workspace resolve to the IDE, so the CLI chat stays unbound.
 `list_sessions` reports `cursor_processes`, the number of live registrations,
 to make that diagnosable. No process-tree walking is involved.
 
@@ -127,12 +135,18 @@ Tool calls still carry no identity, so one process may host several
 conversations. Resolution order for every tool, including the history and file
 tools:
 
-1. A pending **ticket** from the `beforeMCPExecution` hook: the hook registers
-   `{conversation_id, tool_name, sha256(canonical tool_input)}` for the
-   `rhizome` server, valid for five seconds and consumed once. The `tools/call`
+1. A pending **ticket** from the `beforeMCPExecution` or `preToolUse` hook:
+   the hook registers `{conversation_id, tool_name, sha256(canonical
+   tool_input)}`, valid for five seconds and consumed once. The `tools/call`
    whose name (ignoring any client prefix) and canonical arguments match is
    attributed to that conversation. A ticket with no input matches on the name.
-   Several matching tickets are ambiguous and consume nothing.
+   Matching tickets from one conversation (a client that fires both hooks for
+   one call) resolve to it, oldest first; matches from different conversations
+   are ambiguous and consume nothing. The IDE (3.27.14) never runs
+   `beforeMCPExecution` and reports MCP calls to `preToolUse` as
+   `MCP:<tool>` without the server name, so the hook accepts a `preToolUse`
+   ticket only for one of Rhizome's tool names; another server's tool with the
+   same name can at worst make a concurrent call ambiguous.
 2. Without a ticket, a process with exactly **one** conversation resolves to it.
 3. Anything else returns the stable error `identity_ambiguous`; `send`,
    `subscribe`, `publish`, `set_session_name` and the rest never guess.
@@ -143,7 +157,9 @@ for them, remove the entry: single-chat windows keep working and multi-chat
 windows fail closed. For other MCP servers the hook answers `ask`, which leaves
 Cursor's normal behavior in place. Whether Cursor's `matcher` scopes this hook by
 tool or server name is a live check; the hook filters by `mcp_server_name` in
-either case.
+either case. The `preToolUse` entry has no matcher and answers `{}`, so
+approval stays with Cursor; it runs for every tool call and returns at once for
+anything that is not a Rhizome tool.
 
 ## Collection
 
@@ -218,8 +234,7 @@ redacted fixtures exist.
 
 - The CLI's process layout matches the description above (verified live with
   `agent` 2026.10.22-27dcf5f). The IDE's layout, hook payload stability across
-  releases, the `beforeMCPExecution` matcher semantics and MCP tool naming in
-  `tool_name` are unverified live; run the checklist in
+  releases and the `beforeMCPExecution` matcher semantics are unverified live; run the checklist in
   [verification.md](verification.md) after installing or upgrading Cursor.
 - Cursor loads third-party Claude Code hooks from `~/.claude/settings.json`
   when that option is enabled (always, for the CLI). Rhizome's Claude hooks are
@@ -233,6 +248,8 @@ redacted fixtures exist.
   its first line, which is Rhizome's one-line summary of what was delivered.
 - Two IDE windows on the same workspace, or a window whose MCP client does not
   answer `roots/list` alongside another live process, fail closed for hooks.
+  A CLI session on a workspace that an IDE window also has open stays unbound,
+  because the window's reported root wins.
 - There is no idle wake. Peer events reach a chat at its next tool result or
   right after its turn ends (unless followup delivery is disabled).
 - Hooks run per event as short-lived processes; a slow Rhizome never blocks

@@ -222,6 +222,11 @@ def main():
             assert ticket == {'permission': 'allow'}, ticket
             assert c.tool('list_sessions')['identity']['session_id'] == 'conv-b'
             assert 'identity_ambiguous' in c.error_text('list_sessions')
+            # The IDE fires only preToolUse, naming the tool "MCP:<tool>"; approval stays with Cursor.
+            assert c.hook(payload('preToolUse', 'conv-b', project, tool_name='MCP:list_sessions', tool_input={})) == {}
+            assert c.tool('list_sessions')['identity']['session_id'] == 'conv-b'
+            assert c.hook(payload('preToolUse', 'conv-b', project, tool_name='Shell', tool_input={'command': 'ls'})) == {}
+            assert 'identity_ambiguous' in c.error_text('list_sessions')
             other = c.hook(payload('beforeMCPExecution', 'conv-b', project, tool_name='x', tool_input='{}', mcp_server_name='github'))
             assert other == {'permission': 'ask'}, other
             assert 'identity_ambiguous' in c.error_text('list_sessions')
@@ -285,7 +290,7 @@ def main():
         assert not list(directory.glob('run/*.json')), 'EOF left registrations'
         assert not list(directory.glob('run/cursor/*')), 'EOF left Cursor registrations or sockets'
     print('PASS: Cursor hook binding, roots-free registration, cross-agent subscriptions, hook-pull delivery, '
-          'tickets with two conversations, two workspaces on two processes, peer-turn suppression, default-on followup and its opt-out, sessionEnd and cleanup')
+          'tickets (beforeMCPExecution and IDE preToolUse) with two conversations, two workspaces on two processes, peer-turn suppression, default-on followup and its opt-out, sessionEnd and cleanup')
 
 
 if __name__ == '__main__':

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -74,6 +75,16 @@ func minimizeCursorPayload(p cursorHookPayload) (msg cursorMessage, ok bool) {
 		}
 		msg.ToolName = clip(p.ToolName, 128)
 		msg.InputHash = canonicalHash(p.ToolInput)
+	case "preToolUse":
+		// The IDE (3.27) skips beforeMCPExecution and reports MCP calls here as
+		// "MCP:<tool>" without the server name, so only Rhizome's tool names
+		// qualify for a ticket.
+		name, ok := strings.CutPrefix(p.ToolName, "MCP:")
+		if !ok || !slices.Contains(rhizomeTools, name) {
+			return msg, false
+		}
+		msg.ToolName = name
+		msg.InputHash = canonicalHash(p.ToolInput)
 	default:
 		return msg, false
 	}
@@ -113,19 +124,21 @@ func broadRoot(path, home string) bool {
 // is an exact match, tier 2 a payload root inside a registered root, tier 3 a
 // registered root inside a payload root; specificity is the matched registered
 // root's length. Tier 0 means no relation; tier 4 a registration that reported
-// nothing at all.
-func rankRegistration(reg *cursorRegistration, roots []string, home string) (tier, specificity int) {
+// nothing at all. reported says the best match came from client-reported roots
+// rather than the working directory.
+func rankRegistration(reg *cursorRegistration, roots []string, home string) (tier, specificity int, reported bool) {
 	var have []string
 	for _, r := range cleanRoots(reg.Roots) {
 		have = append(have, canonicalPath(r))
 	}
+	nReported := len(have)
 	if filepath.IsAbs(reg.Cwd) {
 		have = append(have, canonicalPath(reg.Cwd))
 	}
 	if len(have) == 0 {
-		return 4, 0
+		return 4, 0, false
 	}
-	for _, h := range have {
+	for i, h := range have {
 		for _, r := range roots {
 			want := canonicalPath(r)
 			t := 0
@@ -140,18 +153,22 @@ func rankRegistration(reg *cursorRegistration, roots []string, home string) (tie
 			if t == 0 {
 				continue
 			}
-			if tier == 0 || t < tier || (t == tier && len(h) > specificity) {
-				tier, specificity = t, len(h)
+			if tier == 0 || t < tier || (t == tier && len(h) > specificity) || (t == tier && len(h) == specificity && i < nReported) {
+				tier, specificity, reported = t, len(h), i < nReported
 			}
 		}
 	}
-	return tier, specificity
+	return tier, specificity, reported
 }
 
 // selectCursorRegistration picks the one MCP process serving these workspace
 // roots: the best tier wins, the most specific root within it, and exactly one
-// candidate must remain. Zero or several candidates fail closed: the hook then
-// changes nothing. Without payload roots only a single live process qualifies.
+// candidate must remain. The IDE also starts a process from its agent worker
+// in the workspace; it is marked and never qualifies. As a second guard, among
+// equal matches one made through client-reported roots (the IDE chat's own
+// process) beats one made only through a working directory. Zero or several
+// candidates fail closed: the hook then changes nothing. Without payload roots
+// only a single live process qualifies.
 func selectCursorRegistration(dir string, roots []string, alive func(int) bool, home string) (*cursorRegistration, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil {
@@ -164,7 +181,7 @@ func selectCursorRegistration(dir string, roots []string, alive func(int) bool, 
 			continue
 		}
 		var reg cursorRegistration
-		if json.Unmarshal(raw, &reg) != nil || reg.Socket == "" || !alive(reg.PID) {
+		if json.Unmarshal(raw, &reg) != nil || reg.Socket == "" || reg.Worker || !alive(reg.PID) {
 			continue
 		}
 		r := reg
@@ -174,7 +191,7 @@ func selectCursorRegistration(dir string, roots []string, alive func(int) bool, 
 	if len(roots) > 0 {
 		bestTier, bestSpec := 0, 0
 		for _, r := range live {
-			tier, spec := rankRegistration(r, roots, home)
+			tier, spec, _ := rankRegistration(r, roots, home)
 			if tier == 0 {
 				continue
 			}
@@ -184,9 +201,18 @@ func selectCursorRegistration(dir string, roots []string, alive func(int) bool, 
 		}
 		candidates = nil
 		for _, r := range live {
-			if tier, spec := rankRegistration(r, roots, home); tier == bestTier && tier != 0 && (tier == 1 || tier == 4 || spec == bestSpec) {
+			if tier, spec, _ := rankRegistration(r, roots, home); tier == bestTier && tier != 0 && (tier == 1 || tier == 4 || spec == bestSpec) {
 				candidates = append(candidates, r)
 			}
+		}
+		var reported []*cursorRegistration
+		for _, r := range candidates {
+			if _, _, ok := rankRegistration(r, roots, home); ok {
+				reported = append(reported, r)
+			}
+		}
+		if len(reported) > 0 {
+			candidates = reported
 		}
 	}
 	switch len(candidates) {

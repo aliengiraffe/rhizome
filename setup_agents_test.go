@@ -734,7 +734,7 @@ func TestInstallCursor(t *testing.T) {
 	}
 	hooks = readJSON(t, cursor.Hooks)
 	got := hooks["hooks"].(map[string]any)
-	if hooks["version"] != json.Number("2") || got["afterFileEdit"] != nil || len(got["preToolUse"].([]any)) != 1 || len(got["stop"].([]any)) != 2 || got["stop"].([]any)[0].(map[string]any)["command"] != "./mine.sh" {
+	if hooks["version"] != json.Number("2") || got["afterFileEdit"] != nil || len(got["preToolUse"].([]any)) != 2 || got["preToolUse"].([]any)[0].(map[string]any)["command"] != "./audit.sh" || len(got["stop"].([]any)) != 2 || got["stop"].([]any)[0].(map[string]any)["command"] != "./mine.sh" {
 		t.Fatalf("stale merge: %v", hooks)
 	}
 	for _, event := range cursorHookEvents {

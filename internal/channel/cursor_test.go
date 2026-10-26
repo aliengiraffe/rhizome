@@ -92,6 +92,15 @@ func TestMinimizeCursorPayload(t *testing.T) {
 			raw, _ := json.Marshal(m)
 			return m.InputHash == canonicalHash([]byte(`{"session_id":"s","text":"hi"}`)) && !bytes.Contains(raw, []byte("hi"))
 		}},
+		{"IDE preToolUse ticket strips the MCP prefix", with(func(p *cursorHookPayload) {
+			p.Event = "preToolUse"
+			p.ToolName = "MCP:send"
+			p.ToolInput = json.RawMessage(`{"text":"hi","session_id":"s"}`)
+		}), true, func(m cursorMessage) bool {
+			return m.ToolName == "send" && m.InputHash == canonicalHash([]byte(`{"session_id":"s","text":"hi"}`))
+		}},
+		{"preToolUse for a built-in tool ignored", with(func(p *cursorHookPayload) { p.Event = "preToolUse"; p.ToolName = "Shell" }), false, nil},
+		{"preToolUse for another MCP tool ignored", with(func(p *cursorHookPayload) { p.Event = "preToolUse"; p.ToolName = "MCP:create_issue" }), false, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,7 +132,7 @@ func TestSelectCursorRegistration(t *testing.T) {
 	dir := t.TempDir()
 	home := "/Users/me"
 	write := func(id string, pid int, cwd string, roots ...string) {
-		raw, _ := json.Marshal(cursorRegistration{ID: id, PID: pid, Socket: filepath.Join(dir, id+".sock"), Roots: roots, Cwd: cwd})
+		raw, _ := json.Marshal(cursorRegistration{ID: id, PID: pid, Socket: filepath.Join(dir, id+".sock"), Roots: roots, Cwd: cwd, Worker: strings.HasPrefix(id, "agent-worker")})
 		if err := os.WriteFile(filepath.Join(dir, id+".json"), raw, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -170,7 +179,24 @@ func TestSelectCursorRegistration(t *testing.T) {
 			}
 		})
 	}
-	// Two processes on the same workspace tie and fail closed.
+	// The IDE's agent worker starts a second process in the workspace without
+	// roots; the chat's process, which reported the workspace as a root, wins.
+	write("worker", 9, "/w/a")
+	if reg, err := selectCursorRegistration(dir, []string{"/w/a"}, alive, home); err != nil || reg.ID != "ide" {
+		t.Fatalf("reported root must beat a cwd-only match: %v %v", reg, err)
+	}
+	if err := os.Remove(filepath.Join(dir, "worker.json")); err != nil {
+		t.Fatal(err)
+	}
+	// A marked agent-worker process never qualifies, even as the only match.
+	write("agent-worker", 10, "/z/g")
+	if _, err := selectCursorRegistration(dir, []string{"/z/g"}, alive, home); err == nil || !strings.Contains(err.Error(), "no live Cursor MCP process") {
+		t.Fatalf("agent worker selected: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "agent-worker.json")); err != nil {
+		t.Fatal(err)
+	}
+	// Two processes reporting the same workspace tie and fail closed.
 	write("ide2", 7, home, "/w/a")
 	if _, err := selectCursorRegistration(dir, []string{"/w/a"}, alive, home); err == nil || !strings.Contains(err.Error(), "refusing to guess") {
 		t.Fatalf("same-workspace tie: %v", err)
@@ -465,6 +491,18 @@ func TestCursorResolveTickets(t *testing.T) {
 	m.mu.Unlock()
 	if _, err := m.resolve(call("send", `{"text":"hi","session_id":"x"}`)); !errors.Is(err, errCursorAmbiguous) || len(m.tickets) != 0 {
 		t.Fatal("expired tickets were honored")
+	}
+	// A client firing both beforeMCPExecution and preToolUse leaves two tickets
+	// for one call from one conversation: the call resolves and consumes one.
+	m.handle(cursorMessage{Event: "beforeMCPExecution", ConversationID: "conv-b", WorkspaceRoots: []string{root}, ToolName: "send", InputHash: canonicalHash([]byte(`{}`))})
+	if resp := m.handle(cursorMessage{Event: "preToolUse", ConversationID: "conv-b", WorkspaceRoots: []string{root}, ToolName: "send", InputHash: canonicalHash([]byte(`{}`))}); len(resp) != 0 {
+		t.Fatalf("preToolUse must leave approval to Cursor: %v", resp)
+	}
+	if n, err := m.resolve(call("send", `{}`)); err != nil || n != b || len(m.tickets) != 1 {
+		t.Fatalf("same-conversation tickets: %v %v %d", n, err, len(m.tickets))
+	}
+	if n, err := m.resolve(call("send", `{}`)); err != nil || n != b || len(m.tickets) != 0 {
+		t.Fatalf("leftover ticket: %v %v %d", n, err, len(m.tickets))
 	}
 	// A hook without tool input matches on the tool name alone.
 	m.handle(cursorMessage{Event: "beforeMCPExecution", ConversationID: "conv-a", WorkspaceRoots: []string{root}, ToolName: "list_sessions"})

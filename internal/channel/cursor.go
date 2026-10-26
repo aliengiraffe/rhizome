@@ -75,13 +75,17 @@ type cursorMessage struct {
 // cursorRegistration advertises one MCP process to hook processes. Roots come
 // from the MCP client's roots/list; Cwd is the directory the client started the
 // process in (the workspace for the Cursor CLI, the home directory for the IDE
-// helper). Hooks rank both against the payload's workspace_roots.
+// helper). Hooks rank both against the payload's workspace_roots. Worker marks
+// a process started by the IDE's built-in agent worker (CURSOR_AGENT_WORKER_ID
+// set): it runs in the workspace next to the chat's own process but serves no
+// local chat, so hooks never select it.
 type cursorRegistration struct {
 	ID      string   `json:"id"`
 	PID     int      `json:"pid"`
 	Socket  string   `json:"socket"`
 	Roots   []string `json:"roots,omitempty"`
 	Cwd     string   `json:"cwd,omitempty"`
+	Worker  bool     `json:"agent_worker,omitempty"`
 	Started int64    `json:"started"`
 }
 
@@ -101,6 +105,7 @@ type cursorNodes struct {
 	id        string
 	roots     []string
 	cwd       string
+	worker    bool
 	listener  net.Listener
 	followup  bool
 	wg        sync.WaitGroup
@@ -151,6 +156,7 @@ func (m *cursorNodes) start() error {
 	if wd, err := os.Getwd(); err == nil && filepath.IsAbs(wd) {
 		m.cwd = canonicalPath(wd)
 	}
+	m.worker = os.Getenv("CURSOR_AGENT_WORKER_ID") != ""
 	m.id = id()[:12]
 	socket := filepath.Join(dir, m.id+".sock")
 	_ = os.Remove(socket)
@@ -174,7 +180,7 @@ func (m *cursorNodes) start() error {
 
 func (m *cursorNodes) register() error {
 	m.mu.Lock()
-	reg := cursorRegistration{ID: m.id, PID: os.Getpid(), Socket: m.listener.Addr().String(), Roots: append([]string(nil), m.roots...), Cwd: m.cwd, Started: time.Now().Unix()}
+	reg := cursorRegistration{ID: m.id, PID: os.Getpid(), Socket: m.listener.Addr().String(), Roots: append([]string(nil), m.roots...), Cwd: m.cwd, Worker: m.worker, Started: time.Now().Unix()}
 	m.mu.Unlock()
 	raw, _ := json.Marshal(reg)
 	path := filepath.Join(cursorRegistry(m.runtime), m.id+".json")
@@ -345,6 +351,13 @@ func (m *cursorNodes) handle(msg cursorMessage) map[string]any {
 		m.bind(msg)
 		m.ticket(msg)
 		return map[string]any{"permission": "allow"}
+	case "preToolUse":
+		// A ticket only; approval stays with Cursor.
+		if msg.ToolName != "" {
+			m.bind(msg)
+			m.ticket(msg)
+		}
+		return empty
 	}
 	slog.Warn("cursor_hook_rejected", "event", msg.Event, "reason", "unsupported event")
 	return empty
@@ -413,8 +426,11 @@ func (m *cursorNodes) expireTicketsLocked(now time.Time) {
 	m.tickets = kept
 }
 
-// resolve attributes a tools/call to a conversation. A matching ticket wins;
-// without tickets only a process with exactly one conversation is unambiguous.
+// resolve attributes a tools/call to a conversation. A matching ticket wins,
+// the oldest one when every match names the same conversation (a client that
+// fires both beforeMCPExecution and preToolUse leaves two tickets per call);
+// matches naming different conversations are ambiguous. Without tickets only a
+// process with exactly one conversation is unambiguous.
 func (m *cursorNodes) resolve(r *mcp.CallToolRequest) (*Node, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -427,7 +443,10 @@ func (m *cursorNodes) resolve(r *mcp.CallToolRequest) (*Node, error) {
 				continue
 			}
 			if match >= 0 {
-				return nil, errCursorAmbiguous
+				if m.tickets[match].conversation != t.conversation {
+					return nil, errCursorAmbiguous
+				}
+				continue
 			}
 			match = i
 		}

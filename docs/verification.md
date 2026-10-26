@@ -715,7 +715,8 @@ version:
    result instead.
 5. Turn off auto-run ("Run Everything") first, or no approval prompt can
    appear. Open a second chat in the same window: expect `identity_ambiguous`
-   for tool calls until the `beforeMCPExecution` hook runs; record whether the `matcher`
+   for tool calls until a `beforeMCPExecution` or `preToolUse` ticket exists;
+   record which of the two hooks ran, whether the `matcher`
    scoped the hook, how MCP tools appear in `tool_name`, and whether
    `{"permission": "allow"}` suppressed Cursor's approval prompt.
 6. Repeat step 1 in the Cursor CLI (`agent`) and note the process layout.

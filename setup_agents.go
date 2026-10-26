@@ -107,12 +107,14 @@ func cursorHookCommand(exe string, c config.Config, explicitConfig bool) string 
 
 // cursorHookEvents lists the Cursor hook events Rhizome installs, in the order
 // of examples/cursor/hooks.json.
-var cursorHookEvents = []string{"sessionStart", "sessionEnd", "beforeSubmitPrompt", "beforeMCPExecution", "postToolUse", "postToolUseFailure", "afterAgentResponse", "stop"}
+var cursorHookEvents = []string{"sessionStart", "sessionEnd", "beforeSubmitPrompt", "beforeMCPExecution", "preToolUse", "postToolUse", "postToolUseFailure", "afterAgentResponse", "stop"}
 
 // cursorHookTemplate returns the Cursor hook entries setup installs, keyed by
 // event, in Cursor's hooks.json shape (`version: 1`, entries directly under the
 // event). Every entry is non-blocking; the beforeMCPExecution entry is scoped to
-// Rhizome and the stop entry caps follow-ups at one.
+// Rhizome, preToolUse (the IDE's only pre-call hook for MCP tools) has no
+// server matcher and is filtered by the hook, and the stop entry caps
+// follow-ups at one.
 func cursorHookTemplate(command string) map[string][]any {
 	out := map[string][]any{}
 	for _, event := range cursorHookEvents {

@@ -13,6 +13,9 @@
     "beforeMCPExecution": [
       { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "matcher": "rhizome", "timeout": 10, "failClosed": false }
     ],
+    "preToolUse": [
+      { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "timeout": 10, "failClosed": false }
+    ],
     "postToolUse": [
       { "command": "/absolute/path/to/rhizome/rhizome hook --agent cursor", "timeout": 10, "failClosed": false }
     ],
