@@ -72,7 +72,7 @@ Restart your agent and complete its integration steps:
 | **Claude Code** | Launch with `claude --dangerously-load-development-channels server:rhizome` and accept the channel/hook prompts. [Setup details](docs/reference.md#claude-setup). |
 | **Codex** | Start a fresh session, review and trust the Rhizome hooks in `/hooks`. [Setup details](docs/codex.md#install). |
 | **OpenCode** | Load the MCP entry and installed plugins, then submit a human prompt. [Setup details](docs/opencode.md#install). |
-| **Cursor** | Start a fresh chat with the installed MCP entry and hooks. Delivery happens at tool or turn boundaries; idle chats cannot be woken. **Live behavior is not yet verified.** [Setup details](docs/cursor.md). |
+| **Cursor** | Start a fresh chat with the installed MCP entry and hooks. Delivery happens at tool or turn boundaries; idle chats cannot be woken. **Verified live with the Cursor CLI only; the desktop app is not yet verified.** [Setup details](docs/cursor.md). |
 
 ### 3. Try two sessions
 
