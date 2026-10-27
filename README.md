@@ -183,8 +183,15 @@ with host pairing in the same configuration.
 Subscriptions carry selected assistant text, tool names/status, and turn markers.
 Automatic collection excludes user prompts, reasoning, full tool bodies,
 subagent transcripts, and received peer traffic. Explicit `send` and `publish`
-calls carry the text the sender chooses. Collected assistant text can still
-contain project-sensitive information.
+calls carry the text the sender chooses. Collected text (streamed activity and
+[session history](docs/history.md#content-policy)) is scanned with
+[Betterleaks](https://github.com/betterleaks/betterleaks) default rules and
+detected secrets are replaced by `[REDACTED:<rule_id>]` before leaving the
+process; text that cannot be scanned is masked whole. Explicit `send` and
+`publish` text is never scanned. Detection is heuristic: it reduces but cannot
+eliminate leakage, may mask benign strings, and does not decode encoded
+secrets. Collected assistant text can still contain project-sensitive
+information.
 
 Delivery uses bounded queues, short replay windows, deduplication, and feedback
 controls. A successful send means the receiver **accepted it into a queue**,

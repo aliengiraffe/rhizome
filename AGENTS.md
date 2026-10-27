@@ -26,7 +26,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), recent-only advertisements (`recent.go`), and the OpenCode bridge (`opencode*.go`). |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), recent-only advertisements (`recent.go`), secret redaction of collected text (`redact.go`), and the OpenCode bridge (`opencode*.go`). |
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
@@ -305,6 +305,21 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   8 MiB, stream queues are 64 events, receiver queues 256, and dedup windows 4,096
   (`internal/channel/node.go`, `internal/channel/network.go`,
   `internal/channel/delivery.go`, `internal/channel/transcript.go`).
+- **Collected text is secret-filtered; explicit messages are not.** Every text
+  that enters `Node.activity` or `historySink.activity` passes through the
+  shared Betterleaks-backed `redactor` (`internal/channel/redact.go`) before
+  retention, queues, gateway proxies or history responses see it: detected
+  values become `[REDACTED:<rule_id>]`, and any scanner error, unplaceable
+  finding or scan over 5 s masks the whole text as `[REDACTED:unscanned]`
+  (never emit unscanned). `send` and `announce` (`publish`) bypass the filter
+  by design. Keep the filter at those two choke points, never per normalizer;
+  use the standard-library regexp engine only (do not import
+  `betterleaks/v2/regexp/re2`, which links go-re2/wazero), never enable
+  validation, analysis or decoding, and never log findings or text (the
+  `activity_redaction_failed` warning carries a reason only). History events
+  expose `redacted: true`; node counters `Redacted`/`RedactionFailures`.
+  Session names, file transfers and native logs are out of scope. The
+  dependency is pure Go; `govulncheck ./...` must pass when bumping it.
 - **No transcript content or session names in logs.** Diagnose with counters and
   metadata to avoid leaking session content (`internal/channel/transcript.go`,
   `internal/channel/codex_collect.go`, `internal/channel/opencode_collect.go`,
