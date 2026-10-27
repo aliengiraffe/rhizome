@@ -131,7 +131,9 @@ manifest (`rhizome_<version>_checksums.txt`). Verify downloads with
 or restarts the observer. Run `rhizome setup` and `rhizome service install`
 yourself, and after an upgrade run `rhizome service stop` and then
 `rhizome service start`. Tag conventions, prereleases, verification, upgrades,
-uninstall and platform limits are in [docs/releasing.md](releasing.md).
+package removal and platform limits are in [docs/releasing.md](releasing.md);
+removing Rhizome from the agents and the service is
+[`rhizome uninstall`](#uninstalling).
 To build from source, follow the steps below.
 
 ## OpenCode
@@ -609,6 +611,57 @@ Setup reports each file and backup, then the steps it cannot do for you:
   trust them. Do not keep the same hooks at project scope.
 
 Then run `/rhizome-collab` in the agent with an optional task description.
+
+### Uninstalling
+
+```sh
+./rhizome uninstall                       # interactive: pick agents (preselects where Rhizome is installed), then confirm
+./rhizome uninstall --all --yes           # every agent plus the background service, no questions
+./rhizome uninstall --agents codex --yes  # one agent; claude, opencode or a comma-separated list
+./rhizome uninstall --service --yes       # only stop the observer and remove its startup definition
+./rhizome uninstall --agents all --only skills --yes   # a subset: skills, mcp, hooks, plugins
+./rhizome uninstall --all --dry-run       # print the plan; writes nothing
+./rhizome uninstall --list                # read-only: which components are installed, and where
+```
+
+`rhizome uninstall` reverses what setup installed, resolving the agent
+directories exactly as setup does (`--config`/`RHIZOME_CONFIG`,
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME`). Without `--agents`,
+`--all` or `--service`, a terminal gets the agent picker preselecting the agents
+where Rhizome is detected; without a terminal the command stops before touching
+anything and asks for a selection. On a terminal without `--yes` it prints the
+plan and asks for confirmation; `n` writes nothing. Without a terminal, `--yes`
+(or `--dry-run`) is required. The service step runs first, through the same
+lifecycle as `rhizome service uninstall` (a missing definition is reported
+`not installed`), then the agents in the order claude, codex, opencode:
+
+| Agent | MCP registration | Hooks | Skill and plugins |
+| --- | --- | --- | --- |
+| Claude Code | `mcpServers.rhizome` deleted from `~/.claude.json` (or `<CLAUDE_CONFIG_DIR>/.claude.json`) | every Rhizome hook stripped from `<config dir>/settings.json`; Rhizome-only groups and emptied events dropped, the `hooks` object itself kept | `<config dir>/skills/rhizome-collab/` deleted |
+| Codex | `[mcp_servers.rhizome]` and its subtables removed line-wise from `<CODEX_HOME>/config.toml`; the rest, comments included, kept verbatim | same rules in `<CODEX_HOME>/hooks.json` | `<CODEX_HOME>/skills/rhizome-collab/` deleted |
+| OpenCode | not edited: remove the hand-added `rhizome` entry yourself | none | the skill, `plugins/rhizome.js` and `plugins/rhizome-tui/tui.js` (plus its directory once empty) deleted |
+
+The rules are setup's: only Rhizome-owned entries are touched, every other
+server, hook, matcher and top-level key survives, a changed file is first copied
+to `<file>.bak-<timestamp>` and replaced atomically with its mode preserved, a
+symlinked file is edited through the link, and a malformed file (or an inline
+or dotted `mcp_servers.rhizome` definition setup would also refuse) is reported
+and left untouched while the remaining components and agents still run; the
+command then exits non-zero after the complete report. A skill or plugin path
+that is a symlink is reported `skipped (symlink to …)` and never followed or
+deleted. A file without Rhizome content is `unchanged` (no rewrite, no backup),
+a missing path `absent`, and no configuration file is ever created or deleted,
+even when nothing else is left in it. Running uninstall twice is idempotent and
+`rhizome setup` afterwards reinstalls every component.
+
+Uninstall never edits project files (`.mcp.json`, a project
+`.claude/settings.json` or hooks), OpenCode's own configuration, or anything
+under `~/.rhizome` (configuration, token, host identity, pairings, history
+catalog, logs): remove that directory yourself to discard them. MCP processes an
+agent already launched keep running until that agent restarts. Backups
+accumulate like setup's and are named in the output so you can prune them.
+Removing the binary or the macOS package receipt is described in
+[docs/releasing.md](releasing.md#installing-and-upgrading).
 
 ### Creating the configuration file
 

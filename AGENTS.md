@@ -22,7 +22,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | Path | Responsibility |
 | --- | --- |
 | `main.go`, `service.go`, `gateway.go`, `files.go` | CLI dispatch, MCP, service lifecycle and legacy demo. |
-| `setup.go`, `setup_config.go`, `setup_agents.go` | `rhizome setup`: agent detection and picker, the configuration wizard, and user-scope skill/MCP/hook installation. |
+| `setup.go`, `setup_config.go`, `setup_agents.go`, `uninstall.go` | `rhizome setup`: agent detection and picker, the configuration wizard, and user-scope skill/MCP/hook installation; `rhizome uninstall`: its counterpart, sharing the strip halves of the merges. |
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
@@ -170,7 +170,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
-  CLI usage: `rhizome --version | mcp | setup | service | config | token | invite | join | peers | files | demo [flags]`.
+  CLI usage: `rhizome --version | mcp | setup | uninstall | service | config | token | invite | join | peers | files | demo [flags]`.
   Top-level `debug` (`RHIZOME_DEBUG`, `--debug`) is the one boolean setting.
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
@@ -234,6 +234,24 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   its MCP entry stays manual, see `docs/opencode.md`). Configuration is written before installs so wizard
   directories apply. Project files, `--list` and `--network`-only runs never
   install anything; remaining restart/trust/channel steps are printed.
+- **Uninstall reverses setup through the same ownership rules.** `rhizome
+  uninstall [--agents <list>|all] [--service] [--all] [--only
+  skills,mcp,hooks,plugins] [--dry-run] [--yes] [--list]` (`uninstall.go`)
+  removes only Rhizome-owned entries: `stripHooks`, `stripJSONServer` and
+  `stripCodexServer` are the strip halves `mergeHooks`, `mergeJSONServer` and
+  `mergeCodexConfig` build on, so install output stays byte-for-byte; the
+  skill list comes from the embedded `skills/` tree (`skillNames`) and the
+  OpenCode plugin list from `agent.plugins()`. Order is service first (an
+  injectable `serviceUninstaller` around `service.Manage(ctx, "uninstall",
+  …)`; a missing definition reports `not installed`), then claude, codex,
+  opencode. Files get the same backup and atomic replacement; an absent file
+  is never created, an emptied `hooks`/`mcpServers` object stays, malformed
+  files and inline Codex definitions are reported and left alone, symlinked
+  skill/plugin paths are `skipped`, and a failed component never stops the
+  rest (non-zero exit after the full report). `--dry-run`, `--list` and the
+  terminal confirmation render the same read-only plan. Without a terminal
+  the command needs a selection and `--yes`. It never touches project files,
+  OpenCode's own configuration, or anything under `~/.rhizome`.
 - **Releases are tag-driven, signed and fail closed.** Only SemVer 2.0 tags
   (optional `v`), validated by `internal/release` before any job reaches
   secrets, publish. A prerelease component marks a prerelease; build metadata

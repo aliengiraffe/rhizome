@@ -500,6 +500,33 @@ shows the `rhizome` server and its hooks, and that `list_sessions` reports
 `BOUND` after the first prompt. Cursor is not supported on this base, so no
 Cursor check applies.
 
+## Uninstall (#87)
+
+Automated in `uninstall_test.go`: the strip halves shared with setup
+(`stripHooks` keeps user hooks in mixed groups, drops Rhizome-only groups and
+emptied events, never adds a `hooks` key and keeps an emptied object;
+`stripJSONServer` keeps other servers and top-level keys; `stripCodexServer`
+keeps comments and other tables byte-for-byte, trims the trailing blank it
+leaves, returns a file without the entry unchanged and refuses inline or
+dotted definitions); install-then-strip round trips (JSON semantic equality,
+Codex TOML byte equality); a full in-process uninstall with user content in
+every file (backups with the original mode, idempotent repeat without new
+backups, `rhizome setup` reinstalling afterwards); `--only skills`; symlinked
+skill and plugin paths reported `skipped` with link and target intact;
+malformed `.claude.json` and an inline Codex table reported while the other
+components and agents still run and the command exits non-zero; the injected
+service seam (not installed, plan, removal, manager error, definition still
+present, invalid configuration never reaching the manager); and the real
+entry point in a subprocess with an isolated home (selection and `--yes`
+required without a terminal, `--dry-run` writes nothing, `--service` alone
+leaves agents untouched, one agent only, `--only skills`, `--all --yes`
+leaving `~/.rhizome` byte-identical, `--list`, idempotent repeat, clean
+reinstall). `scripts/smoke_tui.py` repeats the setup/uninstall/reinstall cycle
+with the real binary. Manual check with a real agent: after
+`rhizome uninstall --agents claude --yes`, restart Claude Code and confirm it
+lists no `rhizome` server and shows no hook prompts; after `--service`,
+`rhizome service status` reports the observer stopped and no definition.
+
 ## Collaboration skill device origin (#49)
 
 The skill is prose, so no automated check proves how an agent applies it.

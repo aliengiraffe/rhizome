@@ -25,7 +25,10 @@ binary path and `service run --config <absolute TOML path>`. Keep that binary
 installed at its recorded path. There is no separate service JSON snapshot.
 Uninstall removes only the definition, preserving `config.toml`, agent logs,
 tokens, coordination files, and diagnostic logs. It does not edit agent
-configuration or start an agent.
+configuration or start an agent. `rhizome uninstall --service` runs the same
+lifecycle (reporting `not installed` when no definition exists), and
+`rhizome uninstall --all` combines it with removing Rhizome from every agent;
+see [uninstalling](reference.md#uninstalling).
 
 Create `~/.rhizome/config.toml` before installing, with `rhizome setup` (it asks
 for the installation type and then offers to install and start this service,
