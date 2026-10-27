@@ -684,3 +684,68 @@ ID signing, notarization `Accepted`, stapling, Gatekeeper assessment, draft
 staging and publication, and release downloads. Run a `v0.1.0-rc.1`
 prerelease and record the results here
 ([releasing.md](releasing.md#validating-before-a-stable-release)).
+
+## Auto-update (#67, 2026-10-23)
+
+Automated and local evidence, macOS 26 arm64 plus a `golang:1.27-bookworm`
+container for Linux amd64:
+
+- `go test -race ./internal/update/` covers SemVer precedence and eligibility
+  (no downgrade, prerelease only for prerelease builds, build metadata
+  ignored, `dev`/snapshot never), strict archive extraction for tar.gz and zip
+  (extra members, nested and traversal paths, absolute names, symlinks,
+  directories, duplicates, oversize documentation, wrong executable name),
+  the `codesign --display` policy (ad-hoc, other Team ID, no Developer ID
+  authority, no hardened runtime, no timestamp, other identifier, unsigned),
+  atomic install with a single backup, restore, non-writable directories and
+  the state file. A TLS `httptest` fake of the GitHub API and download host
+  drives the updater end to end: candidate selection over stable, prerelease,
+  draft and mislabelled releases; no releases and 404; rate limiting (429 and
+  403 with `X-RateLimit-Remaining: 0`); redirects to a foreign host or plain
+  HTTP; oversize bodies; a slow body against a deadline; cancellation; success
+  with restart, backup removal and state; install without a restarter and
+  confirmation by the new process; rollback when the restarted service is
+  unhealthy; deferred and required restarts; the detached finisher's success
+  and rollback; rejection with the binary untouched for an unsigned manifest,
+  no trusted keys, an unknown key, a tampered manifest, a tampered archive, an
+  archive with an extra member, a `--version` mismatch, a rejected code
+  signature, an oversize archive, a missing asset and a missing tag commit;
+  the non-writable report made once without downloading; lock contention; and
+  the background loop's backoff and prompt cancellation.
+- `go test -race ./internal/release/` covers signature round trips, wrong and
+  unknown keys, tampered manifests and signatures, truncated and oversize
+  signature files, substituted key ids, the signed-manifest file helpers and
+  the trusted key list; `./internal/config/` covers `[update]` precedence
+  (file, env, flag), source reporting in `rhizome config`, bounds and strict
+  unknown-key rejection; `./internal/service/` covers the service restarter
+  (skips when nothing is supervised, stop/start and version wait, start
+  failure), `waitHealthy` refusing a stale version, the self restarter
+  (`restart_required` without a definition, finisher spawn arguments, spawn
+  failure), the loopback-only environment hooks, status reporting and a
+  foreground run with updates disabled making no request. Root-package tests
+  cover the setup question, `--auto-update`, the terminal wizard field, stored
+  defaults and the sanitized status summary.
+- `python3 scripts/smoke_update.py` runs a real `service run` observer built
+  as version 1.0.0 against a loopback fake release 9.9.9 signed with a
+  throwaway key. On macOS: a tampered signature is refused
+  (`signature_invalid`), the disabled loop writes no state, `rhizome update`
+  reports the release, and the signed but locally built (unsigned) candidate
+  is refused with `codesign_failed` by both the loop and `update --apply`,
+  with the binary untouched and no stray files. On Linux (container): the
+  same refusals, then the signed release is installed, the foreground observer
+  exits with `restart_required`, the restarted observer reports version 9.9.9
+  in `observer-health.json`, confirms the update, removes `rhizome.previous`,
+  `rhizome update` reports up to date and `service status` prints
+  `last_outcome: updated`.
+- `goreleaser check`, `actionlint` and `shellcheck` pass with the signing
+  step added to the workflow; `GOOS=windows` and `GOOS=linux` `go vet` pass
+  for `internal/service`.
+
+Pending (requires the `release` environment, a generated signing key committed
+to `internal/release/keys.go`, and a pushed tag): a real signed prerelease
+verified by `rhizome update --check`, installed over a `.pkg` or archive
+install by `rhizome update --apply` and by the background loop, including the
+`codesign` policy against a Developer ID binary, the `not_writable` report for
+`/usr/local/bin`, the launchd finisher restart with health confirmation, and
+the systemd (`systemd-run --user`) and Task Scheduler finishers on Linux and
+Windows hosts. Record results here.

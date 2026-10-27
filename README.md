@@ -55,6 +55,14 @@ The commands below assume `rhizome` is on your `PATH`. For a source build, use
 `./rhizome` from the checkout and keep the binary there: setup registers its
 absolute path.
 
+Release builds keep themselves current: the background service checks GitHub
+Releases once a day, verifies a newer release (signed manifest, SHA-256,
+macOS Developer ID, `--version`) and restarts onto it. This is the only
+outbound connection Rhizome makes; disable it with `[update] enabled = false`
+in the configuration file, `RHIZOME_UPDATE=0`, or the setup question, and use
+`rhizome update --apply` when you want. Source builds are never updated. See
+[automatic updates](docs/service.md#automatic-updates).
+
 ### 2. Connect your agents
 
 ```sh
@@ -224,6 +232,7 @@ task check
 python3 scripts/smoke_stdio.py
 python3 scripts/smoke_stdio.py --lan
 python3 scripts/smoke_service.py
+python3 scripts/smoke_update.py
 git diff --check
 ```
 

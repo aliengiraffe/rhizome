@@ -118,12 +118,14 @@ jobs:
           APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
           APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
           APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+          RHIZOME_RELEASE_SIGNING_KEY: ${{ secrets.RHIZOME_RELEASE_SIGNING_KEY }}
         run: |
           set -euo pipefail
           missing=""
           for name in APPLE_DEVELOPER_ID_CERT_P12_BASE64 APPLE_DEVELOPER_ID_CERT_PASSWORD \
                       APPLE_INSTALLER_CERT_P12_BASE64 APPLE_INSTALLER_CERT_PASSWORD \
-                      APPLE_NOTARY_API_KEY_P8_BASE64 APPLE_NOTARY_API_KEY_ID APPLE_NOTARY_API_ISSUER_ID; do
+                      APPLE_NOTARY_API_KEY_P8_BASE64 APPLE_NOTARY_API_KEY_ID APPLE_NOTARY_API_ISSUER_ID \
+                      RHIZOME_RELEASE_SIGNING_KEY; do
             [ -n "${!name:-}" ] || missing="$missing $name"
           done
           if [ -n "$missing" ]; then
@@ -194,17 +196,28 @@ jobs:
           bash scripts/release/verify-pkg-payload.sh "dist/rhizome_${RHIZOME_ASSET_VERSION}_macos.pkg" "$bin"
 
       # Checksums are written only after signing, notarization and stapling.
-      - name: Write and verify checksums
+      # Production then signs the manifest with the release key (Ed25519,
+      # secret of the `release` environment) and verifies the signature
+      # against the public keys compiled into this checkout, so a key missing
+      # from internal/release/keys.go fails here rather than at update time.
+      - name: Write, sign and verify checksums
         env:
           TAG: ${{ needs.meta.outputs.tag }}
           COMMIT: ${{ needs.meta.outputs.commit }}
+          RHIZOME_RELEASE_SIGNING_KEY: ${{ secrets.RHIZOME_RELEASE_SIGNING_KEY }}
         run: |
           set -euo pipefail
           if [ -n "$TAG" ]; then id=(-tag "$TAG"); else id=(-snapshot "$COMMIT"); fi
           go run ./internal/release/releasetool checksums "${id[@]}" -dir dist
           mkdir upload
           for f in $(go run ./internal/release/releasetool assets "${id[@]}"); do cp "dist/$f" upload/; done
-          go run ./internal/release/releasetool verify "${id[@]}" -dir upload -exact
+          if [ "$PRODUCTION" = true ]; then
+            go run ./internal/release/releasetool sign "${id[@]}" -dir upload
+            go run ./internal/release/releasetool verify "${id[@]}" -dir upload -exact -signed
+          else
+            go run ./internal/release/releasetool verify "${id[@]}" -dir upload -exact
+            echo "snapshot: manifest not signed"
+          fi
           cat "upload/rhizome_${RHIZOME_ASSET_VERSION}_checksums.txt"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -317,10 +330,10 @@ jobs:
         with:
           name: ${{ env.ASSETS_ARTIFACT }}
           path: assets
-      - name: Verify assets and that the tag still names the built commit
+      - name: Verify assets, manifest signature and that the tag still names the built commit
         run: |
           set -euo pipefail
-          go run ./internal/release/releasetool verify -tag "$TAG" -dir assets -exact
+          go run ./internal/release/releasetool verify -tag "$TAG" -dir assets -exact -signed
           ref=$(gh api "repos/$GH_REPO/git/ref/tags/$TAG")
           sha=$(jq -r .object.sha <<<"$ref")
           if [ "$(jq -r .object.type <<<"$ref")" = tag ]; then
@@ -344,12 +357,13 @@ jobs:
           flags=(--draft --verify-tag --title "Rhizome $TAG" --generate-notes --notes-file scripts/release/notes.md)
           if [ "$PRERELEASE" = true ]; then flags+=(--prerelease --latest=false); fi
           gh release create "$TAG" "${flags[@]}" assets/*
-      - name: Verify uploaded assets against the manifest
+      - name: Verify uploaded assets against the signed manifest
         run: |
           set -euo pipefail
           gh release download "$TAG" --dir uploaded
-          go run ./internal/release/releasetool verify -tag "$TAG" -dir uploaded -exact
+          go run ./internal/release/releasetool verify -tag "$TAG" -dir uploaded -exact -signed
           cmp "assets/rhizome_${ASSET_VERSION}_checksums.txt" "uploaded/rhizome_${ASSET_VERSION}_checksums.txt"
+          cmp "assets/rhizome_${ASSET_VERSION}_checksums.txt.sig" "uploaded/rhizome_${ASSET_VERSION}_checksums.txt.sig"
       - name: Publish
         run: |
           set -euo pipefail
