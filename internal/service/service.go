@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"rhizome/internal/channel"
 	"rhizome/internal/config"
@@ -172,7 +174,8 @@ func (m *manager) renderDefinition(c Config) string {
 		return `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>com.rhizome.observer</string><key>ProgramArguments</key><array>` + args + `</array><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict><key>ThrottleInterval</key><integer>5</integer><key>StandardErrorPath</key><string>` + escaped(filepath.Join(c.Observer.Runtime, "service-errors.log")) + `</string></dict></plist>`
 	case "windows":
 		// InteractiveToken is intentionally per-user: no password or SYSTEM account.
-		return `<?xml version="1.0" encoding="UTF-8"?><Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><Triggers><LogonTrigger><UserId>` + escaped(currentUserID()) + `</UserId><Enabled>true</Enabled></LogonTrigger></Triggers><Principals><Principal id="Author"><UserId>` + escaped(currentUserID()) + `</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings><Actions Context="Author"><Exec><Command>` + escaped(m.binary) + `</Command><Arguments>service run --config ` + escaped(windowsQuote(m.configPath)) + `</Arguments></Exec></Actions></Task>`
+		// schtasks /XML rejects UTF-8 task files; writeDefinition stores this as UTF-16LE.
+		return `<?xml version="1.0" encoding="UTF-16"?><Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><Triggers><LogonTrigger><UserId>` + escaped(currentUserID()) + `</UserId><Enabled>true</Enabled></LogonTrigger></Triggers><Principals><Principal id="Author"><UserId>` + escaped(currentUserID()) + `</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings><Actions Context="Author"><Exec><Command>` + escaped(m.binary) + `</Command><Arguments>service run --config ` + escaped(windowsQuote(m.configPath)) + `</Arguments></Exec></Actions></Task>`
 	}
 	return ""
 }
@@ -233,7 +236,7 @@ func (m *manager) manage(ctx context.Context, action string, c Config) error {
 		if err := localstate.SecureDir(c.Observer.Runtime); err != nil {
 			return err
 		}
-		old, err := os.ReadFile(m.definition)
+		old, err := m.readDefinition()
 		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -258,7 +261,7 @@ func (m *manager) manage(ctx context.Context, action string, c Config) error {
 		if err := os.MkdirAll(filepath.Dir(m.definition), 0700); err != nil {
 			return err
 		}
-		if err := os.WriteFile(m.definition, []byte(m.render(c)), 0600); err != nil {
+		if err := m.writeDefinition(m.render(c)); err != nil {
 			return err
 		}
 	}
@@ -333,6 +336,37 @@ func (m *manager) manage(ctx context.Context, action string, c Config) error {
 	}
 	return nil
 }
+// writeDefinition stores Windows task XML as BOM-prefixed UTF-16LE, the encoding schtasks requires.
+func (m *manager) writeDefinition(s string) error {
+	b := []byte(s)
+	if m.platform == "windows" {
+		units := utf16.Encode([]rune(s))
+		b = make([]byte, 2+2*len(units))
+		b[0], b[1] = 0xFF, 0xFE
+		for i, u := range units {
+			binary.LittleEndian.PutUint16(b[2+2*i:], u)
+		}
+	}
+	return os.WriteFile(m.definition, b, 0600)
+}
+
+// readDefinition returns the installed definition, decoding BOM-prefixed UTF-16LE.
+func (m *manager) readDefinition() (string, error) {
+	b, err := os.ReadFile(m.definition)
+	if err != nil {
+		return "", err
+	}
+	if len(b) >= 2 && b[0] == 0xFF && b[1] == 0xFE {
+		b = b[2:]
+		units := make([]uint16, len(b)/2)
+		for i := range units {
+			units[i] = binary.LittleEndian.Uint16(b[2*i:])
+		}
+		return string(utf16.Decode(units)), nil
+	}
+	return string(b), nil
+}
+
 func running(dir string) bool {
 	f, err := localstate.Lock(filepath.Join(dir, "observer.lock"), false)
 	if f != nil {
