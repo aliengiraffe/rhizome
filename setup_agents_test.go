@@ -387,6 +387,12 @@ func installEnv(t *testing.T, env map[string]string) (config.Config, string) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	// An agent-home variable inherited from the caller's shell would redirect
+	// installs to the real agent directory.
+	for _, k := range ownedEnv {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
 	for k, v := range env {
 		t.Setenv(k, v)
 	}
