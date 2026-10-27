@@ -261,7 +261,8 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   are never selected; among equal matches reported roots beat a cwd-only match), contacts exactly one best candidate, and otherwise answers Cursor's default (`{}`, `continue`, `ask`)
   with exit 0; it must never block Cursor. Tool calls resolve by a single-use
   `beforeMCPExecution` or `preToolUse` ticket (tool name + canonical input
-  digest, 5 s; the IDE runs only `preToolUse`, as `MCP:<tool>`, so only
+  digest, 10 min because the IDE fires it before approval, dropped at the chat's
+  `stop`; the IDE runs only `preToolUse`, as `MCP:<tool>`, so only
   Rhizome tool names qualify; same-conversation duplicates are one call) or the
   single bound conversation; anything else is `identity_ambiguous`. Collection
   is hook push only (`afterAgentResponse`, `postToolUse*`, `stop`), with the
@@ -274,9 +275,10 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   summary whose peer excerpt is sanitized and capped at 80 bytes, since the
   CLI shows only that line). `rhizome setup --agents cursor` installs the skill, the
   MCP entry and the hooks (see the setup invariant); `examples/cursor/` holds
-  the same definitions for manual or project-scope merges. Live behavior is verified only for the Cursor CLI
+  the same definitions for manual or project-scope merges. Live behavior is verified for the Cursor CLI
   (binding, collection, tool-result and end-of-turn delivery, followup on and
-  off); the IDE, two chats per window and two devices are not: keep
+  off) and for IDE 3.27.14 binding and two chats per window; IDE delivery and
+  two devices are not: keep
   `docs/cursor.md` and the checklist results in `docs/verification.md` honest.
 - **Never manually invoke `observe_session` or invent an ID.** Trusted hooks,
   verified transport identity, and authoritative log metadata own binding;

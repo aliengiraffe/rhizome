@@ -35,15 +35,15 @@ import (
 // conversation at tool and turn boundaries.
 const (
 	cursorDir            = "cursor"
-	maxCursorMessage     = 2 * 1024 * 1024 // one hook payload or socket line
-	maxCursorResponse    = 64 * 1024       // one hook response line
-	maxCursorNodes       = 64              // conversations per MCP process
-	maxCursorTickets     = 64              // pending beforeMCPExecution tickets
-	cursorTicketTTL      = 5 * time.Second
-	maxCursorOutbox      = 32        // delivered-but-undrained notifications per node
-	maxCursorOutboxBytes = 64 * 1024 // bytes retained in the outbox
-	maxCursorContext     = 8 * 1024  // bytes injected per hook response
-	maxCursorExcerpt     = 80        // bytes of untrusted peer text in a followup summary
+	maxCursorMessage     = 2 * 1024 * 1024  // one hook payload or socket line
+	maxCursorResponse    = 64 * 1024        // one hook response line
+	maxCursorNodes       = 64               // conversations per MCP process
+	maxCursorTickets     = 64               // pending beforeMCPExecution/preToolUse tickets
+	cursorTicketTTL      = 10 * time.Minute // the IDE's preToolUse precedes the user's approval
+	maxCursorOutbox      = 32               // delivered-but-undrained notifications per node
+	maxCursorOutboxBytes = 64 * 1024        // bytes retained in the outbox
+	maxCursorContext     = 8 * 1024         // bytes injected per hook response
+	maxCursorExcerpt     = 80               // bytes of untrusted peer text in a followup summary
 	cursorSocketTimeout  = 5 * time.Second
 	maxCursorConns       = 16
 )
@@ -329,6 +329,7 @@ func (m *cursorNodes) handle(msg cursorMessage) map[string]any {
 		}
 		return empty
 	case "stop":
+		m.dropTickets(msg.ConversationID)
 		n := m.bind(msg)
 		if n == nil {
 			return empty
@@ -416,6 +417,23 @@ func (m *cursorNodes) ticket(msg cursorMessage) {
 	}
 	m.tickets = append(m.tickets, cursorTicket{conversation: msg.ConversationID, tool: msg.ToolName, hash: msg.InputHash, expires: now.Add(cursorTicketTTL)})
 }
+
+// dropTickets discards a conversation's unused tickets once its turn ends: a
+// call the user declined, or the duplicate of a call that fired both hooks.
+// sessionEnd keeps them, so a late call from an ended chat fails closed
+// instead of falling through to the single-conversation rule.
+func (m *cursorNodes) dropTickets(conversation string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kept := m.tickets[:0]
+	for _, t := range m.tickets {
+		if t.conversation != conversation {
+			kept = append(kept, t)
+		}
+	}
+	m.tickets = kept
+}
+
 func (m *cursorNodes) expireTicketsLocked(now time.Time) {
 	kept := m.tickets[:0]
 	for _, t := range m.tickets {

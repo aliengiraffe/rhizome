@@ -14,8 +14,8 @@ Claude and Codex. Cursor mode does not advertise `claude/channel` and offers no
 [verification.md](verification.md) has been run against the Cursor CLI
 (`agent` 2026.10.22-27dcf5f) only: binding, collection, tool-result and
 end-of-turn delivery passed, with followup delivery both enabled and
-disabled. The IDE, two chats in one window and a second device are not
-verified live yet. The version
+disabled. In the IDE (3.27.14), binding and two chats in one window passed;
+IDE collection and delivery and a second device are not verified live yet. The version
 contracts below are taken from the Cursor hooks reference as of 2026-10-20
 (`hooks.json` `version: 1`).
 
@@ -137,7 +137,10 @@ tools:
 
 1. A pending **ticket** from the `beforeMCPExecution` or `preToolUse` hook:
    the hook registers `{conversation_id, tool_name, sha256(canonical
-   tool_input)}`, valid for five seconds and consumed once. The `tools/call`
+   tool_input)}`, consumed once and valid for ten minutes, because the IDE runs
+   `preToolUse` before its approval prompt; a chat's unused tickets (a
+   declined call, the duplicate of a call that fired both hooks) are dropped
+   when its turn stops. The `tools/call`
    whose name (ignoring any client prefix) and canonical arguments match is
    attributed to that conversation. A ticket with no input matches on the name.
    Matching tickets from one conversation (a client that fires both hooks for
@@ -233,8 +236,9 @@ redacted fixtures exist.
 ## Known limitations and live checks
 
 - The CLI's process layout matches the description above (verified live with
-  `agent` 2026.10.22-27dcf5f). The IDE's layout, hook payload stability across
-  releases and the `beforeMCPExecution` matcher semantics are unverified live; run the checklist in
+  `agent` 2026.10.22-27dcf5f), and so does the IDE's (3.27.14), plus the agent
+  worker's extra process. Hook payload stability across releases and the
+  `beforeMCPExecution` matcher semantics are unverified live; run the checklist in
   [verification.md](verification.md) after installing or upgrading Cursor.
 - Cursor loads third-party Claude Code hooks from `~/.claude/settings.json`
   when that option is enabled (always, for the CLI). Rhizome's Claude hooks are
@@ -246,6 +250,9 @@ redacted fixtures exist.
   delivered after a tool result is visible only through the model's reaction.
   An end-of-turn follow-up appears in the CLI like a user prompt, truncated to
   its first line, which is Rhizome's one-line summary of what was delivered.
+- In the IDE, every Rhizome call shows Cursor's approval prompt unless Run
+  Mode or the MCP allowlist allows it: the IDE never runs
+  `beforeMCPExecution`, and `preToolUse` does not approve.
 - Two IDE windows on the same workspace, or a window whose MCP client does not
   answer `roots/list` alongside another live process, fail closed for hooks.
   A CLI session on a workspace that an IDE window also has open stays unbound,

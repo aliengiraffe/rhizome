@@ -713,7 +713,8 @@ version:
    collected by subscribers. Set `[cursor] followup_delivery = false`, restart
    the MCP server and repeat: expect no follow-up and delivery at the next tool
    result instead.
-5. Turn off auto-run ("Run Everything") first, or no approval prompt can
+5. Set Run Mode to "Allowlist" first (Cursor Settings, Agents, Execution and
+   Approvals; "auto-run" in older releases), or no approval prompt can
    appear. Open a second chat in the same window: expect `identity_ambiguous`
    for tool calls until a `beforeMCPExecution` or `preToolUse` ticket exists;
    record which of the two hooks ran, whether the `matcher`
@@ -758,8 +759,8 @@ started with `--dangerously-load-development-channels server:rhizome`:
   as a child of `agent`, with no `roots` in the registration.
 - Step 7 passed for the CLI: `agent` launched only the Cursor-mode process and
   no Claude-mode `rhizome mcp`.
-- Not run: step 5 (needs the IDE) and step 8 (needs a second device); steps
-  1-4 also remain to be repeated in the IDE.
+- Not run: step 5 (needs the IDE; see the IDE run below) and step 8 (needs a
+  second device).
 - Found: the model acknowledged a delivered peer event in its own answer, which
   subscribers then received. The `sessionStart` instructions now ask it not to
   mention peer events unless the user asks. Re-checked on the same CLI version
@@ -773,3 +774,30 @@ started with `--dangerously-load-development-channels server:rhizome`:
   "Summary-line check: …`, and the model treated it as informational. The CLI
   also cuts the line to the terminal width with its own `...`, so long excerpts
   usually end there before Rhizome's 80-byte limit. Not checked in the IDE.
+
+Live run, 2026-10-26, Cursor IDE 3.27.14 on macOS, same machine and peers:
+
+- Process layout: each window's MCP helper (`Cursor Helper: mcp-process`)
+  starts `rhizome mcp --agent cursor` in the home directory and answers
+  `roots/list` with the workspace. The built-in agent worker
+  (`cursor-agent-worker`, which also registers this machine as a remote
+  worker) starts a second process in the workspace, without roots, which
+  serves no local chat and survives quitting the IDE. Before the fixes, the
+  two tied and every hook failed closed; then the worker's process took a
+  chat during a helper restart and kept its collection lease, so the helper
+  could not bind it. The worker's process is now marked by
+  `CURSOR_AGENT_WORKER_ID` and never selected.
+- Hooks: the IDE never runs `beforeMCPExecution`. `preToolUse` reports
+  Rhizome calls as `tool_name: "MCP:list_sessions"` with `tool_input`, and
+  runs before the approval prompt; it now creates the ticket.
+- Step 1 passed after the fixes: a new chat bound as `agent_type: cursor` to
+  the helper's process, and its `list_sessions` reported `BOUND`,
+  `collection_state: hooks` and `delivery_mode: hook_pull`.
+- Step 5 passed after the fixes, with Run Mode "Allowlist": with two chats in
+  one window bound to one process, each chat's `list_sessions` reported its
+  own session ID. Cursor asked for approval before every Rhizome call, since
+  `preToolUse` leaves approval to Cursor. One call approved after 5.6 s
+  failed with `identity_ambiguous` under the original 5 s ticket lifetime,
+  which is now ten minutes.
+- Not run in the IDE yet: steps 2-4, the no-mention instruction and the
+  summary line.

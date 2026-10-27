@@ -504,6 +504,12 @@ func TestCursorResolveTickets(t *testing.T) {
 	if n, err := m.resolve(call("send", `{}`)); err != nil || n != b || len(m.tickets) != 0 {
 		t.Fatalf("leftover ticket: %v %v %d", n, err, len(m.tickets))
 	}
+	// A turn's end drops its unused tickets (for example a call the user declined).
+	m.handle(cursorMessage{Event: "preToolUse", ConversationID: "conv-b", WorkspaceRoots: []string{root}, ToolName: "publish"})
+	m.handle(cursorMessage{Event: "stop", ConversationID: "conv-b", WorkspaceRoots: []string{root}, Status: "aborted"})
+	if len(m.tickets) != 0 {
+		t.Fatalf("stop kept tickets: %d", len(m.tickets))
+	}
 	// A hook without tool input matches on the tool name alone.
 	m.handle(cursorMessage{Event: "beforeMCPExecution", ConversationID: "conv-a", WorkspaceRoots: []string{root}, ToolName: "list_sessions"})
 	if n, err := m.resolve(call("list_sessions", "")); err != nil || n != a {
