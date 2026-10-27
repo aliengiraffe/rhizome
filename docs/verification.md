@@ -420,6 +420,35 @@ service installation on Linux/Windows with a large pre-existing log tree, and
 any cross-device scenario (history was local by design at that point; see the
 paired-host section below).
 
+## Secret redaction (#84, 2026-10-26)
+
+Automated on macOS (`internal/channel/redact_test.go`):
+
+- Filter table: no-finding passthrough is byte-identical; GitHub, AWS, Slack,
+  generic API key (value only, assignment context kept) and multi-line private
+  key rules; two rules in one text; repeated secrets; empty input.
+- Fail closed: scanner construction error, scan error, 50 ms timeout against a
+  stalled scanner, findings outside or not placeable in the text, and empty
+  spans all return `[REDACTED:unscanned]` within the budget; overlapping spans
+  merge into one marker.
+- 32 goroutines sharing the scanner under `-race`; a 2 MiB record with ~23k
+  findings redacts in about 0.6 s and a benign 2 MiB record is unchanged.
+- `Node.activity` redacts before retention and clipping (a secret straddling
+  the 7 KiB clip leaves no fragment) and counts `Redacted`/`RedactionFailures`;
+  a broken scanner masks the event.
+- `send` and `publish` deliver secret-like text verbatim even with a scanner
+  that fails everything.
+- Live collection for Claude transcripts, Codex rollouts and OpenCode frames
+  emits the marker, and `read_session_history` for all three agents (local and
+  through the paired-host access path) returns the identical text with
+  `redacted: true`; unredacted events carry no flag.
+- Benchmark: about 22 µs per benign 7 KiB record and 47 µs with a secret.
+
+Not covered: real credentials (fixtures use synthetic values; Betterleaks
+allowlists documented example keys), encoded secrets (not decoded by default),
+and a live peer subscribed across machines (the stdio and gateway smokes cover
+the transport; the filter runs before the text enters it).
+
 ## Paired-host history sharing (#44)
 
 Automated on macOS, same machine only:

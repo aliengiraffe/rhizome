@@ -487,6 +487,15 @@ are deterministic; no additional model is called. Automatic output from peer-onl
 turns is suppressed until a human prompt resumes work; intentional responses can still use `publish` or `send`. Turn completion
 remains in publisher history but does not wake subscribers.
 
+Every collected text is scanned for secrets before it enters publisher
+retention, so replay, queued deliveries and gateway proxies only ever carry the
+filtered form: detected values become `[REDACTED:<rule_id>]` and text the
+scanner cannot finish becomes `[REDACTED:unscanned]` (see the
+[history content policy](history.md#content-policy) for the rules, limits and
+caveats; the same filter serves history pages). `publish` and `send` text is
+delivered as written. The scanner is built once per process on first use (about
+40 ms) and adds roughly 20–50 µs per record.
+
 The publisher retains at most **five minutes, 1,000 events and 8 MiB**, evicting
 at the first limit. New subscriptions begin at the current position. Replay
 snapshot and live registration happen under the same lock. Reconnects use
@@ -499,7 +508,8 @@ The receiver has a 256-event queue and a 4,096-entry deduplication window. Autom
 activity batches every two seconds per origin, with content capped at 8 KiB;
 individual summaries are capped near 7 KiB with an explicit truncation marker.
 Announcements and direct messages bypass the batching delay, but obey pausing.
-Received, queued, written, dropped, parser skips and pauses are separate counters.
+Received, queued, written, dropped, parser skips, pauses, redacted and
+redaction failures are separate counters.
 Written means written to MCP, not acknowledged by Claude. Queue overflow may
 ultimately cause replay gaps. Write failures are counted as dropped.
 

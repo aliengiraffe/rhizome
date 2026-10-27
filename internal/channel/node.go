@@ -74,7 +74,12 @@ type pending struct {
 	token        string
 	generation   uint64
 }
-type counters struct{ Suppressed, Received, Queued, Written, Dropped, Pauses, ParserSkips, QueueHandoffs, QueueFailures, CollectionGaps uint64 }
+type counters struct {
+	Suppressed, Received, Queued, Written, Dropped, Pauses, ParserSkips, QueueHandoffs, QueueFailures, CollectionGaps uint64
+	// Redacted counts published activity events whose text was changed by the
+	// secret filter; RedactionFailures counts those masked without a completed scan.
+	Redacted, RedactionFailures uint64
+}
 type Node struct {
 	bridge *gatewayProxy // immutable; only service-owned remote proxies
 
@@ -116,6 +121,7 @@ type Node struct {
 	notifications                []time.Time
 	explicit                     []time.Time
 	stats                        counters
+	filter                       *redactor // test override of the secret redactor; nil uses sharedRedactor
 	collector                    *collector
 	collectorCancel              context.CancelFunc
 	ready                        bool
@@ -313,7 +319,20 @@ func (n *Node) publishLocked(kind, text, reply string) *pb.Event {
 	}
 	return e
 }
+
+// secrets returns the activity redactor; tests inject a fake scanner.
+func (n *Node) secrets() *redactor {
+	if n.filter != nil {
+		return n.filter
+	}
+	return sharedRedactor()
+}
+
+// activity publishes one collected record. The text is secret-filtered before
+// the lock is taken and before retention, so replay, queues and gateway
+// proxies only ever see redacted text. send and announce bypass this path.
 func (n *Node) activity(gen uint64, kind, text string) {
+	text, changed, failed := n.secrets().redact(text)
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.suppressActivity {
@@ -321,6 +340,12 @@ func (n *Node) activity(gen uint64, kind, text string) {
 		return
 	}
 	if n.identity.Generation == gen && n.identity.SessionId != "" {
+		if changed {
+			n.stats.Redacted++
+		}
+		if failed {
+			n.stats.RedactionFailures++
+		}
 		n.publishLocked(kind, text, "")
 	}
 }
