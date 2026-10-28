@@ -65,7 +65,10 @@ Select your agents and review the setup changes. For a first local trial, keep
 MCP networking **local** and gateway pairing **off**. Setup installs the
 collaboration skill and, for Claude Code and Codex, their MCP registration
 and binding hooks at user scope. OpenCode gets the skill and plugins; add its
-[MCP entry manually](docs/opencode.md#install).
+[MCP entry manually](docs/opencode.md#install). To take Rhizome out again,
+`rhizome uninstall` reverses these installs for the agents you pick (`--all`
+also stops the background service) with the same backups, and leaves
+`~/.rhizome` in place ([details](docs/reference.md#uninstalling)).
 
 Restart your agent and complete its integration steps:
 

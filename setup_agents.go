@@ -142,20 +142,23 @@ func isRhizomeHook(v any) bool {
 	return ok && h["type"] == "mcp_tool" && h["server"] == serverName
 }
 
-// mergeHooks removes every Rhizome hook entry from doc["hooks"], dropping groups
-// that held nothing else, then appends the template groups. Other hooks,
-// matchers and top-level keys are untouched.
-func mergeHooks(doc map[string]any, template map[string][]any) error {
+// stripHooks removes every Rhizome hook entry from doc["hooks"], dropping
+// groups that held nothing else and event arrays that become empty. Other
+// hooks, matchers and top-level keys are untouched. It returns the hooks object
+// so mergeHooks can append the template; when the key is absent the returned
+// object is new and not added to doc, so stripping alone never introduces it
+// and an emptied object stays in place.
+func stripHooks(doc map[string]any) (map[string]any, error) {
 	hooks := map[string]any{}
 	if v, ok := doc["hooks"]; ok && v != nil {
 		if hooks, ok = v.(map[string]any); !ok {
-			return errors.New(`"hooks" is not an object`)
+			return nil, errors.New(`"hooks" is not an object`)
 		}
 	}
 	for event, v := range hooks {
 		groups, ok := v.([]any)
 		if !ok {
-			return fmt.Errorf("hooks.%s is not an array", event)
+			return nil, fmt.Errorf("hooks.%s is not an array", event)
 		}
 		kept := make([]any, 0, len(groups))
 		for _, g := range groups {
@@ -183,6 +186,16 @@ func mergeHooks(doc map[string]any, template map[string][]any) error {
 		} else {
 			hooks[event] = kept
 		}
+	}
+	return hooks, nil
+}
+
+// mergeHooks strips every Rhizome hook entry from doc["hooks"] and appends the
+// template groups. Other hooks, matchers and top-level keys are untouched.
+func mergeHooks(doc map[string]any, template map[string][]any) error {
+	hooks, err := stripHooks(doc)
+	if err != nil {
+		return err
 	}
 	for event, groups := range template {
 		existing, _ := hooks[event].([]any)
@@ -218,14 +231,35 @@ func applyServer(entry map[string]any, s mcpServer) {
 	}
 }
 
-// mergeJSONServer sets doc.mcpServers.rhizome to s as a stdio server,
-// preserving every other server and the entry's unrelated keys.
-func mergeJSONServer(doc map[string]any, s mcpServer) error {
+// jsonServers returns doc["mcpServers"], or a new object that is not added to
+// doc when the key is absent. Any other value is an error.
+func jsonServers(doc map[string]any) (map[string]any, error) {
 	servers := map[string]any{}
 	if v, ok := doc["mcpServers"]; ok && v != nil {
 		if servers, ok = v.(map[string]any); !ok {
-			return errors.New(`"mcpServers" is not an object`)
+			return nil, errors.New(`"mcpServers" is not an object`)
 		}
+	}
+	return servers, nil
+}
+
+// stripJSONServer deletes doc.mcpServers.rhizome, keeping every other server
+// and the mcpServers object itself.
+func stripJSONServer(doc map[string]any) error {
+	servers, err := jsonServers(doc)
+	if err != nil {
+		return err
+	}
+	delete(servers, serverName)
+	return nil
+}
+
+// mergeJSONServer sets doc.mcpServers.rhizome to s as a stdio server,
+// preserving every other server and the entry's unrelated keys.
+func mergeJSONServer(doc map[string]any, s mcpServer) error {
+	servers, err := jsonServers(doc)
+	if err != nil {
+		return err
 	}
 	entry, _ := servers[serverName].(map[string]any)
 	if entry == nil {
@@ -243,9 +277,47 @@ var (
 	tomlRhizomeHeader = regexp.MustCompile(`^\s*\[\s*mcp_servers\s*\.\s*rhizome\s*(\.[^\]]*)?\]`)
 )
 
+// stripCodexServer returns existing without its [mcp_servers.rhizome] table
+// and subtables. They are removed line-wise, so the rest of the file, comments
+// included, is kept verbatim; trailing blank lines left by the removal are
+// trimmed to one newline. A file without the entry is returned as is. A
+// definition the removal cannot reach (an inline table or dotted keys) is
+// reported, so the caller leaves the file alone.
+func stripCodexServer(existing []byte) ([]byte, error) {
+	var doc map[string]any
+	if _, err := toml.Decode(string(existing), &doc); err != nil {
+		return nil, fmt.Errorf("not valid TOML: %w", err)
+	}
+	if tomlLookup(doc, "mcp_servers", serverName) == nil {
+		return existing, nil
+	}
+	var b strings.Builder
+	drop := false
+	for _, line := range strings.SplitAfter(string(existing), "\n") {
+		if tomlHeader.MatchString(line) {
+			drop = tomlRhizomeHeader.MatchString(line)
+		}
+		if !drop {
+			b.WriteString(line)
+		}
+	}
+	body := strings.TrimRight(b.String(), "\n")
+	if body != "" {
+		body += "\n"
+	}
+	var check map[string]any
+	if _, err := toml.Decode(body, &check); err != nil {
+		return nil, fmt.Errorf("mcp_servers.rhizome must be a [mcp_servers.rhizome] table; move or remove the existing definition by hand (%v)", err)
+	}
+	if tomlLookup(check, "mcp_servers", serverName) != nil {
+		return nil, errors.New("mcp_servers.rhizome must be a [mcp_servers.rhizome] table; move or remove the existing definition by hand")
+	}
+	return []byte(body), nil
+}
+
 // mergeCodexConfig returns existing with [mcp_servers.rhizome] (and its
 // subtables) replaced by s. The rest of the file, including comments, is kept
-// verbatim: Rhizome's tables are removed line-wise and re-appended at the end.
+// verbatim: Rhizome's tables are stripped line-wise and re-appended at the end.
 // The result is parsed again and must define exactly the intended entry, so a
 // definition elsewhere (an inline table or dotted keys) is reported instead of
 // being duplicated.
@@ -271,17 +343,11 @@ func mergeCodexConfig(existing []byte, s mcpServer) ([]byte, error) {
 	if reflect.DeepEqual(tomlLookup(doc, "mcp_servers", serverName), want) {
 		return existing, nil
 	}
-	var b strings.Builder
-	drop := false
-	for _, line := range strings.SplitAfter(string(existing), "\n") {
-		if tomlHeader.MatchString(line) {
-			drop = tomlRhizomeHeader.MatchString(line)
-		}
-		if !drop {
-			b.WriteString(line)
-		}
+	stripped, err := stripCodexServer(existing)
+	if err != nil {
+		return nil, err
 	}
-	body := strings.TrimRight(b.String(), "\n")
+	body := strings.TrimRight(string(stripped), "\n")
 	if body != "" {
 		body += "\n\n"
 	}
@@ -337,47 +403,70 @@ type fileResult struct {
 	Backup string // copy of the previous content, when it was changed
 }
 
+// fileEdit is previewFile's view of one configuration file: the result
+// editFile would report, the current and edited content, and the mode a
+// rewrite must preserve.
+type fileEdit struct {
+	fileResult
+	existing, out []byte
+	mode          fs.FileMode
+	exists        bool
+}
+
+// previewFile reports what editFile would do with edit, without writing
+// anything (not even a backup). A symlink is followed and the resolved file
+// must be regular, exactly as in editFile.
+func previewFile(path string, edit func(existing []byte) ([]byte, error)) (fileEdit, error) {
+	f := fileEdit{fileResult: fileResult{Path: path, Status: "unchanged"}, mode: 0o600}
+	st, err := os.Lstat(path)
+	f.exists = err == nil
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return f, err
+	}
+	if f.exists && st.Mode()&os.ModeSymlink != 0 {
+		if f.Path, err = filepath.EvalSymlinks(path); err != nil {
+			return f, fmt.Errorf("%s: cannot resolve symlink: %w", path, err)
+		}
+		if st, err = os.Stat(f.Path); err != nil {
+			return f, err
+		}
+	}
+	if f.exists && !st.Mode().IsRegular() {
+		return f, fmt.Errorf("%s is not a regular file", f.Path)
+	}
+	if f.exists {
+		if st.Size() > maxConfigFile {
+			return f, fmt.Errorf("%s is larger than %d bytes", f.Path, maxConfigFile)
+		}
+		if f.existing, err = os.ReadFile(f.Path); err != nil {
+			return f, err
+		}
+		f.mode = st.Mode().Perm()
+	}
+	if f.out, err = edit(f.existing); err != nil {
+		return f, fmt.Errorf("%s: %w", f.Path, err)
+	}
+	if f.exists && bytes.Equal(f.out, f.existing) {
+		return f, nil
+	}
+	f.Status = "updated"
+	if !f.exists {
+		f.Status = "created"
+	}
+	return f, nil
+}
+
 // editFile applies edit to the current content of path (empty when absent) and
 // installs the result atomically when it differs. A symlink is followed so the
 // link itself survives; the resolved file must be regular. A changed file is
 // first copied to <file>.bak-<timestamp> with the same mode, so a failed write
 // never loses the original. New files are created 0600.
 func editFile(path string, edit func(existing []byte) ([]byte, error), now time.Time) (fileResult, error) {
-	res := fileResult{Path: path, Status: "unchanged"}
-	st, err := os.Lstat(path)
-	exists := err == nil
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return res, err
+	f, err := previewFile(path, edit)
+	if err != nil || f.Status == "unchanged" {
+		return f.fileResult, err
 	}
-	if exists && st.Mode()&os.ModeSymlink != 0 {
-		if res.Path, err = filepath.EvalSymlinks(path); err != nil {
-			return res, fmt.Errorf("%s: cannot resolve symlink: %w", path, err)
-		}
-		if st, err = os.Stat(res.Path); err != nil {
-			return res, err
-		}
-	}
-	if exists && !st.Mode().IsRegular() {
-		return res, fmt.Errorf("%s is not a regular file", res.Path)
-	}
-	var existing []byte
-	mode := fs.FileMode(0o600)
-	if exists {
-		if st.Size() > maxConfigFile {
-			return res, fmt.Errorf("%s is larger than %d bytes", res.Path, maxConfigFile)
-		}
-		if existing, err = os.ReadFile(res.Path); err != nil {
-			return res, err
-		}
-		mode = st.Mode().Perm()
-	}
-	out, err := edit(existing)
-	if err != nil {
-		return res, fmt.Errorf("%s: %w", res.Path, err)
-	}
-	if exists && bytes.Equal(out, existing) {
-		return res, nil
-	}
+	res, existing, out, mode, exists := fileResult{Path: f.Path, Status: "unchanged"}, f.existing, f.out, f.mode, f.exists
 	dir := filepath.Dir(res.Path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return res, err
@@ -441,7 +530,14 @@ func writeBackup(path string, content []byte, mode fs.FileMode, now time.Time) (
 // editJSON is editFile for a JSON object: a malformed file is rejected, numbers
 // keep their spelling, and a file whose object is unchanged is not rewritten.
 func editJSON(path string, edit func(doc map[string]any) error, now time.Time) (fileResult, error) {
-	return editFile(path, func(existing []byte) ([]byte, error) {
+	return editFile(path, jsonEdit(edit), now)
+}
+
+// jsonEdit adapts an object edit to editFile: a malformed file is rejected,
+// numbers keep their spelling, and an unchanged object yields the original
+// bytes so the file is not rewritten.
+func jsonEdit(edit func(doc map[string]any) error) func(existing []byte) ([]byte, error) {
+	return func(existing []byte) ([]byte, error) {
 		doc, err := decodeJSON(existing)
 		if err != nil {
 			return nil, err
@@ -461,7 +557,7 @@ func editJSON(path string, edit func(doc map[string]any) error, now time.Time) (
 			return existing, nil
 		}
 		return after, nil
-	}, now)
+	}
 }
 
 func decodeJSON(data []byte) (map[string]any, error) {
@@ -550,15 +646,12 @@ func (in agentInstaller) install(a agent) error {
 // skill. OpenCode has no hooks, and its MCP entry stays a manual step (see
 // docs/opencode.md), so nothing in its user configuration is edited.
 func (in agentInstaller) installOpenCode(a agent) error {
-	for _, p := range []struct {
-		label, dest string
-		content     []byte
-	}{{"plugin", a.Plugin, openCodePlugin}, {"tui", a.TUI, openCodeTUIPlugin}} {
-		status, err := installPlugin(p.dest, p.content)
+	for _, p := range a.plugins() {
+		status, err := installPlugin(p.Dest, p.Content)
 		if err != nil {
-			return fmt.Errorf("%s: %s: %w", a.Label, p.label, err)
+			return fmt.Errorf("%s: %s: %w", a.Label, p.Label, err)
 		}
-		fmt.Fprintf(in.out, "  %-7s %s %s\n", p.label+":", status, p.dest)
+		fmt.Fprintf(in.out, "  %-7s %s %s\n", p.Label+":", status, p.Dest)
 	}
 	for _, note := range agentNotes(a.Name) {
 		fmt.Fprintf(in.out, "  next:  %s\n", note)
