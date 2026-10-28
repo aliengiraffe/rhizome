@@ -711,3 +711,39 @@ ID signing, notarization `Accepted`, stapling, Gatekeeper assessment, draft
 staging and publication, and release downloads. Run a `v0.1.0-rc.1`
 prerelease and record the results here
 ([releasing.md](releasing.md#validating-before-a-stable-release)).
+
+## Homebrew cask (#81, 2026-10-26)
+
+Automated and local evidence, macOS 26 arm64 with Homebrew 7.0.10:
+
+- `go test -race ./internal/release/...` covers cask rendering for `v`-prefixed,
+  unprefixed and build-metadata tags (`+` replaced by `.` in asset URLs), the
+  universal darwin archive as the only Mac download, Linux arm64/amd64 digests
+  taken from the manifest, refusal of prereleases, prereleases with build
+  metadata and snapshots, and failures on a missing manifest, a missing entry,
+  a tampered asset or a stray file. It also covers the downgrade guard
+  (older, equal and newer cores) and the refusal of a hand-written or
+  unparsable existing cask.
+- `actionlint` passes on `release.yml`.
+- Dry run: the cask rendered by `releasetool cask` from the published v0.9.0
+  and v0.9.1 assets passed `brew style` and
+  `brew audit --cask --strict --online` on a scratch local tap; a fixture
+  `2.0.0+build.5` cask passed `brew style` and the offline strict audit.
+  Rendering v0.9.0 against the v0.9.1 cask returned the v0.9.1 cask unchanged.
+- From the scratch tap on this Mac: `brew install --cask` of v0.9.0 linked
+  `/opt/homebrew/bin/rhizome`, which reported `rhizome 0.9.0 (commit cc5fbc9…)`;
+  `brew upgrade --cask` moved it to `rhizome 0.9.1 (commit 43934c8…)`;
+  `codesign --verify --strict` passed with `Developer ID Application`,
+  hardened runtime and a secure timestamp; `brew uninstall --cask` removed the
+  link. `~/.rhizome` was unchanged apart from the already-running observer's
+  own health file and log. The caveat printed on install and upgrade.
+- `os.Executable` keeps the `bin/rhizome` symlink path on macOS (checked with a
+  symlinked test binary), so setup and service registrations survive cask
+  upgrades there. On Linux it resolves to the versioned Caskroom path; that is
+  documented, not tested.
+
+Pending: the `tap` job itself (app token, contents API commit, idempotent
+re-run) runs only on a stable tag with the `homebrew-tap` environment
+configured; the first stable release after this change is its end-to-end
+check. Installation from `aliengiraffe/spaceship` and on Linux with Homebrew
+have not been run.

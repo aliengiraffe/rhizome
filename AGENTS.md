@@ -30,7 +30,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
-| `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums/smoke tool, and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
+| `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums/smoke/cask tool, and the tag-driven release pipeline with its post-publish Homebrew `tap` job ([docs/releasing.md](docs/releasing.md)). |
 | `.github/workflows/vulncheck.yml` | `govulncheck ./...` on pull requests, pushes to `main`, and weekly; a Go toolchain or dependency advisory fails the check. Run `govulncheck ./...` locally when bumping `go.mod`. |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
 
@@ -266,7 +266,16 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   user config, state or the observer. Secrets stay in the `release`
   environment; only the publish job writes releases. It stages a draft,
   verifies the checksum manifest of every asset, and never replaces a
-  published release. Linux and Windows assets are unsigned. PRs and manual
+  published release. Linux and Windows assets are unsigned. Only after
+  `publish` succeeds, and only for stable tags, the `tap` job (environment
+  `homebrew-tap`, never `release`, so it holds no signing secrets and signing
+  jobs hold no tap credentials) re-verifies the published assets, mints a
+  GitHub App token scoped to `homebrew-spaceship`, and writes
+  `Casks/rhizome.rb` rendered by `releasetool cask` from the manifest digests.
+  It never rebuilds, makes no commit for an unchanged cask, never downgrades
+  the tap, and refuses to replace a cask without the generated header. The
+  cask has no postflight or zap: it never touches `~/.rhizome` or the
+  observer service. GoReleaser keeps `release: disable: true`. PRs and manual
   runs build ad-hoc snapshots without secrets. Run `goreleaser check`,
   `actionlint` and `shellcheck -x -P SCRIPTDIR scripts/release/*.sh` for
   pipeline changes. Real signing is validated only by a tagged prerelease

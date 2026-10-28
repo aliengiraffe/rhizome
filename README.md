@@ -36,7 +36,13 @@ access, branches, and how changes are reviewed and merged.
 
 ### 1. Install
 
-Download a build from [GitHub Releases](https://github.com/aliengiraffe/rhizome/releases).
+With [Homebrew](https://brew.sh) on macOS or Linux:
+
+```sh
+brew install --cask aliengiraffe/spaceship/rhizome
+```
+
+Or download a build from [GitHub Releases](https://github.com/aliengiraffe/rhizome/releases).
 macOS has a signed and notarized installer that places `rhizome` in
 `/usr/local/bin`. Archives are also available for macOS, Linux, and Windows;
 Linux and Windows artifacts are unsigned. See the
