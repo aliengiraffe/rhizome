@@ -140,7 +140,7 @@ Both tools also accept the optional exact `host_id` described in
 | Field | Meaning |
 | --- | --- |
 | `session` | The same row shape as a search result, with current `live_status`. |
-| `events` | Permitted records, oldest first, in native append order. Each has an opaque `event_id` (stable for an unchanged file, also across snapshots), nullable `timestamp`, `kind` (`assistant_text`, `tool_summary`, `turn_completed`), and `text` (`null` for turn markers). Distinct records with identical text are distinct events. |
+| `events` | Permitted records, oldest first, in native append order. Each has an opaque `event_id` (stable for an unchanged file, also across snapshots), nullable `timestamp`, `kind` (`assistant_text`, `tool_summary`, `turn_completed`), `text` (`null` for turn markers), and `redacted: true` when the [secret filter](#content-policy) changed or masked that text (absent otherwise). Distinct records with identical text are distinct events. |
 | `next_cursor` | `null` when the snapshot is exhausted or an unrecoverable boundary has been reported. It says nothing about whether the agent stopped. |
 | `snapshot` | `id` and `captured_at`. The first read fixes the file's identity and EOF; later appends are not folded into that sequence. A new initial read captures a new snapshot. |
 | `coverage` | `state` (`complete` or `partial`), `gaps` (`[{code, count}]`, cumulative for the snapshot), `skipped_records` (bookkeeping records of unknown kind, informational, not a gap), and always `content_policy: "assistant_activity_only"`. |
@@ -204,9 +204,22 @@ calls and child sessions are never returned, and a `synthetic` row carrying the
 Rhizome peer envelope makes the following turn peer-only until the next human
 `user` row, mirroring the live collector.
 
-Assistant text is filtered by record class, not scrubbed: a secret the model
-printed in an assistant message is returned as written. Metadata search is not
-full-text search; histories are not transcripts.
+**Secret redaction.** Every `text` value passes through the same filter as
+live activity (`internal/channel/redact.go`), so a page shows exactly what a
+subscriber would have received: text is scanned with
+[Betterleaks](https://github.com/betterleaks/betterleaks) default rules
+(standard-library regular expressions, no network access, no validation of
+findings) and each detected secret value is replaced by `[REDACTED:<rule_id>]`,
+for example `[REDACTED:github-pat]`. Text the scanner could not finish (error,
+unplaceable finding, or more than 5 s for one record) is returned as
+`[REDACTED:unscanned]` rather than unscanned. Either case sets
+`redacted: true` on the event; ordinary text is returned byte for byte. Paired
+hosts read through the same path. Detection is heuristic: it reduces but
+cannot eliminate leakage, false positives mask benign strings, encoded (for
+example base64) secrets are not decoded, and native log files on disk are never
+rewritten. Session names, catalog metadata and explicit `send`/`publish`
+messages are not scanned. Metadata search is not full-text search; histories
+are not transcripts.
 
 ## Errors
 
@@ -600,7 +613,8 @@ work is bounded as listed above, catalog memory is bounded by the file limits,
 and per-process pagination state is bounded by 32 snapshots that expire after
 15 minutes or at process exit.
 
-Setup updates preserve `[gateway.history]` and each agent's `[peer_history]`
-overrides, including explicit false values and lookback windows. Enabling gateway
+No history text is returned before the secret filter has run on it; the filter
+has no disabling switch. Setup updates preserve `[gateway.history]` and each
+agent's `[peer_history]` overrides, including explicit false values and lookback windows. Enabling gateway
 pairing through setup never enables history sharing. These policies remain
 file-only; restart the service to apply deliberate policy edits.

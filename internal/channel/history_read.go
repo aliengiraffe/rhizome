@@ -42,7 +42,9 @@ type historyEvent struct {
 	Timestamp *string `json:"timestamp"`
 	Kind      string  `json:"kind"`
 	Text      *string `json:"text"`
-	at        *time.Time
+	// Redacted marks text the secret filter changed or masked.
+	Redacted bool `json:"redacted,omitempty"`
+	at       *time.Time
 }
 
 // historySink collects the live normalizer's output for one record without
@@ -54,6 +56,14 @@ type historySink struct {
 	offset   int64
 	events   []historyEvent
 	skips    uint64
+	filter   *redactor // test override; nil uses sharedRedactor
+}
+
+func (s *historySink) secrets() *redactor {
+	if s.filter != nil {
+		return s.filter
+	}
+	return sharedRedactor()
 }
 
 func (s *historySink) activity(_ uint64, kind, text string) {
@@ -70,8 +80,9 @@ func (s *historySink) activity(_ uint64, kind, text string) {
 	}
 	ev := historyEvent{ID: fmt.Sprintf("%x-%d", s.offset, len(s.events)), Timestamp: s.ts, Kind: k, at: s.at}
 	if kind != "turn" {
-		t := text
-		ev.Text = &t
+		// The same filter as Node.activity, so history and live text match.
+		t, changed, _ := s.secrets().redact(text)
+		ev.Text, ev.Redacted = &t, changed
 	}
 	s.events = append(s.events, ev)
 }
