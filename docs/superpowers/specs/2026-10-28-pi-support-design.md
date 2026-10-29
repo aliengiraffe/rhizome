@@ -112,9 +112,9 @@ process/many sessions ambiguity. `registerMcpServer` is documented as
 2. ~~Env/cwd passed to the stdio child?~~ Confirmed. Check the nonce cannot leak
    into pi logs or `/mcp` output.
 3. ~~`getSessionId()` equals the JSONL id?~~ Confirmed.
-4. `agent_before_settle` / `agent_settled` vs `agent_end` for the idle-delivery
-   trigger: which boundary is safe to call `sendMessage` from without
-   re-entrancy? Does `deliverAs: "followUp"` wake an idle session reliably?
+4. ~~Does `sendMessage` wake an idle session and reach a streaming one?~~
+   Confirmed (spike). Still open: which boundary is safe to call `sendMessage`
+   from when triggered inside an event handler (re-entrancy).
 5. Project trust: global extension dir loads without trust; confirm an untrusted
    project cannot shadow it with `.pi/extensions`.
 6. Branching: should history index only the active branch, or all entries
@@ -146,9 +146,27 @@ per-session nonce in `env`, and unregistered on `session_shutdown`. Driven with
   replace it and let the bridge accept only the latest), because the first
   registration's child may never spawn while the second's does. Worth an
   upstream issue, but Rhizome must not depend on a fix.
-- **Not yet tested:** the `fork` reason, `pi.sendMessage` delivery
-  into an idle and a streaming session, project-trust shadowing, interactive
-  (non-RPC) mode, a real model turn.
+- **Delivery (second spike, stub model provider registered by the extension, so
+  no credentials or network):** `pi.sendMessage({customType:"rhizome",...})`
+  called from a timer in the extension, in RPC mode.
+  - Idle, `triggerTurn: true`: starts a run immediately (`agent_start`, then a
+    model call). Idle push works.
+  - Idle, `triggerTurn: false`: stored with no turn; it joins the context of the
+    next model call.
+  - Streaming, `deliverAs: "steer"` or `"followUp"`: delivered when the current
+    assistant message ends, inside the same run (one `agent_start`/`agent_end`,
+    one extra model call), never as a new user prompt. With no `deliverAs` and
+    `triggerTurn: true` it behaved like `steer` and raised no error.
+  - The provider receives these custom messages with role `user`. Pi does not
+    mark them as non-user for the model, so Rhizome must frame the text itself
+    as untrusted peer activity, as the Claude channel does.
+  - `agent_settled` reports `isIdle() === true`; `agent_end` and
+    `agent_before_settle` report false.
+  - Harness note: an undrained stdout pipe blocks pi (backpressure) and looks
+    like a hang; the RPC consumer must drain stdout.
+- **Not yet tested:** the `fork` reason, `sendMessage` called from inside an
+  event handler (re-entrancy), interactive (non-RPC) mode, project-trust
+  shadowing, a real provider, and delivery when the user is typing in the TUI.
 
 ## Parity goal
 
