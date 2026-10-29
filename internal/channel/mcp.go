@@ -184,6 +184,7 @@ const (
 	agentClaude agentKind = iota
 	agentCodex
 	agentOpenCode
+	agentPi
 )
 
 // makeServer registers the shared tool set. history is optional: without it
@@ -211,8 +212,8 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 			}
 			return result(map[string]any{}, n.observeCodex(ctx, in.hook()))
 		})
-	case agentOpenCode:
-		// Binding comes only from the trusted plugin bridge; the model cannot bind.
+	case agentOpenCode, agentPi:
+		// Binding comes only from the trusted plugin/extension bridge; the model cannot bind.
 	}
 
 	addFileTools(s, resolve)

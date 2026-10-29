@@ -660,5 +660,6 @@ func gatewayPeerAccepts(p *pb.Identity, opencode bool) bool {
 }
 
 func gatewayExportable(p *pb.Identity) bool {
-	return p != nil && p.SessionId != "" && p.GatewayHost == "" && p.GatewayVersion == 1
+	// Pi sessions are not exported until a gateway subprotocol exists for them.
+	return p != nil && p.SessionId != "" && p.GatewayHost == "" && p.GatewayVersion == 1 && p.AgentType != "pi"
 }

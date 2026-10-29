@@ -16,7 +16,7 @@ history contract.
 Start with [README.md](README.md) for capabilities, collaboration workflows and architecture,
 [docs/reference.md](docs/reference.md) for detailed setup and protocol behavior,
 [docs/codex.md](docs/codex.md) for Codex contracts,
-[docs/opencode.md](docs/opencode.md) for OpenCode, and
+[docs/opencode.md](docs/opencode.md) for OpenCode, [docs/pi.md](docs/pi.md) for the in-progress Pi integration, and
 [docs/verification.md](docs/verification.md) for tested scope and manual checks.
 
 | Path | Responsibility |
@@ -27,7 +27,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
 | `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), recent-only advertisements (`recent.go`), and the OpenCode bridge (`opencode*.go`). |
-| `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
+| `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin; `plugins/pi/rhizome.js` is the Pi relay extension (not yet embedded or installed by `setup`). |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
 | `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums/smoke tool, and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
@@ -357,6 +357,23 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   as `plugins/rhizome-tui/tui.js`) is display-only: it toasts a sanitized,
   200-character excerpt of enqueued Rhizome-envelope synthetic items for its own
   directory's sessions and never decides, sends, opens sockets or files, or logs.
+- **Pi (in progress): identity comes only from the extension's nonce-bound bind.**
+  `rhizome mcp --agent pi` (`internal/channel/pi.go`) is spawned by Pi itself
+  through `pi.registerMcpServer` from `plugins/pi/rhizome.js`, with a fresh
+  128-bit `RHIZOME_PI_NONCE` per session. The process listens on
+  `pi-<pi pid>-<sha256(nonce)[:12]>.sock` (parent PID plus nonce hash, pairing
+  keys only) and binds exactly one session from a `bind` frame whose nonce
+  matches (constant-time); a repeated bind for the same ID only refreshes the
+  title/directory (Pi's RPC mode emits `session_start` twice), a different ID
+  fails closed because the extension registers a new process per session. Pi
+  sends no session identity in MCP `_meta`, so never infer one from cwd or
+  newest file. Deliveries are non-user `pi.sendMessage` custom messages
+  (`followUp`, `triggerTurn`), framed with `peerEnvelope` because Pi shows them
+  to the model as role `user`. Implemented: bind, titles, delivery ack, node and
+  `list_sessions`. Not implemented: collection, history source, `recent`,
+  `setup`/`uninstall`, gateway (`gatewayExportable` excludes `pi` until a
+  subprotocol exists). Smoke: `python3 scripts/smoke_pi.py` (needs `pi`; skips
+  without it, no credentials). Design: `docs/superpowers/specs/2026-10-28-pi-support-design.md`.
 - **Coordinate collection across processes.** Direct integrations acquire the
   per-session OS lease before baselining. Passive scans yield and expose handoff
   gaps. Never route delivery to `observation_only` identities or replay another

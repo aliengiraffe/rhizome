@@ -46,6 +46,8 @@ type bridgeFrame struct {
 	Dropped   int    `json:"dropped,omitempty"`
 	ID        string `json:"id,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	// Nonce is the Pi extension's per-session pairing secret (bind frames only).
+	Nonce string `json:"nonce,omitempty"`
 	// Sessions is the restore list Rhizome sends after hello (type "restore").
 	Sessions []string `json:"sessions,omitempty"`
 }
