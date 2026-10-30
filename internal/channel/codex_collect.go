@@ -23,7 +23,80 @@ type codexItem struct {
 	Namespace string          `json:"namespace"`
 	Source    string          `json:"source"`
 	ExitCode  *int            `json:"exitCode"`
+	// Tool inputs and outputs, published only as detail events.
+	Command          string          `json:"command"`
+	AggregatedOutput string          `json:"aggregatedOutput"`
+	Changes          json.RawMessage `json:"changes"`
+	Arguments        json.RawMessage `json:"arguments"`
+	Result           json.RawMessage `json:"result"`
+	Error            json.RawMessage `json:"error"`
+	ContentItems     json.RawMessage `json:"contentItems"`
+	Query            string          `json:"query"`
+	RevisedPrompt    string          `json:"revisedPrompt"`
 }
+
+// size approximates the item's decoded footprint for the snapshot budget.
+func (i codexItem) size() int {
+	return len(i.Content) + len(i.Text) + len(i.ID) + len(i.Tool) + len(i.Server) + len(i.Namespace) + len(i.Source) + len(i.Type) + len(i.Status) +
+		len(i.Command) + len(i.AggregatedOutput) + len(i.Changes) + len(i.Arguments) + len(i.Result) + len(i.Error) + len(i.ContentItems) + len(i.Query) + len(i.RevisedPrompt) + 128
+}
+
+// userText joins a userMessage item's text. Peer-queue deliveries carry the
+// envelope; such an item is never a human prompt.
+func (i codexItem) userText() string {
+	text := i.Text
+	var content []struct {
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(i.Content, &content)
+	for _, part := range content {
+		text += part.Text
+	}
+	return text
+}
+
+// toolPayloads renders a tool item's input and, once it has finished, its
+// output. Image generation publishes only its revised prompt.
+func (i codexItem) toolPayloads() (input, output string) {
+	switch i.Type {
+	case "commandExecution":
+		return i.Command, i.AggregatedOutput
+	case "fileChange":
+		var changes []struct {
+			Path string `json:"path"`
+			Kind any    `json:"kind"`
+			Diff string `json:"diff"`
+		}
+		_ = json.Unmarshal(i.Changes, &changes)
+		var parts []string
+		for _, c := range changes {
+			parts = append(parts, c.Path+"\n"+c.Diff)
+		}
+		return strings.Join(parts, "\n"), ""
+	case "mcpToolCall":
+		var result struct {
+			Content json.RawMessage `json:"content"`
+		}
+		_ = json.Unmarshal(i.Result, &result)
+		output = payloadText(result.Content)
+		if output == "" {
+			var failure struct {
+				Message string `json:"message"`
+			}
+			_ = json.Unmarshal(i.Error, &failure)
+			output = failure.Message
+		}
+		return payloadText(i.Arguments), output
+	case "dynamicToolCall":
+		return payloadText(i.Arguments), payloadText(i.ContentItems)
+	case "webSearch":
+		return i.Query, ""
+	case "imageGeneration":
+		return i.RevisedPrompt, ""
+	}
+	return "", ""
+}
+
 type codexTurn struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
@@ -208,7 +281,7 @@ func (c *codexCollector) scan(ctx context.Context, n *Node, gen uint64) bool {
 			}
 			for _, e := range p.Data {
 				totalItems++
-				totalBytes += len(e.Item.Content) + len(e.Item.Text) + len(e.Item.ID) + len(e.Item.Tool) + len(e.Item.Server) + len(e.Item.Namespace) + len(e.Item.Source) + len(e.Item.Type) + len(e.Item.Status) + 128
+				totalBytes += e.Item.size()
 				if totalItems > 2048 || totalBytes > 8*1024*1024 {
 					c.gap(n, gen, "snapshot limit exceeded")
 					c.state(n, "snapshot limit exceeded", false)
@@ -250,14 +323,7 @@ func (c *codexCollector) scan(ctx context.Context, n *Node, gen uint64) bool {
 		peer, human := false, false
 		for _, item := range entries[t.ID] {
 			if item.Type == "userMessage" {
-				text := item.Text
-				var content []struct {
-					Text string `json:"text"`
-				}
-				_ = json.Unmarshal(item.Content, &content)
-				for _, part := range content {
-					text += part.Text
-				}
+				text := item.userText()
 				if isPeerInput(text) {
 					peer = true
 				} else if strings.TrimSpace(text) != "" {
@@ -344,11 +410,23 @@ func (c *codexCollector) normalize(n *Node, gen uint64, turn string, item codexI
 			status += fmt.Sprintf(" (exit %d)", *item.ExitCode)
 		}
 		n.activity(gen, "tool", label+": "+status)
+		input, output := item.toolPayloads()
+		if !seen {
+			toolDetail(n, gen, "tool_input", label, input)
+		}
+		if item.Status != "" && item.Status != "inProgress" && (!seen || prev.status != item.Status) {
+			toolDetail(n, gen, "tool_output", label, output)
+		}
+	case "userMessage":
+		// A human prompt, once; peer-queue deliveries carry the envelope.
+		if text := item.userText(); !seen && strings.TrimSpace(text) != "" && !isPeerInput(text) {
+			n.activity(gen, "prompt", text)
+		}
 	case "contextCompaction":
 		if !seen {
 			c.noticeGap(n, gen, "Codex context compacted; collection continues from visible item IDs")
 		}
-	case "reasoning", "userMessage", "hookPrompt", "functionCallOutput", "plan", "collabAgentToolCall", "subAgentActivity", "imageView", "sleep", "enteredReviewMode", "exitedReviewMode":
+	case "reasoning", "hookPrompt", "functionCallOutput", "plan", "collabAgentToolCall", "subAgentActivity", "imageView", "sleep", "enteredReviewMode", "exitedReviewMode":
 	default:
 		n.mu.Lock()
 		n.stats.ParserSkips++

@@ -40,7 +40,7 @@ func (n *Node) Subscribe(req *pb.FollowRequest, ss pb.Channel_SubscribeServer) e
 		return status.Error(codes.FailedPrecondition, "target binding changed")
 	}
 	n.evictLocked(time.Now())
-	l := &listener{queue: make(chan *pb.Event, 64), done: make(chan struct{})}
+	l := &listener{queue: make(chan *pb.Event, 64), done: make(chan struct{}), details: req.Details}
 	n.listeners[l] = true
 	position := &pb.Event{SessionId: n.identity.SessionId, NodeId: n.identity.NodeId, Generation: n.identity.Generation, StreamId: n.stream, Sequence: n.sequence, Kind: "position", UnixMillis: time.Now().UnixMilli()}
 	var replay []*pb.Event
@@ -56,6 +56,9 @@ func (n *Node) Subscribe(req *pb.FollowRequest, ss pb.Channel_SubscribeServer) e
 			replay = append(replay, gap)
 		}
 		for _, e := range n.history {
+			if detailKind(e.Kind) && !req.Details {
+				continue
+			}
 			if req.StreamId != n.stream || e.Sequence > req.AfterSequence {
 				replay = append(replay, e)
 			}
@@ -260,7 +263,7 @@ func (n *Node) follow(ctx context.Context, session string, f *feed, generation u
 			defer conn.Close()
 			streamCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
-			stream, err := pb.NewChannelClient(conn).Subscribe(n.outgoing(streamCtx), &pb.FollowRequest{Target: target, Subscriber: sender, StreamId: streamID, AfterSequence: sequence})
+			stream, err := pb.NewChannelClient(conn).Subscribe(n.outgoing(streamCtx), &pb.FollowRequest{Target: target, Subscriber: sender, StreamId: streamID, AfterSequence: sequence, Details: true})
 			if err != nil {
 				return err
 			}
@@ -294,7 +297,7 @@ func (n *Node) follow(ctx context.Context, session string, f *feed, generation u
 					return errors.New("invalid event origin")
 				}
 				switch e.Kind {
-				case "position", "activity", "tool", "turn", "announcement", "gap", "session-ended":
+				case "position", "activity", "tool", "turn", "announcement", "gap", "session-ended", "prompt", "tool_input", "tool_output":
 				default:
 					return errors.New("unknown event kind")
 				}

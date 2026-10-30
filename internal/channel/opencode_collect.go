@@ -41,6 +41,9 @@ func (c *openCodeCollector) handle(n *Node, gen uint64, f bridgeFrame) {
 			c.peer = true
 		} else if f.Kind == "user" {
 			c.peer = false
+			if strings.TrimSpace(f.Text) != "" && !strings.Contains(f.Text, "<rhizome-peer-event>") {
+				n.activity(gen, "prompt", f.Text)
+			}
 		}
 	case "text":
 		if c.peer || strings.TrimSpace(f.Text) == "" || strings.Contains(f.Text, "<rhizome-peer-event>") {
@@ -60,10 +63,12 @@ func (c *openCodeCollector) handle(n *Node, gen uint64, f bridgeFrame) {
 		case "start":
 			if c.once("tool:" + f.CallID + ":" + name + ":start") {
 				n.activity(gen, "tool", "Tool started: "+name)
+				toolDetail(n, gen, "tool_input", name, f.Text)
 			}
 		case "completed", "failed":
 			if c.once("tool:" + f.CallID + ":" + name + ":end") {
 				n.activity(gen, "tool", "Tool "+f.Phase+": "+name)
+				toolDetail(n, gen, "tool_output", name, f.Text)
 			}
 		}
 	case "turn":

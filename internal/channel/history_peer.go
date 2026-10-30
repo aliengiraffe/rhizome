@@ -34,6 +34,7 @@ type GatewayHistory struct {
 	Policy                              config.HistoryPolicy
 	RecentWindow                        time.Duration
 	Hostname                            string
+	Details                             bool // [sessions].share_prompts_and_tools for served history
 }
 
 // historyAccess narrows one request from an authenticated paired host. now is

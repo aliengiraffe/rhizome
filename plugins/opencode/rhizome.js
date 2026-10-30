@@ -38,15 +38,22 @@ const field = (v) => clip(v, MAX_FIELD)
 // A session ID is a non-empty string within the field cap; anything else is ignored.
 const sid = (v) => (typeof v === "string" && v !== "" && Buffer.byteLength(v) <= MAX_FIELD ? v : "")
 
-// Build a text frame whose serialized form stays under MAX_FRAME; JSON escaping
-// can grow raw text several times.
-function textFrame(sessionID, messageID, text) {
+// Add text to a frame so its serialized form stays under MAX_FRAME; JSON
+// escaping can grow raw text several times.
+function withText(frame, text) {
   let budget = MAX_TEXT
   for (;;) {
-    const frame = { type: "text", sessionID, messageID, text: clip(text, budget) }
-    if (budget === 0 || Buffer.byteLength(JSON.stringify(frame)) <= MAX_FRAME) return frame
+    const out = { ...frame, text: clip(text, budget) }
+    if (budget === 0 || Buffer.byteLength(JSON.stringify(out)) <= MAX_FRAME) return out
     budget = Math.floor(budget / 2)
   }
+}
+const textFrame = (sessionID, messageID, text) => withText({ type: "text", sessionID, messageID }, text)
+// Tool inputs and results are relayed as text; Rhizome decides what is published.
+const payload = (v) => {
+  if (v === undefined || v === null) return ""
+  if (typeof v === "string") return v
+  try { return JSON.stringify(v) ?? "" } catch { return "" }
 }
 
 export default {
@@ -190,7 +197,7 @@ export default {
           if (!local.has(id) || inboxID === "") return
           pending.delete(inboxID)
           if (pending.size >= MAX_INBOX) pending.delete(pending.keys().next().value)
-          pending.set(inboxID, { sessionID: id, kind, rhizome })
+          pending.set(inboxID, { sessionID: id, kind, rhizome, text: clip(d.item?.payload?.text, MAX_TEXT) })
           return
         }
         case "session.inbox.delivered": {
@@ -199,7 +206,7 @@ export default {
           if (!p) return
           pending.delete(inboxID)
           if (p.sessionID !== id || !local.has(id)) return
-          send({ type: "input", sessionID: id, kind: p.kind, rhizome: p.rhizome })
+          send(withText({ type: "input", sessionID: id, kind: p.kind, rhizome: p.rhizome }, p.text))
           return
         }
         case "session.text.ended":
@@ -224,16 +231,16 @@ export default {
       }
     }
 
-    const tool = (phase) => async (ev) => {
+    const tool = (phase, data) => async (ev) => {
       try {
         const id = sid(ev?.sessionID)
         if (!local.has(id)) return
-        send({ type: "tool", sessionID: id, callID: field(ev.id), name: field(ev.tool), phase: phase(ev) })
+        send(withText({ type: "tool", sessionID: id, callID: field(ev.id), name: field(ev.tool), phase: phase(ev) }, payload(data(ev))))
       } catch {}
     }
     const registrations = [
-      ctx.tool.hook("execute.before", tool(() => "start")),
-      ctx.tool.hook("execute.after", tool((ev) => (ev.status === "completed" ? "completed" : "failed"))),
+      ctx.tool.hook("execute.before", tool(() => "start", (ev) => ev.input)),
+      ctx.tool.hook("execute.after", tool((ev) => (ev.status === "completed" ? "completed" : "failed"), (ev) => ev.result ?? ev.output ?? ev.error)),
     ]
     const controller = new AbortController()
     let subBackoff = 250

@@ -27,6 +27,7 @@ type historyService struct {
 	snaps   *snapshotStore
 	sem     chan struct{}
 	clock   func() time.Time
+	details bool // [sessions].share_prompts_and_tools: reads include detail kinds
 }
 
 func newHistoryService(scope historyScope) *historyService {

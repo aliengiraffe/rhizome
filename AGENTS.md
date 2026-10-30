@@ -165,8 +165,8 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   MCP and service share `runtime_dir` through `~/.rhizome/config.toml`; tokens
   never enter configuration. Keys are grouped per agent (`[claude]`, `[codex]`);
   which agent a process serves is the per-launch `rhizome mcp --agent` flag and
-  must never become a configuration key. `[sessions].recent_window` is file-only
-  (`internal/config/sessions.go`). `RHIZOME_CONFIG`/`--config` select an
+  must never become a configuration key. `[sessions].recent_window` and
+  `[sessions].share_prompts_and_tools` are file-only (`internal/config/sessions.go`). `RHIZOME_CONFIG`/`--config` select an
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
@@ -320,6 +320,20 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   expose `redacted: true`; node counters `Redacted`/`RedactionFailures`.
   Session names, file transfers and native logs are out of scope. The
   dependency is pure Go; `govulncheck ./...` must pass when bumping it.
+- **Prompts and tool bodies are opt-in detail kinds.** Normalizers emit
+  `prompt`, `tool_input` and `tool_output` (`<tool>: <payload>`, rendered by
+  `payloadText` in `internal/channel/details.go`) for every agent; the two sinks
+  drop them unless the serving host set file-only
+  `[sessions].share_prompts_and_tools` (default `false`; `Node.details`,
+  `historyService.details`, `ObserverOptions.Details`, `GatewayHistory.Details`),
+  cut them to 2×`maxText` before the scan and clip to `maxText` after it (history
+  too, as `user_prompt`/`tool_input`/`tool_output` with
+  `content_policy: "prompts_and_tools"`). Peer envelopes, `isMeta` and channel
+  injections are never prompts; peer-only turns, Rhizome tools and reasoning stay
+  excluded. The kinds are automatic for delivery, but publishers send them only
+  to subscribers that set `FollowRequest.details` (older subscribers reject
+  unknown kinds), in replay and live; the gateway forwards the field unchanged.
+  The OpenCode plugin relays input and tool text but never filters.
 - **No transcript content or session names in logs.** Diagnose with counters and
   metadata to avoid leaking session content (`internal/channel/transcript.go`,
   `internal/channel/codex_collect.go`, `internal/channel/opencode_collect.go`,
