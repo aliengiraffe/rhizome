@@ -116,9 +116,10 @@ Codex identity comes from `session_meta` (`id` or `session_id`, `cwd`), rejectin
 subagent sources. Codex `response_item` messages and tool calls/results provide
 summaries; mirrored `event_msg` assistant text is ignored. These fixtures follow
 locally inspected Claude 2.1.302 and Codex 0.163.0 JSONL structures. Unknown schemas
-are not guessed. Thinking/reasoning, user text, full tool bodies, received peer
-envelopes, Rhizome tool calls, and peer-only reactions are excluded. Tool arguments
-and results are never included in summaries. Tool results without a known call
+are not guessed. Thinking/reasoning, received peer envelopes, Rhizome tool calls,
+and peer-only reactions are excluded. User prompts and tool arguments/results are
+excluded unless `[sessions].share_prompts_and_tools` is set, and are never part of
+the `Tool …` summaries. Tool results without a known call
 are ignored. Codex result summaries say completed, without inferring success from
 arbitrary output text.
 

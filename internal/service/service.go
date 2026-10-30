@@ -31,7 +31,7 @@ type Config struct {
 
 // FromConfig adapts resolved configuration for the observer.
 func FromConfig(c config.Config) Config {
-	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, RecentWindow: c.RecentWindow, Debug: c.Debug, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir}}
+	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, RecentWindow: c.RecentWindow, Debug: c.Debug, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, Details: c.Sessions.SharePromptsAndTools}}
 }
 
 type command struct {

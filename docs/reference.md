@@ -37,6 +37,7 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `network.gossip_port` | `RHIZOME_GOSSIP_PORT` | mcp `--gossip-port` | `7946` (Tailscale only) |
 | `network.discovery_interval` | `RHIZOME_DISCOVERY_INTERVAL` | mcp `--discovery-interval` | `20s` (Tailscale only) |
 | `sessions.recent_window` | — | — | `24h`; `0s` disables recent-only rows ([Session status](../README.md#session-status)) |
+| `sessions.share_prompts_and_tools` | — | — | `false`: no prompts or tool inputs/outputs ([Activity](#activity-replay-and-bounded-delivery)) |
 | `gateway.history.enabled` | — | — | `false`: paired hosts cannot search or read history |
 | `gateway.history.lookback` | — | — | `30d`; positive whole days or `all` |
 | `claude.peer_history.enabled`, `codex.peer_history.enabled` | — | — | inherit `gateway.history.enabled`; can only narrow it |
@@ -98,6 +99,13 @@ nonnegative Go duration (`24h`, `90m`, `0s`); negative, malformed or overflowing
 values fail at startup. MCP processes and the service read it once at start, so
 restart them after a change; there is no hot reload. See
 [Session status](../README.md#session-status) for what `recent` does and does not promise.
+
+`sessions.share_prompts_and_tools` is a file-only boolean (default `false`). When
+`true`, this host's collectors also publish each session's human prompts and its
+tool inputs and outputs, after secret redaction, in live activity and in the
+history this host serves (to local agents and, under `[gateway.history]`, to
+paired hosts). The serving host's value decides; paired hosts and subscribers
+cannot widen it. Like `recent_window`, it is read once at process start.
 
 The `gateway.history` and `*.peer_history` keys are file-only. They let directly
 [paired hosts](gateway.md) search and read this device's session history
@@ -211,7 +219,7 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 | `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. Not offered in OpenCode mode. |
 | `send_file`, `list_files`, `accept_file`, `cancel_file` | Explicit file offers between sessions on paired hosts; see [file transfers](files.md). |
 | `search_sessions(filters…, host_id?)` | Metadata search of the local history catalog by exact ID, agent, project path, title substring, and activity date, with deterministic pagination. Rows carry history availability and current live status separately. Requires the observer service's catalog. With `host_id`, searches one directly paired host that opted in. |
-| `read_session_history(session_id, agent_type, limit?, cursor?, host_id?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes prompts, reasoning, tool bodies, subagents, and peer traffic. With `host_id`, reads from one opted-in paired host within its owner's lookback. |
+| `read_session_history(session_id, agent_type, limit?, cursor?, host_id?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes reasoning, subagents, and peer traffic, and excludes prompts and tool bodies unless the serving host sets `[sessions].share_prompts_and_tools`. With `host_id`, reads from one opted-in paired host within its owner's lookback. |
 
 The two history tools are read-only and local unless `host_id` names a paired
 host whose owner enabled `[gateway.history]`. See
@@ -480,7 +488,21 @@ windows. Unknown formats increment parser-skip counters without logging content.
 
 Activity includes assistant text, tool start/completion/failure names, and turn
 completion. Thinking, user prompts, channel injections, bookkeeping, full tool
-result bodies, child transcripts and Rhizome tool traffic are excluded. Summaries
+result bodies, child transcripts and Rhizome tool traffic are excluded. With
+`[sessions].share_prompts_and_tools = true` three more kinds are published:
+`prompt` (the human's prompt text: Claude user text blocks that are not
+`isMeta`, channel injections or peer envelopes; Codex `userMessage` items or
+rollout `user_message` events without a peer envelope; OpenCode human inbox
+items), `tool_input` and `tool_output` (`<tool>: <payload>`, for example the
+Bash command and its output, file edits and diffs, MCP arguments and results).
+Prompts and tool payloads of peer-triggered turns, Rhizome's own tools, thinking
+and channel injections stay excluded. Each payload is cut to 14 KiB before the
+secret scan and to the usual 7 KiB, keeping the leading excerpt, afterwards. The
+new kinds wake subscribers like other activity, under the same batching, pause
+and circuit-breaker limits; tool-heavy sessions reach the 30-per-minute pause
+sooner. Subscribers advertise support with `FollowRequest.details`; publishers
+withhold the new kinds from older subscribers and gateway peers, which would
+otherwise reject an unknown kind. Summaries
 are deterministic; no additional model is called. Automatic output from peer-only
 turns is suppressed until a human prompt resumes work; intentional responses can still use `publish` or `send`. Turn completion
 remains in publisher history but does not wake subscribers.

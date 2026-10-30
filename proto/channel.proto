@@ -29,6 +29,9 @@ message FollowRequest {
  Identity subscriber = 2;
  string stream_id = 3;
  uint64 after_sequence = 4;
+ // details: the subscriber accepts prompt, tool_input and tool_output events.
+ // Publishers withhold those kinds from older subscribers, which reject them.
+ bool details = 5;
 }
 message Event {
  string session_id = 1;

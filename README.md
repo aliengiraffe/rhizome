@@ -181,8 +181,13 @@ with host pairing in the same configuration.
 ### What gets shared
 
 Subscriptions carry selected assistant text, tool names/status, and turn markers.
-Automatic collection excludes user prompts, reasoning, full tool bodies,
-subagent transcripts, and received peer traffic. Explicit `send` and `publish`
+By default automatic collection excludes user prompts, reasoning, full tool bodies,
+subagent transcripts, and received peer traffic. Setting the file-only
+`[sessions].share_prompts_and_tools = true` on a host also publishes its
+sessions' human prompts (`prompt`) and tool inputs and outputs (`tool_input`,
+`tool_output`), clipped to the usual 7 KiB, in live activity and in the history
+it serves to local agents and paired hosts. Reasoning, peer-delivered input,
+peer-triggered turns and Rhizome's own tools stay excluded either way. Explicit `send` and `publish`
 calls carry the text the sender chooses. Collected text (streamed activity and
 [session history](docs/history.md#content-policy)) is scanned with
 [Betterleaks](https://github.com/betterleaks/betterleaks) default rules and
