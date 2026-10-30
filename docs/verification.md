@@ -449,6 +449,42 @@ allowlists documented example keys), encoded secrets (not decoded by default),
 and a live peer subscribed across machines (the stdio and gateway smokes cover
 the transport; the filter runs before the text enters it).
 
+## Prompts and tool inputs/outputs (#92, 2026-10-29)
+
+Automated on macOS (`internal/channel/details_test.go`, `internal/config/sessions_test.go`,
+`plugins/opencode/rhizome.test.mjs`), with `[sessions].share_prompts_and_tools` set
+on the test node or history service:
+
+- Claude transcripts: one `prompt` per human user record (text blocks joined),
+  `tool_input`/`tool_output` from `tool_use.input` and `tool_result.content`
+  (text blocks only); `isMeta` records, channel/peer envelopes, the whole
+  peer-triggered turn, `mcp__rhizome__*` calls and thinking publish nothing.
+  Disabled, output is the previous summary-only policy.
+- Codex App Server items (`userMessage`, `commandExecution` input then output on
+  completion, `mcpToolCall`, `fileChange`), a peer-only turn through a full
+  `scan`, `rhizome` MCP calls; Codex rollouts (`event_msg` `user_message`,
+  `function_call`/`custom_tool_call` and their outputs, `mcp__rhizome__*`).
+- OpenCode bridge frames: human input text, tool start/end text, `rhizome_*` and
+  `execute` dropped, and a peer delivery suppressing the following tools. The
+  plugin relays prompt and tool text within the 60 KiB frame budget and relays
+  an unserializable payload as empty text.
+- Redaction and bounds: secrets in all three kinds become markers; a secret
+  straddling the 7 KiB clip leaves no fragment; a 2 MiB output is bounded
+  before the scan; a disabled node publishes none of the kinds.
+- Compatibility: over gRPC a subscriber without `FollowRequest.details` gets
+  neither replayed nor live detail events; one with it gets both, and an end to
+  end subscription queues a redacted `prompt` as automatic activity.
+- History: `read_session_history` for all three agents, locally and through the
+  paired-host access path, returns `user_prompt`, `tool_input` and `tool_output`
+  with `redacted: true` and `content_policy: "prompts_and_tools"`; turning the
+  serving host's switch off restores `assistant_activity_only`.
+
+Not covered: real Claude Code, Codex and OpenCode sessions with the switch on.
+The Codex App Server field names come from `codex app-server
+generate-json-schema` (codex-cli 0.165.0). The OpenCode hook payload fields
+(`input`, `result`/`output`/`error`) and the stored tool `state.content` follow
+the existing fixtures and still need the live smoke in [opencode.md](opencode.md).
+
 ## Paired-host history sharing (#44)
 
 Automated on macOS, same machine only:

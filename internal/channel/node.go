@@ -65,8 +65,9 @@ type feed struct {
 	token            string
 }
 type listener struct {
-	queue chan *pb.Event
-	done  chan struct{}
+	queue   chan *pb.Event
+	done    chan struct{}
+	details bool // subscriber accepts detail kinds (FollowRequest.details)
 }
 type pending struct {
 	event        *pb.Event
@@ -86,6 +87,7 @@ type Node struct {
 	collectionLease  *os.File
 	archive          *historyService // read-only history catalog client; nil in parser tests
 	recentWindow     time.Duration   // [sessions].recent_window; zero disables recent-only rows
+	details          bool            // [sessions].share_prompts_and_tools; publish detail kinds
 	debug            bool            // append substatus to session statuses
 	suppressActivity bool
 	codex            *codexCollector
@@ -309,6 +311,9 @@ func (n *Node) publishLocked(kind, text, reply string) *pb.Event {
 	n.historyBytes += proto.Size(e)
 	n.evictLocked(time.Now())
 	for l := range n.listeners {
+		if detailKind(kind) && !l.details {
+			continue
+		}
 		select {
 		case l.queue <- e:
 		default:
@@ -318,6 +323,20 @@ func (n *Node) publishLocked(kind, text, reply string) *pb.Event {
 		}
 	}
 	return e
+}
+
+// detailKind reports the kinds published only with
+// [sessions].share_prompts_and_tools: a human prompt and a tool's input and
+// output. Subscribers that did not set FollowRequest.details never receive them.
+func detailKind(kind string) bool {
+	return kind == "prompt" || kind == "tool_input" || kind == "tool_output"
+}
+
+// detailText bounds scanning work for prompts and tool payloads, which can be
+// megabytes, before redaction. Twice maxText keeps a secret that straddles the
+// final maxText clip whole while it is scanned, so no partial value survives.
+func detailText(text string) string {
+	return clip(text, 2*maxText)
 }
 
 // secrets returns the activity redactor; tests inject a fake scanner.
@@ -332,6 +351,12 @@ func (n *Node) secrets() *redactor {
 // the lock is taken and before retention, so replay, queues and gateway
 // proxies only ever see redacted text. send and announce bypass this path.
 func (n *Node) activity(gen uint64, kind, text string) {
+	if detailKind(kind) {
+		if !n.details {
+			return
+		}
+		text = detailText(text)
+	}
 	text, changed, failed := n.secrets().redact(text)
 	n.mu.Lock()
 	defer n.mu.Unlock()

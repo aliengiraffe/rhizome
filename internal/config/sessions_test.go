@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -74,5 +75,39 @@ func TestRecentWindowRejectsInvalidValues(t *testing.T) {
 	// The largest representable duration is accepted; one unit more is not.
 	if d, err := ParseRecentWindow("2562047h47m16.854775807s"); err != nil || d != time.Duration(1<<63-1) {
 		t.Fatalf("maximum duration: %s %v", d, err)
+	}
+}
+
+func TestSharePromptsAndTools(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cases := []struct {
+		name, body string
+		want       bool
+		source     string
+	}{
+		{"omitted", "", false, "default"},
+		{"enabled", "[sessions]\nshare_prompts_and_tools = true\n", true, "file"},
+		{"explicitly disabled", "[sessions]\nshare_prompts_and_tools = false\n", false, "file"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := Resolve(map[string]string{"config": fixture(t, tc.body)}, noenv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Sessions.SharePromptsAndTools != tc.want || c.Sources["sessions.share_prompts_and_tools"] != tc.source {
+				t.Fatalf("share %t (%s), want %t (%s)", c.Sessions.SharePromptsAndTools, c.Sources["sessions.share_prompts_and_tools"], tc.want, tc.source)
+			}
+			var out bytes.Buffer
+			if err := c.Write(&out); err != nil {
+				t.Fatal(err)
+			}
+			if want := fmt.Sprintf("sessions.share_prompts_and_tools = %t # source: %s", tc.want, tc.source); !strings.Contains(out.String(), want) {
+				t.Fatalf("config output lacks %q:\n%s", want, out.String())
+			}
+		})
+	}
+	if _, err := Resolve(map[string]string{"config": fixture(t, "[sessions]\nshare_prompts_and_tools = \"yes\"\n")}, noenv); err == nil {
+		t.Fatal("a non-boolean share_prompts_and_tools was accepted")
 	}
 }
