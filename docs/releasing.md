@@ -198,8 +198,11 @@ keychain and the `.p8` key whether the job succeeds or fails.
   example when moving from a source build to the package), run
   `rhizome service uninstall` with the old binary, then
   `rhizome service install` with the new one.
-- **Uninstalling the package**: run `rhizome service uninstall` if you
-  installed the service. Then run `sudo rm /usr/local/bin/rhizome` and
+- **Uninstalling the package**: first run `rhizome uninstall --all` (or
+  `rhizome uninstall` to pick agents) so the coding agents stop launching the
+  binary and the service definition is removed; see
+  [uninstalling](reference.md#uninstalling). Then run
+  `sudo rm /usr/local/bin/rhizome` and
   `sudo pkgutil --forget com.aliengiraffe.rhizome`. `~/.rhizome` is left
   untouched; delete it yourself only if you want to remove configuration,
   tokens and state.

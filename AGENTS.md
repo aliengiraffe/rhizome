@@ -22,11 +22,11 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | Path | Responsibility |
 | --- | --- |
 | `main.go`, `service.go`, `gateway.go`, `files.go` | CLI dispatch, MCP, service lifecycle and legacy demo. |
-| `setup.go`, `setup_config.go`, `setup_agents.go` | `rhizome setup`: agent detection and picker, the configuration wizard, and user-scope skill/MCP/hook installation. |
+| `setup.go`, `setup_config.go`, `setup_agents.go`, `uninstall.go` | `rhizome setup`: agent detection and picker, the configuration wizard, and user-scope skill/MCP/hook installation; `rhizome uninstall`: its counterpart, sharing the strip halves of the merges. |
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), recent-only advertisements (`recent.go`), and the OpenCode bridge (`opencode*.go`). |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), recent-only advertisements (`recent.go`), secret redaction of collected text (`redact.go`), and the OpenCode bridge (`opencode*.go`). |
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
@@ -165,12 +165,12 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   MCP and service share `runtime_dir` through `~/.rhizome/config.toml`; tokens
   never enter configuration. Keys are grouped per agent (`[claude]`, `[codex]`);
   which agent a process serves is the per-launch `rhizome mcp --agent` flag and
-  must never become a configuration key. `[sessions].recent_window` is file-only
-  (`internal/config/sessions.go`). `RHIZOME_CONFIG`/`--config` select an
+  must never become a configuration key. `[sessions].recent_window` and
+  `[sessions].share_prompts_and_tools` are file-only (`internal/config/sessions.go`). `RHIZOME_CONFIG`/`--config` select an
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
-  CLI usage: `rhizome --version | mcp | setup | service | config | token | invite | join | peers | files | demo [flags]`.
+  CLI usage: `rhizome --version | mcp | setup | uninstall | service | config | token | invite | join | peers | files | demo [flags]`.
   Top-level `debug` (`RHIZOME_DEBUG`, `--debug`) is the one boolean setting.
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
@@ -234,6 +234,24 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   its MCP entry stays manual, see `docs/opencode.md`). Configuration is written before installs so wizard
   directories apply. Project files, `--list` and `--network`-only runs never
   install anything; remaining restart/trust/channel steps are printed.
+- **Uninstall reverses setup through the same ownership rules.** `rhizome
+  uninstall [--agents <list>|all] [--service] [--all] [--only
+  skills,mcp,hooks,plugins] [--dry-run] [--yes] [--list]` (`uninstall.go`)
+  removes only Rhizome-owned entries: `stripHooks`, `stripJSONServer` and
+  `stripCodexServer` are the strip halves `mergeHooks`, `mergeJSONServer` and
+  `mergeCodexConfig` build on, so install output stays byte-for-byte; the
+  skill list comes from the embedded `skills/` tree (`skillNames`) and the
+  OpenCode plugin list from `agent.plugins()`. Order is service first (an
+  injectable `serviceUninstaller` around `service.Manage(ctx, "uninstall",
+  …)`; a missing definition reports `not installed`), then claude, codex,
+  opencode. Files get the same backup and atomic replacement; an absent file
+  is never created, an emptied `hooks`/`mcpServers` object stays, malformed
+  files and inline Codex definitions are reported and left alone, symlinked
+  skill/plugin paths are `skipped`, and a failed component never stops the
+  rest (non-zero exit after the full report). `--dry-run`, `--list` and the
+  terminal confirmation render the same read-only plan. Without a terminal
+  the command needs a selection and `--yes`. It never touches project files,
+  OpenCode's own configuration, or anything under `~/.rhizome`.
 - **Releases are tag-driven, signed and fail closed.** Only SemVer 2.0 tags
   (optional `v`), validated by `internal/release` before any job reaches
   secrets, publish. A prerelease component marks a prerelease; build metadata
@@ -305,6 +323,35 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   8 MiB, stream queues are 64 events, receiver queues 256, and dedup windows 4,096
   (`internal/channel/node.go`, `internal/channel/network.go`,
   `internal/channel/delivery.go`, `internal/channel/transcript.go`).
+- **Collected text is secret-filtered; explicit messages are not.** Every text
+  that enters `Node.activity` or `historySink.activity` passes through the
+  shared Betterleaks-backed `redactor` (`internal/channel/redact.go`) before
+  retention, queues, gateway proxies or history responses see it: detected
+  values become `[REDACTED:<rule_id>]`, and any scanner error, unplaceable
+  finding or scan over 5 s masks the whole text as `[REDACTED:unscanned]`
+  (never emit unscanned). `send` and `announce` (`publish`) bypass the filter
+  by design. Keep the filter at those two choke points, never per normalizer;
+  use the standard-library regexp engine only (do not import
+  `betterleaks/v2/regexp/re2`, which links go-re2/wazero), never enable
+  validation, analysis or decoding, and never log findings or text (the
+  `activity_redaction_failed` warning carries a reason only). History events
+  expose `redacted: true`; node counters `Redacted`/`RedactionFailures`.
+  Session names, file transfers and native logs are out of scope. The
+  dependency is pure Go; `govulncheck ./...` must pass when bumping it.
+- **Prompts and tool bodies are opt-in detail kinds.** Normalizers emit
+  `prompt`, `tool_input` and `tool_output` (`<tool>: <payload>`, rendered by
+  `payloadText` in `internal/channel/details.go`) for every agent; the two sinks
+  drop them unless the serving host set file-only
+  `[sessions].share_prompts_and_tools` (default `false`; `Node.details`,
+  `historyService.details`, `ObserverOptions.Details`, `GatewayHistory.Details`),
+  cut them to 2×`maxText` before the scan and clip to `maxText` after it (history
+  too, as `user_prompt`/`tool_input`/`tool_output` with
+  `content_policy: "prompts_and_tools"`). Peer envelopes, `isMeta` and channel
+  injections are never prompts; peer-only turns, Rhizome tools and reasoning stay
+  excluded. The kinds are automatic for delivery, but publishers send them only
+  to subscribers that set `FollowRequest.details` (older subscribers reject
+  unknown kinds), in replay and live; the gateway forwards the field unchanged.
+  The OpenCode plugin relays input and tool text but never filters.
 - **No transcript content or session names in logs.** Diagnose with counters and
   metadata to avoid leaking session content (`internal/channel/transcript.go`,
   `internal/channel/codex_collect.go`, `internal/channel/opencode_collect.go`,

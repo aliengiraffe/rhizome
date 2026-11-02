@@ -65,7 +65,10 @@ Select your agents and review the setup changes. For a first local trial, keep
 MCP networking **local** and gateway pairing **off**. Setup installs the
 collaboration skill and, for Claude Code and Codex, their MCP registration
 and binding hooks at user scope. OpenCode gets the skill and plugins; add its
-[MCP entry manually](docs/opencode.md#install).
+[MCP entry manually](docs/opencode.md#install). To take Rhizome out again,
+`rhizome uninstall` reverses these installs for the agents you pick (`--all`
+also stops the background service) with the same backups, and leaves
+`~/.rhizome` in place ([details](docs/reference.md#uninstalling)).
 
 Restart your agent and complete its integration steps:
 
@@ -181,10 +184,22 @@ with host pairing in the same configuration.
 ### What gets shared
 
 Subscriptions carry selected assistant text, tool names/status, and turn markers.
-Automatic collection excludes user prompts, reasoning, full tool bodies,
-subagent transcripts, and received peer traffic. Explicit `send` and `publish`
-calls carry the text the sender chooses. Collected assistant text can still
-contain project-sensitive information.
+By default automatic collection excludes user prompts, reasoning, full tool bodies,
+subagent transcripts, and received peer traffic. Setting the file-only
+`[sessions].share_prompts_and_tools = true` on a host also publishes its
+sessions' human prompts (`prompt`) and tool inputs and outputs (`tool_input`,
+`tool_output`), clipped to the usual 7 KiB, in live activity and in the history
+it serves to local agents and paired hosts. Reasoning, peer-delivered input,
+peer-triggered turns and Rhizome's own tools stay excluded either way. Explicit `send` and `publish`
+calls carry the text the sender chooses. Collected text (streamed activity and
+[session history](docs/history.md#content-policy)) is scanned with
+[Betterleaks](https://github.com/betterleaks/betterleaks) default rules and
+detected secrets are replaced by `[REDACTED:<rule_id>]` before leaving the
+process; text that cannot be scanned is masked whole. Explicit `send` and
+`publish` text is never scanned. Detection is heuristic: it reduces but cannot
+eliminate leakage, may mask benign strings, and does not decode encoded
+secrets. Collected assistant text can still contain project-sensitive
+information.
 
 Delivery uses bounded queues, short replay windows, deduplication, and feedback
 controls. A successful send means the receiver **accepted it into a queue**,

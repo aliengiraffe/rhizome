@@ -37,6 +37,7 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `network.gossip_port` | `RHIZOME_GOSSIP_PORT` | mcp `--gossip-port` | `7946` (Tailscale only) |
 | `network.discovery_interval` | `RHIZOME_DISCOVERY_INTERVAL` | mcp `--discovery-interval` | `20s` (Tailscale only) |
 | `sessions.recent_window` | — | — | `24h`; `0s` disables recent-only rows ([Session status](../README.md#session-status)) |
+| `sessions.share_prompts_and_tools` | — | — | `false`: no prompts or tool inputs/outputs ([Activity](#activity-replay-and-bounded-delivery)) |
 | `gateway.history.enabled` | — | — | `false`: paired hosts cannot search or read history |
 | `gateway.history.lookback` | — | — | `30d`; positive whole days or `all` |
 | `claude.peer_history.enabled`, `codex.peer_history.enabled` | — | — | inherit `gateway.history.enabled`; can only narrow it |
@@ -99,6 +100,13 @@ values fail at startup. MCP processes and the service read it once at start, so
 restart them after a change; there is no hot reload. See
 [Session status](../README.md#session-status) for what `recent` does and does not promise.
 
+`sessions.share_prompts_and_tools` is a file-only boolean (default `false`). When
+`true`, this host's collectors also publish each session's human prompts and its
+tool inputs and outputs, after secret redaction, in live activity and in the
+history this host serves (to local agents and, under `[gateway.history]`, to
+paired hosts). The serving host's value decides; paired hosts and subscribers
+cannot widen it. Like `recent_window`, it is read once at process start.
+
 The `gateway.history` and `*.peer_history` keys are file-only. They let directly
 [paired hosts](gateway.md) search and read this device's session history
 for the configured source agents and lookback windows. Sharing is off unless
@@ -131,7 +139,9 @@ manifest (`rhizome_<version>_checksums.txt`). Verify downloads with
 or restarts the observer. Run `rhizome setup` and `rhizome service install`
 yourself, and after an upgrade run `rhizome service stop` and then
 `rhizome service start`. Tag conventions, prereleases, verification, upgrades,
-uninstall and platform limits are in [docs/releasing.md](releasing.md).
+package removal and platform limits are in [docs/releasing.md](releasing.md);
+removing Rhizome from the agents and the service is
+[`rhizome uninstall`](#uninstalling).
 To build from source, follow the steps below.
 
 ## OpenCode
@@ -211,7 +221,7 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 | `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. Not offered in OpenCode mode. |
 | `send_file`, `list_files`, `accept_file`, `cancel_file` | Explicit file offers between sessions on paired hosts; see [file transfers](files.md). |
 | `search_sessions(filters…, host_id?)` | Metadata search of the local history catalog by exact ID, agent, project path, title substring, and activity date, with deterministic pagination. Rows carry history availability and current live status separately. Requires the observer service's catalog. With `host_id`, searches one directly paired host that opted in. |
-| `read_session_history(session_id, agent_type, limit?, cursor?, host_id?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes prompts, reasoning, tool bodies, subagents, and peer traffic. With `host_id`, reads from one opted-in paired host within its owner's lookback. |
+| `read_session_history(session_id, agent_type, limit?, cursor?, host_id?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes reasoning, subagents, and peer traffic, and excludes prompts and tool bodies unless the serving host sets `[sessions].share_prompts_and_tools`. With `host_id`, reads from one opted-in paired host within its owner's lookback. |
 
 The two history tools are read-only and local unless `host_id` names a paired
 host whose owner enabled `[gateway.history]`. See
@@ -480,10 +490,33 @@ windows. Unknown formats increment parser-skip counters without logging content.
 
 Activity includes assistant text, tool start/completion/failure names, and turn
 completion. Thinking, user prompts, channel injections, bookkeeping, full tool
-result bodies, child transcripts and Rhizome tool traffic are excluded. Summaries
+result bodies, child transcripts and Rhizome tool traffic are excluded. With
+`[sessions].share_prompts_and_tools = true` three more kinds are published:
+`prompt` (the human's prompt text: Claude user text blocks that are not
+`isMeta`, channel injections or peer envelopes; Codex `userMessage` items or
+rollout `user_message` events without a peer envelope; OpenCode human inbox
+items), `tool_input` and `tool_output` (`<tool>: <payload>`, for example the
+Bash command and its output, file edits and diffs, MCP arguments and results).
+Prompts and tool payloads of peer-triggered turns, Rhizome's own tools, thinking
+and channel injections stay excluded. Each payload is cut to 14 KiB before the
+secret scan and to the usual 7 KiB, keeping the leading excerpt, afterwards. The
+new kinds wake subscribers like other activity, under the same batching, pause
+and circuit-breaker limits; tool-heavy sessions reach the 30-per-minute pause
+sooner. Subscribers advertise support with `FollowRequest.details`; publishers
+withhold the new kinds from older subscribers and gateway peers, which would
+otherwise reject an unknown kind. Summaries
 are deterministic; no additional model is called. Automatic output from peer-only
 turns is suppressed until a human prompt resumes work; intentional responses can still use `publish` or `send`. Turn completion
 remains in publisher history but does not wake subscribers.
+
+Every collected text is scanned for secrets before it enters publisher
+retention, so replay, queued deliveries and gateway proxies only ever carry the
+filtered form: detected values become `[REDACTED:<rule_id>]` and text the
+scanner cannot finish becomes `[REDACTED:unscanned]` (see the
+[history content policy](history.md#content-policy) for the rules, limits and
+caveats; the same filter serves history pages). `publish` and `send` text is
+delivered as written. The scanner is built once per process on first use (about
+40 ms) and adds roughly 20–50 µs per record.
 
 The publisher retains at most **five minutes, 1,000 events and 8 MiB**, evicting
 at the first limit. New subscriptions begin at the current position. Replay
@@ -497,7 +530,8 @@ The receiver has a 256-event queue and a 4,096-entry deduplication window. Autom
 activity batches every two seconds per origin, with content capped at 8 KiB;
 individual summaries are capped near 7 KiB with an explicit truncation marker.
 Announcements and direct messages bypass the batching delay, but obey pausing.
-Received, queued, written, dropped, parser skips and pauses are separate counters.
+Received, queued, written, dropped, parser skips, pauses, redacted and
+redaction failures are separate counters.
 Written means written to MCP, not acknowledged by Claude. Queue overflow may
 ultimately cause replay gaps. Write failures are counted as dropped.
 
@@ -609,6 +643,57 @@ Setup reports each file and backup, then the steps it cannot do for you:
   trust them. Do not keep the same hooks at project scope.
 
 Then run `/rhizome-collab` in the agent with an optional task description.
+
+### Uninstalling
+
+```sh
+./rhizome uninstall                       # interactive: pick agents (preselects where Rhizome is installed), then confirm
+./rhizome uninstall --all --yes           # every agent plus the background service, no questions
+./rhizome uninstall --agents codex --yes  # one agent; claude, opencode or a comma-separated list
+./rhizome uninstall --service --yes       # only stop the observer and remove its startup definition
+./rhizome uninstall --agents all --only skills --yes   # a subset: skills, mcp, hooks, plugins
+./rhizome uninstall --all --dry-run       # print the plan; writes nothing
+./rhizome uninstall --list                # read-only: which components are installed, and where
+```
+
+`rhizome uninstall` reverses what setup installed, resolving the agent
+directories exactly as setup does (`--config`/`RHIZOME_CONFIG`,
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME`). Without `--agents`,
+`--all` or `--service`, a terminal gets the agent picker preselecting the agents
+where Rhizome is detected; without a terminal the command stops before touching
+anything and asks for a selection. On a terminal without `--yes` it prints the
+plan and asks for confirmation; `n` writes nothing. Without a terminal, `--yes`
+(or `--dry-run`) is required. The service step runs first, through the same
+lifecycle as `rhizome service uninstall` (a missing definition is reported
+`not installed`), then the agents in the order claude, codex, opencode:
+
+| Agent | MCP registration | Hooks | Skill and plugins |
+| --- | --- | --- | --- |
+| Claude Code | `mcpServers.rhizome` deleted from `~/.claude.json` (or `<CLAUDE_CONFIG_DIR>/.claude.json`) | every Rhizome hook stripped from `<config dir>/settings.json`; Rhizome-only groups and emptied events dropped, the `hooks` object itself kept | `<config dir>/skills/rhizome-collab/` deleted |
+| Codex | `[mcp_servers.rhizome]` and its subtables removed line-wise from `<CODEX_HOME>/config.toml`; the rest, comments included, kept verbatim | same rules in `<CODEX_HOME>/hooks.json` | `<CODEX_HOME>/skills/rhizome-collab/` deleted |
+| OpenCode | not edited: remove the hand-added `rhizome` entry yourself | none | the skill, `plugins/rhizome.js` and `plugins/rhizome-tui/tui.js` (plus its directory once empty) deleted |
+
+The rules are setup's: only Rhizome-owned entries are touched, every other
+server, hook, matcher and top-level key survives, a changed file is first copied
+to `<file>.bak-<timestamp>` and replaced atomically with its mode preserved, a
+symlinked file is edited through the link, and a malformed file (or an inline
+or dotted `mcp_servers.rhizome` definition setup would also refuse) is reported
+and left untouched while the remaining components and agents still run; the
+command then exits non-zero after the complete report. A skill or plugin path
+that is a symlink is reported `skipped (symlink to …)` and never followed or
+deleted. A file without Rhizome content is `unchanged` (no rewrite, no backup),
+a missing path `absent`, and no configuration file is ever created or deleted,
+even when nothing else is left in it. Running uninstall twice is idempotent and
+`rhizome setup` afterwards reinstalls every component.
+
+Uninstall never edits project files (`.mcp.json`, a project
+`.claude/settings.json` or hooks), OpenCode's own configuration, or anything
+under `~/.rhizome` (configuration, token, host identity, pairings, history
+catalog, logs): remove that directory yourself to discard them. MCP processes an
+agent already launched keep running until that agent restarts. Backups
+accumulate like setup's and are named in the output so you can prune them.
+Removing the binary or the macOS package receipt is described in
+[docs/releasing.md](releasing.md#installing-and-upgrading).
 
 ### Creating the configuration file
 

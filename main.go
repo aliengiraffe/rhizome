@@ -29,7 +29,7 @@ func main() {
 
 func entry() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: rhizome --version | mcp | setup | service | config | token | files | invite | join | peers | demo [flags]")
+		return fmt.Errorf("usage: rhizome --version | mcp | setup | uninstall | service | config | token | files | invite | join | peers | demo [flags]")
 	}
 	mode := os.Args[1]
 	if mode == "--version" || mode == "-version" {
@@ -114,6 +114,8 @@ func entry() error {
 		return serviceCommand(os.Args[1:])
 	case "setup":
 		return setup(os.Args[1:])
+	case "uninstall":
+		return uninstall(os.Args[1:])
 	case "token":
 		opts := flag.NewFlagSet("token", flag.ContinueOnError)
 		config.Bind(opts, "runtime-dir")

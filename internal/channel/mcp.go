@@ -280,6 +280,8 @@ func Run(c config.Config, o Options) error {
 	n := newNode(ctx)
 	defer n.close()
 	n.archive = newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
+	n.archive.details = c.Sessions.SharePromptsAndTools
+	n.details = c.Sessions.SharePromptsAndTools
 	n.recentWindow = c.RecentWindow
 	n.debug = c.Debug
 	if err := n.start(o); err != nil {

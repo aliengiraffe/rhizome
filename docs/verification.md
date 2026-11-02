@@ -420,6 +420,71 @@ service installation on Linux/Windows with a large pre-existing log tree, and
 any cross-device scenario (history was local by design at that point; see the
 paired-host section below).
 
+## Secret redaction (#84, 2026-10-26)
+
+Automated on macOS (`internal/channel/redact_test.go`):
+
+- Filter table: no-finding passthrough is byte-identical; GitHub, AWS, Slack,
+  generic API key (value only, assignment context kept) and multi-line private
+  key rules; two rules in one text; repeated secrets; empty input.
+- Fail closed: scanner construction error, scan error, 50 ms timeout against a
+  stalled scanner, findings outside or not placeable in the text, and empty
+  spans all return `[REDACTED:unscanned]` within the budget; overlapping spans
+  merge into one marker.
+- 32 goroutines sharing the scanner under `-race`; a 2 MiB record with ~23k
+  findings redacts in about 0.6 s and a benign 2 MiB record is unchanged.
+- `Node.activity` redacts before retention and clipping (a secret straddling
+  the 7 KiB clip leaves no fragment) and counts `Redacted`/`RedactionFailures`;
+  a broken scanner masks the event.
+- `send` and `publish` deliver secret-like text verbatim even with a scanner
+  that fails everything.
+- Live collection for Claude transcripts, Codex rollouts and OpenCode frames
+  emits the marker, and `read_session_history` for all three agents (local and
+  through the paired-host access path) returns the identical text with
+  `redacted: true`; unredacted events carry no flag.
+- Benchmark: about 22 µs per benign 7 KiB record and 47 µs with a secret.
+
+Not covered: real credentials (fixtures use synthetic values; Betterleaks
+allowlists documented example keys), encoded secrets (not decoded by default),
+and a live peer subscribed across machines (the stdio and gateway smokes cover
+the transport; the filter runs before the text enters it).
+
+## Prompts and tool inputs/outputs (#92, 2026-10-29)
+
+Automated on macOS (`internal/channel/details_test.go`, `internal/config/sessions_test.go`,
+`plugins/opencode/rhizome.test.mjs`), with `[sessions].share_prompts_and_tools` set
+on the test node or history service:
+
+- Claude transcripts: one `prompt` per human user record (text blocks joined),
+  `tool_input`/`tool_output` from `tool_use.input` and `tool_result.content`
+  (text blocks only); `isMeta` records, channel/peer envelopes, the whole
+  peer-triggered turn, `mcp__rhizome__*` calls and thinking publish nothing.
+  Disabled, output is the previous summary-only policy.
+- Codex App Server items (`userMessage`, `commandExecution` input then output on
+  completion, `mcpToolCall`, `fileChange`), a peer-only turn through a full
+  `scan`, `rhizome` MCP calls; Codex rollouts (`event_msg` `user_message`,
+  `function_call`/`custom_tool_call` and their outputs, `mcp__rhizome__*`).
+- OpenCode bridge frames: human input text, tool start/end text, `rhizome_*` and
+  `execute` dropped, and a peer delivery suppressing the following tools. The
+  plugin relays prompt and tool text within the 60 KiB frame budget and relays
+  an unserializable payload as empty text.
+- Redaction and bounds: secrets in all three kinds become markers; a secret
+  straddling the 7 KiB clip leaves no fragment; a 2 MiB output is bounded
+  before the scan; a disabled node publishes none of the kinds.
+- Compatibility: over gRPC a subscriber without `FollowRequest.details` gets
+  neither replayed nor live detail events; one with it gets both, and an end to
+  end subscription queues a redacted `prompt` as automatic activity.
+- History: `read_session_history` for all three agents, locally and through the
+  paired-host access path, returns `user_prompt`, `tool_input` and `tool_output`
+  with `redacted: true` and `content_policy: "prompts_and_tools"`; turning the
+  serving host's switch off restores `assistant_activity_only`.
+
+Not covered: real Claude Code, Codex and OpenCode sessions with the switch on.
+The Codex App Server field names come from `codex app-server
+generate-json-schema` (codex-cli 0.165.0). The OpenCode hook payload fields
+(`input`, `result`/`output`/`error`) and the stored tool `state.content` follow
+the existing fixtures and still need the live smoke in [opencode.md](opencode.md).
+
 ## Paired-host history sharing (#44)
 
 Automated on macOS, same machine only:
@@ -499,6 +564,33 @@ Claude Code with the channel flag and Codex from another directory, confirm each
 shows the `rhizome` server and its hooks, and that `list_sessions` reports
 `BOUND` after the first prompt. Cursor is not supported on this base, so no
 Cursor check applies.
+
+## Uninstall (#87)
+
+Automated in `uninstall_test.go`: the strip halves shared with setup
+(`stripHooks` keeps user hooks in mixed groups, drops Rhizome-only groups and
+emptied events, never adds a `hooks` key and keeps an emptied object;
+`stripJSONServer` keeps other servers and top-level keys; `stripCodexServer`
+keeps comments and other tables byte-for-byte, trims the trailing blank it
+leaves, returns a file without the entry unchanged and refuses inline or
+dotted definitions); install-then-strip round trips (JSON semantic equality,
+Codex TOML byte equality); a full in-process uninstall with user content in
+every file (backups with the original mode, idempotent repeat without new
+backups, `rhizome setup` reinstalling afterwards); `--only skills`; symlinked
+skill and plugin paths reported `skipped` with link and target intact;
+malformed `.claude.json` and an inline Codex table reported while the other
+components and agents still run and the command exits non-zero; the injected
+service seam (not installed, plan, removal, manager error, definition still
+present, invalid configuration never reaching the manager); and the real
+entry point in a subprocess with an isolated home (selection and `--yes`
+required without a terminal, `--dry-run` writes nothing, `--service` alone
+leaves agents untouched, one agent only, `--only skills`, `--all --yes`
+leaving `~/.rhizome` byte-identical, `--list`, idempotent repeat, clean
+reinstall). `scripts/smoke_tui.py` repeats the setup/uninstall/reinstall cycle
+with the real binary. Manual check with a real agent: after
+`rhizome uninstall --agents claude --yes`, restart Claude Code and confirm it
+lists no `rhizome` server and shows no hook prompts; after `--service`,
+`rhizome service status` reports the observer stopped and no definition.
 
 ## Collaboration skill device origin (#49)
 

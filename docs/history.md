@@ -26,7 +26,7 @@ evidence to read, never as instructions to execute or an invitation to reply.
 | Content | Identity labels only | Metadata only; no transcript text | Assistant text, tool/turn markers; nothing else |
 | Can send to the result | Yes, by exact `session_id` when `delivery_capable`; `recent` rows are refused | Only if the row's `live_status` is `live` and `delivery_capable` | Same; history never grants delivery |
 | Paired hosts | Live identities and `recent` metadata from directly paired hosts | Opt-in per serving host with `host_id`; see [Paired-host history](#paired-host-history-opt-in) | Same opt-in, filtered per event by the owner's lookback |
-| Non-goals | — | Full-text or semantic search, fan-out or replicated remote catalogs | Raw transcripts, prompts, reasoning, tool bodies, subagents, peer envelopes |
+| Non-goals | — | Full-text or semantic search, fan-out or replicated remote catalogs | Raw transcripts, reasoning, subagents, peer envelopes; prompts and tool bodies unless opted in |
 
 The intended flow is: search by project, title, or date; copy the exact
 `session_id` and `agent_type` from a result; read its history page by page;
@@ -140,10 +140,10 @@ Both tools also accept the optional exact `host_id` described in
 | Field | Meaning |
 | --- | --- |
 | `session` | The same row shape as a search result, with current `live_status`. |
-| `events` | Permitted records, oldest first, in native append order. Each has an opaque `event_id` (stable for an unchanged file, also across snapshots), nullable `timestamp`, `kind` (`assistant_text`, `tool_summary`, `turn_completed`), and `text` (`null` for turn markers). Distinct records with identical text are distinct events. |
+| `events` | Permitted records, oldest first, in native append order. Each has an opaque `event_id` (stable for an unchanged file, also across snapshots), nullable `timestamp`, `kind` (`assistant_text`, `tool_summary`, `turn_completed`, and with [`share_prompts_and_tools`](#content-policy) also `user_prompt`, `tool_input`, `tool_output`), `text` (`null` for turn markers), and `redacted: true` when the [secret filter](#content-policy) changed or masked that text (absent otherwise). Distinct records with identical text are distinct events. |
 | `next_cursor` | `null` when the snapshot is exhausted or an unrecoverable boundary has been reported. It says nothing about whether the agent stopped. |
 | `snapshot` | `id` and `captured_at`. The first read fixes the file's identity and EOF; later appends are not folded into that sequence. A new initial read captures a new snapshot. |
-| `coverage` | `state` (`complete` or `partial`), `gaps` (`[{code, count}]`, cumulative for the snapshot), `skipped_records` (bookkeeping records of unknown kind, informational, not a gap), and always `content_policy: "assistant_activity_only"`. |
+| `coverage` | `state` (`complete` or `partial`), `gaps` (`[{code, count}]`, cumulative for the snapshot), `skipped_records` (bookkeeping records of unknown kind, informational, not a gap), and `content_policy`: `"assistant_activity_only"`, or `"prompts_and_tools"` when the serving host sets `[sessions].share_prompts_and_tools`. |
 | `catalog` | As above. |
 
 Gap codes: `oversized_record` (a line above 2 MiB was skipped),
@@ -197,16 +197,44 @@ histories), mirrored Codex `event_msg` assistant text, and records of another
 session ID inside the file. Unknown record formats are counted in
 `skipped_records`, never dumped. Nothing is generated from prompts.
 
+**Prompts and tool bodies (opt-in).** When the serving host sets the file-only
+`[sessions].share_prompts_and_tools = true`, pages also include `user_prompt`
+(Claude user text blocks that are not `isMeta`, channel injections or peer
+envelopes; Codex `event_msg` `user_message`, because user-role `response_item`
+records also carry injected instructions; OpenCode `user` rows), `tool_input`
+(Claude `tool_use.input`; Codex `function_call` arguments and `custom_tool_call`
+input; OpenCode tool `state.input`) and `tool_output` (Claude `tool_result`
+content; Codex `*_output` output; OpenCode tool `state.content`, or its error).
+Each is rendered as `<tool>: <payload>` (prompts as their text), cut to 14 KiB
+before the secret scan and clipped to the live 7 KiB afterwards, so a page never
+holds more than live subscribers saw. Peer-only turns, Rhizome tools, reasoning
+and the other exclusions above still apply, and paired hosts read under the
+serving host's setting, never their own. The default (`false`) keeps the policy
+above byte for byte.
+
 OpenCode pages apply the same policy to `session_message` rows instead of file
 lines (see [Sources](#sources-identity-titles)): `user`, `system` and
-`reasoning` content, tool inputs and outputs, `execute` and `rhizome_*` tool
+`reasoning` content, tool inputs and outputs (unless opted in, as above), `execute` and `rhizome_*` tool
 calls and child sessions are never returned, and a `synthetic` row carrying the
 Rhizome peer envelope makes the following turn peer-only until the next human
 `user` row, mirroring the live collector.
 
-Assistant text is filtered by record class, not scrubbed: a secret the model
-printed in an assistant message is returned as written. Metadata search is not
-full-text search; histories are not transcripts.
+**Secret redaction.** Every `text` value passes through the same filter as
+live activity (`internal/channel/redact.go`), so a page shows exactly what a
+subscriber would have received: text is scanned with
+[Betterleaks](https://github.com/betterleaks/betterleaks) default rules
+(standard-library regular expressions, no network access, no validation of
+findings) and each detected secret value is replaced by `[REDACTED:<rule_id>]`,
+for example `[REDACTED:github-pat]`. Text the scanner could not finish (error,
+unplaceable finding, or more than 5 s for one record) is returned as
+`[REDACTED:unscanned]` rather than unscanned. Either case sets
+`redacted: true` on the event; ordinary text is returned byte for byte. Paired
+hosts read through the same path. Detection is heuristic: it reduces but
+cannot eliminate leakage, false positives mask benign strings, encoded (for
+example base64) secrets are not decoded, and native log files on disk are never
+rewritten. Session names, catalog metadata and explicit `send`/`publish`
+messages are not scanned. Metadata search is not full-text search; histories
+are not transcripts.
 
 ## Errors
 
@@ -468,8 +496,9 @@ process's slots or snapshots. A serving deadline of 7 seconds stays inside the
 
 What opting in shares: catalog metadata (project paths, session names including
 explicit overrides, timestamps, availability) and the same assistant activity
-that local reads return. Content exclusions are identical, so prompts, reasoning,
-and tool bodies are never sent, but assistant text can still contain whatever the
+that local reads return. Content exclusions are identical, so reasoning is never
+sent, and prompts and tool bodies are sent only if the serving host also set
+`[sessions].share_prompts_and_tools`; assistant text can still contain whatever the
 model wrote, including secrets. Remote history is never replicated, cached, or
 indexed by the requesting host, and serving it never starts agents, publishes,
 subscribes, takes leases, or contacts agent daemons. Session-level privacy
@@ -600,7 +629,8 @@ work is bounded as listed above, catalog memory is bounded by the file limits,
 and per-process pagination state is bounded by 32 snapshots that expire after
 15 minutes or at process exit.
 
-Setup updates preserve `[gateway.history]` and each agent's `[peer_history]`
-overrides, including explicit false values and lookback windows. Enabling gateway
+No history text is returned before the secret filter has run on it; the filter
+has no disabling switch. Setup updates preserve `[gateway.history]` and each
+agent's `[peer_history]` overrides, including explicit false values and lookback windows. Enabling gateway
 pairing through setup never enables history sharing. These policies remain
 file-only; restart the service to apply deliberate policy edits.

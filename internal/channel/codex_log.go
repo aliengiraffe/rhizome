@@ -6,18 +6,25 @@ import (
 )
 
 // Consume response_item only: event_msg often mirrors the same assistant text.
-// Tool arguments, results, reasoning, system prompts and user text are never emitted.
+// The human prompt is the exception: user-role response items also carry
+// injected instructions and environment context, so the prompt comes from
+// event_msg user_message. Tool arguments and results become detail events;
+// reasoning and system prompts are never emitted.
 func (c *collector) normalizeCodexLog(line []byte, n activitySink, gen uint64) {
 	var r struct {
 		Type    string `json:"type"`
 		Ordinal *int64 `json:"ordinal"`
 		Payload struct {
-			Type    string `json:"type"`
-			ID      string `json:"id"`
-			Role    string `json:"role"`
-			Name    string `json:"name"`
-			CallID  string `json:"call_id"`
-			Content []struct {
+			Type      string          `json:"type"`
+			ID        string          `json:"id"`
+			Role      string          `json:"role"`
+			Name      string          `json:"name"`
+			CallID    string          `json:"call_id"`
+			Message   string          `json:"message"`
+			Arguments json.RawMessage `json:"arguments"`
+			Input     json.RawMessage `json:"input"`
+			Output    json.RawMessage `json:"output"`
+			Content   []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			} `json:"content"`
@@ -31,6 +38,9 @@ func (c *collector) normalizeCodexLog(line []byte, n activitySink, gen uint64) {
 	if r.Type != "response_item" {
 		if r.Type == "event_msg" && p.Type == "task_complete" {
 			n.activity(gen, "turn", "Turn completed")
+		}
+		if r.Type == "event_msg" && p.Type == "user_message" && strings.TrimSpace(p.Message) != "" && !isPeerInput(p.Message) {
+			n.activity(gen, "prompt", p.Message)
 		}
 		return
 	}
@@ -81,6 +91,11 @@ func (c *collector) normalizeCodexLog(line []byte, n activitySink, gen uint64) {
 		}
 		if !rhizomeTool(p.Name) {
 			n.activity(gen, "tool", "Tool started: "+p.Name)
+			input := p.Arguments
+			if p.Type == "custom_tool_call" {
+				input = p.Input
+			}
+			toolDetail(n, gen, "tool_input", p.Name, payloadText(input))
 		}
 	case "function_call_output", "custom_tool_call_output":
 		name, known := c.tools[p.CallID]
@@ -90,6 +105,7 @@ func (c *collector) normalizeCodexLog(line []byte, n activitySink, gen uint64) {
 		c.tools[p.CallID] = ""
 		if name != "" && !rhizomeTool(name) && !c.peerResponse {
 			n.activity(gen, "tool", "Tool completed: "+name)
+			toolDetail(n, gen, "tool_output", name, payloadText(p.Output))
 		}
 	case "reasoning":
 	default:

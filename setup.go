@@ -32,6 +32,23 @@ var skillFS embed.FS
 
 const skillName = "rhizome-collab"
 
+// skillNames lists the Rhizome-owned skills embedded under skills/, the exact
+// directories setup installs under an agent's skills directory and uninstall
+// removes from it.
+func skillNames() []string {
+	entries, err := fs.ReadDir(skillFS, "skills")
+	if err != nil {
+		return []string{skillName}
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
 // openCodePlugin is the OpenCode relay plugin; it must match this binary's
 // bridge protocol, so setup reinstalls it on every upgrade.
 //
@@ -57,6 +74,22 @@ type agent struct {
 	Hooks    string // file holding the user-scope hooks
 	Detected bool
 	Reason   string // why it was (not) detected
+}
+
+// pluginFile is one embedded OpenCode plugin and its destination.
+type pluginFile struct {
+	Label   string // plugin or tui, as printed by setup and uninstall
+	Dest    string
+	Content []byte
+}
+
+// plugins lists the OpenCode plugin files setup installs and uninstall
+// removes, in output order; it is empty for other agents.
+func (a agent) plugins() []pluginFile {
+	if a.Name != "opencode" {
+		return nil
+	}
+	return []pluginFile{{"plugin", a.Plugin, openCodePlugin}, {"tui", a.TUI, openCodeTUIPlugin}}
 }
 
 // detectAgents reports the agents Rhizome can integrate with. Detection uses the
@@ -181,6 +214,12 @@ func installPlugin(dest string, content []byte) (string, error) {
 // caller puts the terminal in raw mode). Keys: up/down or j/k move, space
 // toggles, a toggles all, enter confirms, q or Esc or Ctrl-C aborts.
 func pickAgents(in io.Reader, out io.Writer, agents []agent, checked []bool) ([]bool, error) {
+	return pickAgentsTitled(in, out, "Install Rhizome (MCP server, binding hooks and the /rhizome-collab skill) for which agents?", "(not detected)", agents, checked)
+}
+
+// pickAgentsTitled is pickAgents with the question printed above the list and
+// the note appended to agents that are not detected.
+func pickAgentsTitled(in io.Reader, out io.Writer, title, undetected string, agents []agent, checked []bool) ([]bool, error) {
 	n := len(agents)
 	cur := 0
 	draw := func() {
@@ -194,12 +233,12 @@ func pickAgents(in io.Reader, out io.Writer, agents []agent, checked []bool) ([]
 			}
 			note := ""
 			if !a.Detected {
-				note = "  (not detected)"
+				note = "  " + undetected
 			}
 			fmt.Fprintf(out, "\r\x1b[2K%s%s %s  %s%s\r\n", cursor, box, a.Label, a.Skills, note)
 		}
 	}
-	fmt.Fprint(out, "Install Rhizome (MCP server, binding hooks and the /rhizome-collab skill) for which agents?\r\n")
+	fmt.Fprint(out, title+"\r\n")
 	fmt.Fprint(out, "space: toggle  a: all/none  enter: confirm  q: cancel\r\n")
 	draw()
 	keys := bufio.NewReader(in)

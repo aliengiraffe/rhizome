@@ -172,7 +172,50 @@ def main():
         result = subprocess.run([str(BINARY), "setup", "--plain", "--agents", ",", "--network", "local"],
                                 env=env, capture_output=True, timeout=5)
         assert result.returncode == 0 and b"\x1b" not in result.stdout + result.stderr
-    print("TUI PTY checks passed: setup, service, peers, cancellation, resize, terminal restoration, JSON, redirection")
+        uninstall_checks(home, env, config)
+    print("TUI PTY checks passed: setup, service, peers, cancellation, resize, terminal restoration, JSON, redirection, uninstall")
+
+
+def uninstall_checks(home, env, config):
+    """Real binary, isolated HOME: setup installs every agent, uninstall reverses it.
+
+    --service is exercised only with no definition installed, so no real service
+    manager is ever asked to stop or remove anything.
+    """
+    def run(args, ok=True):
+        result = subprocess.run([str(BINARY), *args], env=env, capture_output=True, timeout=10)
+        assert (result.returncode == 0) == ok, (args, result.stdout, result.stderr)
+        return result.stdout.decode()
+    claude_json, settings = home / ".claude.json", home / ".claude" / "settings.json"
+    codex_toml, codex_hooks = home / ".codex" / "config.toml", home / ".codex" / "hooks.json"
+    opencode = home / "config" / "opencode"
+    skills = [home / ".claude" / "skills" / "rhizome-collab", home / ".codex" / "skills" / "rhizome-collab",
+              opencode / "skills" / "rhizome-collab"]
+    plugins = [opencode / "plugins" / "rhizome.js", opencode / "plugins" / "rhizome-tui" / "tui.js"]
+    run(["setup", "--plain", "--agents", "all"])
+    assert all(p.is_dir() for p in skills) and all(p.is_file() for p in plugins)
+    assert "rhizome" in json.loads(claude_json.read_text())["mcpServers"]
+    assert "[mcp_servers.rhizome]" in codex_toml.read_text()
+    stored = config.read_bytes()
+    # No terminal: a selection and --yes are required before anything changes.
+    run(["uninstall"], ok=False)
+    run(["uninstall", "--agents", "all"], ok=False)
+    out = run(["uninstall", "--all", "--dry-run"])
+    assert out.count("would remove") == 9 and "service: not installed" in out and "backup" not in out, out
+    assert all(p.is_dir() for p in skills) and not list(home.rglob("*.bak-*")), "dry run changed files"
+    out = run(["uninstall", "--all", "--yes"])
+    assert "service: not installed" in out and out.count("removed") >= 9 and "token" not in out, out
+    assert not any(p.exists() for p in skills + plugins) and not (opencode / "plugins" / "rhizome-tui").exists()
+    assert "rhizome" not in json.loads(claude_json.read_text())["mcpServers"]
+    assert json.loads(settings.read_text())["hooks"] == {} and json.loads(codex_hooks.read_text())["hooks"] == {}
+    assert "rhizome" not in codex_toml.read_text()
+    assert config.read_bytes() == stored and config.stat().st_mode & 0o777 == 0o600
+    backups = sorted(home.rglob("*.bak-*"))
+    assert len(backups) == 4, backups
+    out = run(["uninstall", "--agents", "all", "--yes"])
+    assert "removed" not in out and "backup" not in out and sorted(home.rglob("*.bak-*")) == backups, out
+    out = run(["setup", "--plain", "--agents", "all"])
+    assert out.count("skill: installed") == 3 and all(p.is_file() for p in plugins), out
 
 
 if __name__ == "__main__":

@@ -25,7 +25,10 @@ binary path and `service run --config <absolute TOML path>`. Keep that binary
 installed at its recorded path. There is no separate service JSON snapshot.
 Uninstall removes only the definition, preserving `config.toml`, agent logs,
 tokens, coordination files, and diagnostic logs. It does not edit agent
-configuration or start an agent.
+configuration or start an agent. `rhizome uninstall --service` runs the same
+lifecycle (reporting `not installed` when no definition exists), and
+`rhizome uninstall --all` combines it with removing Rhizome from every agent;
+see [uninstalling](reference.md#uninstalling).
 
 Create `~/.rhizome/config.toml` before installing, with `rhizome setup` (it asks
 for the installation type and then offers to install and start this service,
@@ -116,9 +119,10 @@ Codex identity comes from `session_meta` (`id` or `session_id`, `cwd`), rejectin
 subagent sources. Codex `response_item` messages and tool calls/results provide
 summaries; mirrored `event_msg` assistant text is ignored. These fixtures follow
 locally inspected Claude 2.1.302 and Codex 0.163.0 JSONL structures. Unknown schemas
-are not guessed. Thinking/reasoning, user text, full tool bodies, received peer
-envelopes, Rhizome tool calls, and peer-only reactions are excluded. Tool arguments
-and results are never included in summaries. Tool results without a known call
+are not guessed. Thinking/reasoning, received peer envelopes, Rhizome tool calls,
+and peer-only reactions are excluded. User prompts and tool arguments/results are
+excluded unless `[sessions].share_prompts_and_tools` is set, and are never part of
+the `Tool …` summaries. Tool results without a known call
 are ignored. Codex result summaries say completed, without inferring success from
 arbitrary output text.
 
