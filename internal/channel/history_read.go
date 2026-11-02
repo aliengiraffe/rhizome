@@ -57,6 +57,7 @@ type historySink struct {
 	events   []historyEvent
 	skips    uint64
 	filter   *redactor // test override; nil uses sharedRedactor
+	details  bool      // [sessions].share_prompts_and_tools on the serving host
 }
 
 func (s *historySink) secrets() *redactor {
@@ -75,13 +76,27 @@ func (s *historySink) activity(_ uint64, kind, text string) {
 		k = "tool_summary"
 	case "turn":
 		k = "turn_completed"
+	case "prompt":
+		k = "user_prompt"
+	case "tool_input", "tool_output":
+		k = kind
 	default:
 		return
+	}
+	detail := detailKind(kind)
+	if detail {
+		if !s.details {
+			return
+		}
+		text = detailText(text)
 	}
 	ev := historyEvent{ID: fmt.Sprintf("%x-%d", s.offset, len(s.events)), Timestamp: s.ts, Kind: k, at: s.at}
 	if kind != "turn" {
 		// The same filter as Node.activity, so history and live text match.
 		t, changed, _ := s.secrets().redact(text)
+		if detail {
+			t = clip(t, maxText) // the live clip; tool output can otherwise fill a page
+		}
 		ev.Text, ev.Redacted = &t, changed
 	}
 	s.events = append(s.events, ev)
@@ -302,7 +317,7 @@ func (h *historyService) openSnapshot(ctx context.Context, agent, session, query
 		}
 	}
 	s.c = &collector{path: src.Path, agent: agent, seen: map[string]bool{}, tools: map[string]string{}}
-	s.sink = &historySink{identity: &pb.Identity{SessionId: session, AgentType: agent, Generation: 1}}
+	s.sink = &historySink{identity: &pb.Identity{SessionId: session, AgentType: agent, Generation: 1}, details: h.details}
 	return s, nil
 }
 
@@ -463,5 +478,9 @@ func (s *snapshot) coverage() map[string]any {
 	if len(gaps) > 0 {
 		state = "partial"
 	}
-	return map[string]any{"state": state, "gaps": gaps, "skipped_records": s.skips, "content_policy": "assistant_activity_only"}
+	policy := "assistant_activity_only"
+	if s.sink != nil && s.sink.details {
+		policy = "prompts_and_tools"
+	}
+	return map[string]any{"state": state, "gaps": gaps, "skipped_records": s.skips, "content_policy": policy}
 }

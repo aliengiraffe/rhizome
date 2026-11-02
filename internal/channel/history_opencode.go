@@ -360,7 +360,7 @@ func (h *historyService) openOpenCodeSnapshot(ctx context.Context, session, quer
 	}
 	return &snapshot{
 		kind: "read", query: query, agent: "opencode", session: session, path: src.Path, gaps: map[string]int{},
-		sink: &historySink{identity: nil},
+		sink: &historySink{identity: nil, details: h.details},
 		oc:   &openCodeCursor{db: dbPath, session: id, maxSeq: maxSeq.Int64},
 	}, nil
 }
@@ -466,7 +466,10 @@ type openCodePart struct {
 	Name  string `json:"name"`
 	Text  string `json:"text"`
 	State struct {
-		Status string `json:"status"`
+		Status  string          `json:"status"`
+		Input   json.RawMessage `json:"input"`
+		Content json.RawMessage `json:"content"`
+		Error   json.RawMessage `json:"error"`
 	} `json:"state"`
 	Time struct {
 		Created   int64 `json:"created"`
@@ -480,14 +483,23 @@ type openCodeRecord struct {
 	Content []openCodePart `json:"content"`
 }
 
-// normalize turns one session_message row into the same three event kinds the
-// live collector publishes, under the same content policy: assistant text, tool
-// names with a phase, and turn completion. Prompts, reasoning, tool inputs and
-// outputs, and peer-only turns never appear.
+// normalize turns one session_message row into the event kinds the live
+// collector publishes, under the same content policy: assistant text, tool
+// names with a phase, turn completion and, when the sink allows detail kinds,
+// the human prompt and tool inputs and outputs. Reasoning and peer-only turns
+// never appear.
 func (c *openCodeCursor) normalize(typ, data string, sink *historySink) {
 	switch typ {
 	case "user":
 		c.peer = false
+		var r openCodeRecord
+		if err := json.Unmarshal([]byte(data), &r); err != nil {
+			sink.countSkip()
+			return
+		}
+		if strings.TrimSpace(r.Text) != "" && !strings.Contains(r.Text, openCodePeerMarker) {
+			sink.activity(1, "prompt", r.Text)
+		}
 		return
 	case "synthetic":
 		var r openCodeRecord
@@ -540,13 +552,20 @@ func (c *openCodeCursor) normalize(typ, data string, sink *historySink) {
 			}
 			at(start)
 			sink.activity(1, "tool", "Tool started: "+p.Name)
+			toolDetail(sink, 1, "tool_input", p.Name, payloadText(p.State.Input))
 			switch p.State.Status {
 			case "completed":
 				at(p.Time.Completed)
 				sink.activity(1, "tool", "Tool completed: "+p.Name)
+				toolDetail(sink, 1, "tool_output", p.Name, payloadText(p.State.Content))
 			case "error":
 				at(p.Time.Completed)
 				sink.activity(1, "tool", "Tool failed: "+p.Name)
+				output := payloadText(p.State.Content)
+				if output == "" {
+					output = payloadText(p.State.Error)
+				}
+				toolDetail(sink, 1, "tool_output", p.Name, output)
 			}
 		}
 	}
