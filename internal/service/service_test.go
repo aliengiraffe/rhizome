@@ -25,6 +25,8 @@ func TestNativeDefinitions(t *testing.T) {
 			}
 			if platform != "linux" {
 				d := xml.NewDecoder(strings.NewReader(definition))
+				// The Windows declaration names its on-disk UTF-16 form; in memory it is a Go string.
+				d.CharsetReader = func(_ string, r io.Reader) (io.Reader, error) { return r, nil }
 				for {
 					_, err := d.Token()
 					if err == io.EOF {
@@ -47,6 +49,24 @@ func TestNativeDefinitions(t *testing.T) {
 				t.Fatal("unquoted binary")
 			}
 		})
+	}
+}
+func TestWindowsDefinitionIsUTF16(t *testing.T) {
+	m := manager{platform: "windows", configPath: `C:\cfg\config.toml`, definition: filepath.Join(t.TempDir(), "task.xml"), binary: `C:\bin\rhizome.exe`}
+	want := m.render(Config{Observer: channel.ObserverOptions{Runtime: `C:\runtime\é`}})
+	if err := m.writeDefinition(want); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(m.definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) < 2 || raw[0] != 0xFF || raw[1] != 0xFE {
+		t.Fatalf("missing UTF-16LE BOM: % x", raw[:min(len(raw), 4)])
+	}
+	got, err := m.readDefinition()
+	if err != nil || got != want {
+		t.Fatalf("round trip mismatch: %v\n%q\n%q", err, got, want)
 	}
 }
 func TestEscaping(t *testing.T) {
