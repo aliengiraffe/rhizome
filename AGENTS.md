@@ -31,7 +31,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
-| `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums, Ed25519 manifest signing and the trusted key list (`keys.go`), smoke tool, npm package generation/smoke/publishing (`npm.go`, launcher in `npm/rhizome.js`), and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
+| `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums, Ed25519 manifest signing and the trusted key list (`keys.go`), smoke tool, npm package generation/smoke/publishing (`npm.go`, launcher in `npm/rhizome.js`), Homebrew cask rendering (`cask.go`), and the tag-driven release pipeline with its post-publish `publish-npm` and Homebrew `tap` jobs ([docs/releasing.md](docs/releasing.md)). |
 | `.github/workflows/vulncheck.yml` | `govulncheck ./...` on pull requests, pushes to `main`, and weekly; a Go toolchain or dependency advisory fails the check. Run `govulncheck ./...` locally when bumping `go.mod`. |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
 
@@ -278,7 +278,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   environment; only the publish job writes releases. Production signs the
   checksum manifest with the Ed25519 release key (`RHIZOME_RELEASE_SIGNING_KEY`
   secret, `releasetool sign`) and publishes `rhizome_<v>_checksums.txt.sig`;
-  `releasetool verify -signed` in the build and publish jobs requires that
+  `releasetool verify -signed` in the build, publish and tap jobs requires that
   signature to verify against `internal/release/keys.go`, so a missing or
   unlisted key fails the release, never degrades it. Key generation
   (`releasetool keygen`, seed never printed), rotation (add the new public key,
@@ -301,7 +301,16 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   smoke runner packs and installs the tarballs offline (`releasetool
   npm-smoke`) without publishing. The first publish and the npmjs.com trusted
   publisher settings are a manual runbook (docs/releasing.md "npm"); never
-  automate them. Run `goreleaser check`,
+  automate them. Only after `publish` succeeds, and
+  only for stable tags, the `tap` job (environment `homebrew-tap`, never
+  `release`, so it holds no signing secrets and signing jobs hold no tap
+  credentials) re-verifies the published assets and signature, mints a
+  GitHub App token scoped to `homebrew-spaceship`, and writes
+  `Casks/rhizome.rb` rendered by `releasetool cask` from the manifest digests.
+  It never rebuilds, makes no commit for an unchanged cask, never downgrades
+  the tap, and refuses to replace a cask without the generated header. The
+  cask has no postflight or zap: it never touches `~/.rhizome` or the
+  observer service. GoReleaser keeps `release: disable: true`. Run `goreleaser check`,
   `actionlint` and `shellcheck -x -P SCRIPTDIR scripts/release/*.sh` for
   pipeline changes. Real signing is validated only by a tagged prerelease
   (docs/releasing.md).
