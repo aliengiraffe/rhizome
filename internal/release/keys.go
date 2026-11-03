@@ -8,4 +8,6 @@ package release
 // signed by the old key so installed binaries learn the new one, then switch
 // the secret; removing a key from this list revokes it for every later build.
 // See docs/releasing.md.
-var trustedKeys = []string{}
+var trustedKeys = []string{
+	"46d7268cabf1231eba281566fc79b049422ec9339279b038ba6d125a4c667064", // 2026-11-03, first release key
+}
