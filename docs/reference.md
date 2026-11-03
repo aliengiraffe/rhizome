@@ -37,6 +37,9 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `network.gossip_port` | `RHIZOME_GOSSIP_PORT` | mcp `--gossip-port` | `7946` (Tailscale only) |
 | `network.discovery_interval` | `RHIZOME_DISCOVERY_INTERVAL` | mcp `--discovery-interval` | `20s` (Tailscale only) |
 | `sessions.recent_window` | — | — | `24h`; `0s` disables recent-only rows ([Session status](../README.md#session-status)) |
+| `sessions.share_prompts_and_tools` | — | — | `false`: no prompts or tool inputs/outputs ([Activity](#activity-replay-and-bounded-delivery)) |
+| `update.enabled` | `RHIZOME_UPDATE` | service `--update`, setup `--auto-update` (writes file) | `true`: the observer installs verified releases ([Automatic updates](service.md#automatic-updates)) |
+| `update.check_interval` | `RHIZOME_UPDATE_CHECK_INTERVAL` | service `--update-check-interval` | `24h`; between `1h` and `720h` |
 | `gateway.history.enabled` | — | — | `false`: paired hosts cannot search or read history |
 | `gateway.history.lookback` | — | — | `30d`; positive whole days or `all` |
 | `claude.peer_history.enabled`, `codex.peer_history.enabled` | — | — | inherit `gateway.history.enabled`; can only narrow it |
@@ -60,6 +63,12 @@ sessions_dir = ""
 # Optional. Omit the table, or use mode = "local", for loopback only.
 [network]
 mode = "local"   # or "lan", or "tailscale"
+
+# Optional. The background service checks GitHub Releases for newer signed
+# builds; set enabled = false to make it contact nothing.
+[update]
+enabled = true
+check_interval = "24h"
 ```
 
 `hostname` controls the `host` label in session listings for both supported agents
@@ -98,6 +107,23 @@ nonnegative Go duration (`24h`, `90m`, `0s`); negative, malformed or overflowing
 values fail at startup. MCP processes and the service read it once at start, so
 restart them after a change; there is no hot reload. See
 [Session status](../README.md#session-status) for what `recent` does and does not promise.
+
+`sessions.share_prompts_and_tools` is a file-only boolean (default `false`). When
+`true`, this host's collectors also publish each session's human prompts and its
+tool inputs and outputs, after secret redaction, in live activity and in the
+history this host serves (to local agents and, under `[gateway.history]`, to
+paired hosts). The serving host's value decides; paired hosts and subscribers
+cannot widen it. Like `recent_window`, it is read once at process start.
+
+The `[update]` table controls the observer's [automatic updates](service.md#automatic-updates).
+It is the only setting that makes Rhizome contact a remote host, and only the
+service does so: `mcp`, `config`, `setup` and `--version` never check for
+updates, and `rhizome update` (explicit check or `--apply`) works whatever the
+setting. `enabled` defaults to `true`; `check_interval` accepts a Go duration
+from `1h` to `720h`. `RHIZOME_UPDATE=0` (also `false`, `no`, `off`) and
+`service run --update=false` disable it with the standard precedence, and
+`rhizome config` shows the effective values and sources. There is no per-agent
+update key.
 
 The `gateway.history` and `*.peer_history` keys are file-only. They let directly
 [paired hosts](gateway.md) search and read this device's session history
@@ -213,7 +239,7 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 | `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. Not offered in OpenCode mode. |
 | `send_file`, `list_files`, `accept_file`, `cancel_file` | Explicit file offers between sessions on paired hosts; see [file transfers](files.md). |
 | `search_sessions(filters…, host_id?)` | Metadata search of the local history catalog by exact ID, agent, project path, title substring, and activity date, with deterministic pagination. Rows carry history availability and current live status separately. Requires the observer service's catalog. With `host_id`, searches one directly paired host that opted in. |
-| `read_session_history(session_id, agent_type, limit?, cursor?, host_id?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes prompts, reasoning, tool bodies, subagents, and peer traffic. With `host_id`, reads from one opted-in paired host within its owner's lookback. |
+| `read_session_history(session_id, agent_type, limit?, cursor?, host_id?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes reasoning, subagents, and peer traffic, and excludes prompts and tool bodies unless the serving host sets `[sessions].share_prompts_and_tools`. With `host_id`, reads from one opted-in paired host within its owner's lookback. |
 
 The two history tools are read-only and local unless `host_id` names a paired
 host whose owner enabled `[gateway.history]`. See
@@ -482,10 +508,33 @@ windows. Unknown formats increment parser-skip counters without logging content.
 
 Activity includes assistant text, tool start/completion/failure names, and turn
 completion. Thinking, user prompts, channel injections, bookkeeping, full tool
-result bodies, child transcripts and Rhizome tool traffic are excluded. Summaries
+result bodies, child transcripts and Rhizome tool traffic are excluded. With
+`[sessions].share_prompts_and_tools = true` three more kinds are published:
+`prompt` (the human's prompt text: Claude user text blocks that are not
+`isMeta`, channel injections or peer envelopes; Codex `userMessage` items or
+rollout `user_message` events without a peer envelope; OpenCode human inbox
+items), `tool_input` and `tool_output` (`<tool>: <payload>`, for example the
+Bash command and its output, file edits and diffs, MCP arguments and results).
+Prompts and tool payloads of peer-triggered turns, Rhizome's own tools, thinking
+and channel injections stay excluded. Each payload is cut to 14 KiB before the
+secret scan and to the usual 7 KiB, keeping the leading excerpt, afterwards. The
+new kinds wake subscribers like other activity, under the same batching, pause
+and circuit-breaker limits; tool-heavy sessions reach the 30-per-minute pause
+sooner. Subscribers advertise support with `FollowRequest.details`; publishers
+withhold the new kinds from older subscribers and gateway peers, which would
+otherwise reject an unknown kind. Summaries
 are deterministic; no additional model is called. Automatic output from peer-only
 turns is suppressed until a human prompt resumes work; intentional responses can still use `publish` or `send`. Turn completion
 remains in publisher history but does not wake subscribers.
+
+Every collected text is scanned for secrets before it enters publisher
+retention, so replay, queued deliveries and gateway proxies only ever carry the
+filtered form: detected values become `[REDACTED:<rule_id>]` and text the
+scanner cannot finish becomes `[REDACTED:unscanned]` (see the
+[history content policy](history.md#content-policy) for the rules, limits and
+caveats; the same filter serves history pages). `publish` and `send` text is
+delivered as written. The scanner is built once per process on first use (about
+40 ms) and adds roughly 20–50 µs per record.
 
 The publisher retains at most **five minutes, 1,000 events and 8 MiB**, evicting
 at the first limit. New subscriptions begin at the current position. Replay
@@ -499,7 +548,8 @@ The receiver has a 256-event queue and a 4,096-entry deduplication window. Autom
 activity batches every two seconds per origin, with content capped at 8 KiB;
 individual summaries are capped near 7 KiB with an explicit truncation marker.
 Announcements and direct messages bypass the batching delay, but obey pausing.
-Received, queued, written, dropped, parser skips and pauses are separate counters.
+Received, queued, written, dropped, parser skips, pauses, redacted and
+redaction failures are separate counters.
 Written means written to MCP, not acknowledged by Claude. Queue overflow may
 ultimately cause replay gaps. Write failures are counted as dropped.
 
@@ -688,10 +738,14 @@ which setup may create):
    advisory in the wizard; startup still fails closed if the daemon is unavailable.
 3. **Hostname override**: Enter keeps the stored label; `-` clears it to use the
    OS hostname. Optional gateway endpoints also accept `-` for automatic selection.
-4. **Directories**: optionally change runtime scope, Claude config directory,
+4. **Automatic updates**: whether the background service installs verified
+   releases (default yes, or the stored value). Answering the default on a file
+   that never set the key leaves the key out; any other answer writes
+   `[update] enabled`. See [automatic updates](service.md#automatic-updates).
+5. **Directories**: optionally change runtime scope, Claude config directory,
    Codex home or executable. Changing runtime scope selects different token,
    host identity and pairing state; the old state remains in the old directory.
-5. **Service**: asks whether to install and start the background service
+6. **Service**: asks whether to install and start the background service
    (default no). The question follows the configuration step whether the file
    was created, updated, or kept, and runs the same lifecycle as
    `rhizome service install --config <path>`: a missing service is installed
@@ -719,13 +773,15 @@ Without a terminal, use `--network` or `--gateway-mode`:
 ./rhizome setup --gateway-mode off --replace-config
 ./rhizome setup --network local --hostname "Work laptop"
 ./rhizome setup --network local --hostname "" --replace-config # restore OS hostname
+./rhizome setup --network local --auto-update false --replace-config # service never contacts GitHub
 ./rhizome setup --network lan --join 192.168.1.20:7946 --mdns=false
 ./rhizome setup --network tailscale --gossip-port 7950 --discovery-interval 45s
 ```
 
 `--gateway-advertise IP:port` sets a separate reachable endpoint; an explicit
 empty gateway endpoint restores automatic selection. `--runtime-dir /absolute/path`
-changes stored runtime scope. Omitted flags preserve stored values. To switch an
+changes stored runtime scope. `--auto-update true|false` writes
+`[update] enabled`. Omitted flags preserve stored values. To switch an
 existing legacy network to pairing, explicitly pass `--network local`; to switch
 back, pass `--gateway-mode off` with the desired `--network`. History sharing is
 never enabled by setup; its policies remain file-only.

@@ -18,7 +18,15 @@ import (
 
 // ObserverOptions configures read-only discovery. Roots contain agent logs, not
 // arbitrary user files. Runtime must match integrated Rhizome processes.
-type ObserverOptions struct{ Runtime, ClaudeRoot, CodexRoot, OpenCodeRoot, Hostname string }
+// ObserverOptions configures the observer. Version is the running build's
+// version, reported in observer-health.json so a restart onto a new binary
+// can be confirmed; it is never used for routing.
+type ObserverOptions struct {
+	Runtime, ClaudeRoot, CodexRoot, OpenCodeRoot, Hostname, Version string
+	// Details is [sessions].share_prompts_and_tools: observer publishers and
+	// the gateway's history service publish prompts and tool inputs/outputs.
+	Details bool
+}
 type observedFile struct {
 	startupBaseline            bool
 	c                          *collector
@@ -183,7 +191,7 @@ func (o *observer) health() {
 			f.n.mu.Unlock()
 		}
 	}
-	health := map[string]any{"updated_at": time.Now().UTC(), "observed_sessions": active, "watched_directories": len(o.dirs), "tracked_files": len(o.files), "degraded": o.retry, "parser_skips": skips, "suppressed_events": suppressed, "metadata_unavailable": metadataPending}
+	health := map[string]any{"updated_at": time.Now().UTC(), "version": o.opts.Version, "observed_sessions": active, "watched_directories": len(o.dirs), "tracked_files": len(o.files), "degraded": o.retry, "parser_skips": skips, "suppressed_events": suppressed, "metadata_unavailable": metadataPending}
 	if o.index != nil {
 		health["catalog"] = o.index.health()
 	}
@@ -501,6 +509,7 @@ func (o *observer) scan(path string, f *observedFile) {
 		n.identity.Project = clip(f.cwd, 180)
 		n.identity.DisplayName = clip(filepath.Base(f.cwd), 40)
 		n.identity.ObservationOnly = true
+		n.details = o.opts.Details
 		if err := n.start(Options{Runtime: o.opts.Runtime, Hostname: o.opts.Hostname}); err != nil {
 			n.close()
 			o.problem("observer publisher startup failed")

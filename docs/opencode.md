@@ -109,7 +109,12 @@ as native session names. Turns started only by Rhizome deliveries are suppressed
 until a human prompt arrives. Inputs are applied when OpenCode delivers them into
 the session's agent loop (`session.inbox.delivered`), not when they are queued
 (`session.inbox.enqueued`), so a queued item never flips suppression mid-turn.
-Never forwarded: reasoning, prompts, or tool outputs.
+Never published: reasoning. Prompts and tool inputs/outputs are published only
+with `[sessions].share_prompts_and_tools` ([reference](reference.md#activity-replay-and-bounded-delivery)):
+the plugin relays the inbox item's text on `input` frames and the hook's
+`input` and `result`/`output`/`error` as text on `tool` frames, within the same
+16 KiB text and 60 KiB frame bounds, and Go drops peer (`rhizome: true`) input,
+`execute`, `rhizome_*` tools and everything in a peer-triggered turn.
 Text and tool-call IDs are deduplicated in 4,096-entry windows; existing rate
 limits and the circuit breaker apply unchanged.
 

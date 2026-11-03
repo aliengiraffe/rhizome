@@ -111,8 +111,11 @@ second, with coalesced hook wake-ups and exponential reconnect backoff with jitt
 Assistant text additions, tool status summaries, and turn completion are collected.
 Peer-only turns are suppressed to prevent subscription feedback loops; explicit
 `publish` and `send` remain available. Turn markers do not wake subscribers.
-User messages (including queue injections), reasoning, child activity, full tool
-results, and Rhizome MCP calls are excluded. IDs and prior text hashes suppress
+Reasoning, child activity, queue injections and Rhizome MCP calls are excluded.
+Human `userMessage` text and tool inputs/outputs (command and aggregated output,
+file-change diffs, MCP and dynamic tool arguments and results, web search query,
+image-generation prompt) are published only with
+`[sessions].share_prompts_and_tools` ([reference](reference.md#activity-replay-and-bounded-delivery)). IDs and prior text hashes suppress
 duplicates. Replacement, rollback, compaction, and pagination overflow produce
 explicit discontinuity notices. Each scan is limited to four pages of 50 turns,
 four pages of 128 items per turn, 2,048 items, and 8 MiB of retained item text.

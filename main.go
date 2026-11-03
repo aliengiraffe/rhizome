@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"rhizome/internal/channel"
 	"rhizome/internal/config"
+	"rhizome/internal/service"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,7 +30,7 @@ func main() {
 
 func entry() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: rhizome --version | mcp | setup | uninstall | service | config | token | files | invite | join | peers | demo [flags]")
+		return fmt.Errorf("usage: rhizome --version | mcp | setup | uninstall | service | update | config | token | files | invite | join | peers | demo [flags]")
 	}
 	mode := os.Args[1]
 	if mode == "--version" || mode == "-version" {
@@ -40,6 +41,13 @@ func entry() error {
 		return nil
 	}
 	os.Args = append(os.Args[:1], os.Args[2:]...)
+	// The observer reports this identity in its health file and the updater
+	// compares releases against it; "dev" builds are never updated.
+	buildVersion, buildCommit, _ := buildIdentity()
+	if buildVersion == "dev" {
+		buildVersion = ""
+	}
+	service.SetBuild(buildVersion, buildCommit)
 	switch mode {
 	case "mcp":
 		opts := flag.NewFlagSet("mcp", flag.ContinueOnError)
@@ -96,7 +104,7 @@ func entry() error {
 		}
 	case "config":
 		fs := flag.NewFlagSet("config", flag.ContinueOnError)
-		config.Bind(fs, "runtime-dir", "codex-bin", "claude-root", "codex-root", "opencode-root")
+		config.Bind(fs, "runtime-dir", "codex-bin", "claude-root", "codex-root", "opencode-root", "update", "update-check-interval")
 		if err := fs.Parse(os.Args[1:]); err != nil {
 			return err
 		}
@@ -114,6 +122,8 @@ func entry() error {
 		return gatewayCommand(mode, os.Args[1:])
 	case "service":
 		return serviceCommand(os.Args[1:])
+	case "update":
+		return updateCommand(os.Args[1:])
 	case "setup":
 		return setup(os.Args[1:])
 	case "uninstall":

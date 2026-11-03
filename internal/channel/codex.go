@@ -65,6 +65,7 @@ type codexNodes struct {
 	opts           Options
 	history        *historyService // shared read-only catalog client for every thread node
 	recentWindow   time.Duration
+	details        bool // [sessions].share_prompts_and_tools
 	debug          bool
 }
 
@@ -87,6 +88,7 @@ func (m *codexNodes) resolve(r *mcp.CallToolRequest) (*Node, error) {
 	n.external = true
 	n.archive = m.history
 	n.recentWindow = m.recentWindow
+	n.details = m.details
 	n.debug = m.debug
 	n.collectionState = "waiting for session hook"
 	n.codex = newCodexCollector(thread, &appReader{socket: m.socket})
@@ -259,7 +261,8 @@ func RunCodex(c config.Config, o Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
-	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, binary: resolved, socket: filepath.Join(home, "app-server-control", "app-server-control.sock"), opts: o, history: history, recentWindow: c.RecentWindow, debug: c.Debug}
+	history.details = c.Sessions.SharePromptsAndTools
+	manager := &codexNodes{ctx: ctx, nodes: map[string]*Node{}, binary: resolved, socket: filepath.Join(home, "app-server-control", "app-server-control.sock"), opts: o, history: history, recentWindow: c.RecentWindow, details: c.Sessions.SharePromptsAndTools, debug: c.Debug}
 	defer manager.close()
 	server := makeServer(manager.resolve, agentCodex, func() {}, history)
 	session, err := server.Connect(ctx, &mcp.StdioTransport{}, nil)

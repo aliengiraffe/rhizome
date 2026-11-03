@@ -276,12 +276,14 @@ func (c *collector) skip(n activitySink, why string) {
 }
 
 type block struct {
-	Type      string `json:"type"`
-	Text      string `json:"text"`
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	ToolUseID string `json:"tool_use_id"`
-	IsError   bool   `json:"is_error"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	ToolUseID string          `json:"tool_use_id"`
+	IsError   bool            `json:"is_error"`
+	Input     json.RawMessage `json:"input"`
+	Content   json.RawMessage `json:"content"`
 }
 
 func (c *collector) normalize(line []byte, n activitySink, gen uint64) {
@@ -364,7 +366,20 @@ func (c *collector) normalize(line []byte, n activitySink, gen uint64) {
 	if r.IsMeta || (r.Type == "assistant" && c.peerResponse) {
 		return
 	}
-	// Channel injection is a user record. Never publish user text, even if it resembles assistant output.
+	// A human prompt is the user record's own text blocks as one event. Channel
+	// injections and peer envelopes are never prompts, and user text is never
+	// published as assistant activity, even if it resembles assistant output.
+	if r.Type == "user" {
+		var prompt []string
+		for _, b := range blocks {
+			if b.Type == "text" && strings.TrimSpace(b.Text) != "" && !isPeerInput(b.Text) && !strings.Contains(b.Text, "<channel ") {
+				prompt = append(prompt, b.Text)
+			}
+		}
+		if len(prompt) > 0 {
+			n.activity(gen, "prompt", strings.Join(prompt, "\n"))
+		}
+	}
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
@@ -390,6 +405,7 @@ func (c *collector) normalize(line []byte, n activitySink, gen uint64) {
 			}
 			if !strings.HasPrefix(b.Name, "mcp__rhizome__") {
 				n.activity(gen, "tool", "Tool started: "+b.Name)
+				toolDetail(n, gen, "tool_input", b.Name, payloadText(b.Input))
 			}
 		case "tool_result":
 			if r.Type != "user" {
@@ -408,6 +424,7 @@ func (c *collector) normalize(line []byte, n activitySink, gen uint64) {
 				result = "failed"
 			}
 			n.activity(gen, "tool", "Tool "+result+": "+name)
+			toolDetail(n, gen, "tool_output", name, payloadText(b.Content))
 		case "thinking", "redacted_thinking":
 		default:
 			c.skip(n, "unknown content block")

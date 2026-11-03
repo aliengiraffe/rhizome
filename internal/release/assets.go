@@ -1,7 +1,6 @@
 package release
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -68,54 +67,24 @@ func WriteManifest(dir, assetVersion string) error {
 
 // VerifyManifest checks that the manifest in dir lists exactly the expected
 // assets once each and that every file matches its digest. When exact is set,
-// dir must contain nothing besides those assets and the manifest, which is how
-// downloaded release assets are checked for strays.
+// dir must contain nothing besides those assets, the manifest and its optional
+// signature, which is how downloaded release assets are checked for strays.
 func VerifyManifest(dir, assetVersion string, exact bool) error {
-	f, err := os.Open(filepath.Join(dir, ManifestName(assetVersion)))
+	data, err := readBounded(filepath.Join(dir, ManifestName(assetVersion)), maxManifest)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxManifest+1))
+	seen, err := ParseManifest(data, assetVersion)
 	if err != nil {
 		return err
 	}
-	if len(data) > maxManifest {
-		return errors.New("checksum manifest too large")
-	}
-	want := Assets(assetVersion)
-	seen := map[string]string{}
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	for sc.Scan() {
-		sum, name, ok := strings.Cut(sc.Text(), "  ")
-		if !ok || len(sum) != sha256.Size*2 || strings.ToLower(sum) != sum {
-			return fmt.Errorf("malformed manifest line %q", sc.Text())
-		}
-		if _, err := hex.DecodeString(sum); err != nil {
-			return fmt.Errorf("malformed digest for %s", name)
-		}
-		if !slices.Contains(want, name) {
-			return fmt.Errorf("manifest lists unexpected asset %q", name)
-		}
-		if _, dup := seen[name]; dup {
-			return fmt.Errorf("manifest lists %s twice", name)
-		}
-		seen[name] = sum
-	}
-	if err := sc.Err(); err != nil {
-		return err
-	}
-	for _, name := range want {
-		sum, ok := seen[name]
-		if !ok {
-			return fmt.Errorf("manifest is missing %s", name)
-		}
+	for _, name := range Assets(assetVersion) {
 		got, err := fileSHA256(filepath.Join(dir, name))
 		if err != nil {
 			return fmt.Errorf("checksum %s: %w", name, err)
 		}
-		if got != sum {
-			return fmt.Errorf("%s: digest %s does not match manifest %s", name, got, sum)
+		if got != seen[name] {
+			return fmt.Errorf("%s: digest %s does not match manifest %s", name, got, seen[name])
 		}
 	}
 	if exact {
@@ -124,7 +93,7 @@ func VerifyManifest(dir, assetVersion string, exact bool) error {
 			return err
 		}
 		for _, e := range entries {
-			if e.Name() != ManifestName(assetVersion) && !slices.Contains(want, e.Name()) {
+			if e.Name() != ManifestName(assetVersion) && e.Name() != SignatureName(assetVersion) && !slices.Contains(Assets(assetVersion), e.Name()) {
 				return fmt.Errorf("unexpected file %s alongside release assets", e.Name())
 			}
 		}

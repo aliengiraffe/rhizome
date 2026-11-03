@@ -63,7 +63,9 @@ func (n *Node) enqueueLocked(e *pb.Event, subscription, token string, generation
 	}
 	return true
 }
-func automatic(e *pb.Event) bool { return e.Kind == "activity" || e.Kind == "tool" || e.Kind == "turn" }
+func automatic(e *pb.Event) bool {
+	return e.Kind == "activity" || e.Kind == "tool" || e.Kind == "turn" || detailKind(e.Kind)
+}
 func (n *Node) deliver(ctx context.Context) {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()

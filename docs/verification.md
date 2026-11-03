@@ -420,6 +420,71 @@ service installation on Linux/Windows with a large pre-existing log tree, and
 any cross-device scenario (history was local by design at that point; see the
 paired-host section below).
 
+## Secret redaction (#84, 2026-10-26)
+
+Automated on macOS (`internal/channel/redact_test.go`):
+
+- Filter table: no-finding passthrough is byte-identical; GitHub, AWS, Slack,
+  generic API key (value only, assignment context kept) and multi-line private
+  key rules; two rules in one text; repeated secrets; empty input.
+- Fail closed: scanner construction error, scan error, 50 ms timeout against a
+  stalled scanner, findings outside or not placeable in the text, and empty
+  spans all return `[REDACTED:unscanned]` within the budget; overlapping spans
+  merge into one marker.
+- 32 goroutines sharing the scanner under `-race`; a 2 MiB record with ~23k
+  findings redacts in about 0.6 s and a benign 2 MiB record is unchanged.
+- `Node.activity` redacts before retention and clipping (a secret straddling
+  the 7 KiB clip leaves no fragment) and counts `Redacted`/`RedactionFailures`;
+  a broken scanner masks the event.
+- `send` and `publish` deliver secret-like text verbatim even with a scanner
+  that fails everything.
+- Live collection for Claude transcripts, Codex rollouts and OpenCode frames
+  emits the marker, and `read_session_history` for all three agents (local and
+  through the paired-host access path) returns the identical text with
+  `redacted: true`; unredacted events carry no flag.
+- Benchmark: about 22 µs per benign 7 KiB record and 47 µs with a secret.
+
+Not covered: real credentials (fixtures use synthetic values; Betterleaks
+allowlists documented example keys), encoded secrets (not decoded by default),
+and a live peer subscribed across machines (the stdio and gateway smokes cover
+the transport; the filter runs before the text enters it).
+
+## Prompts and tool inputs/outputs (#92, 2026-10-29)
+
+Automated on macOS (`internal/channel/details_test.go`, `internal/config/sessions_test.go`,
+`plugins/opencode/rhizome.test.mjs`), with `[sessions].share_prompts_and_tools` set
+on the test node or history service:
+
+- Claude transcripts: one `prompt` per human user record (text blocks joined),
+  `tool_input`/`tool_output` from `tool_use.input` and `tool_result.content`
+  (text blocks only); `isMeta` records, channel/peer envelopes, the whole
+  peer-triggered turn, `mcp__rhizome__*` calls and thinking publish nothing.
+  Disabled, output is the previous summary-only policy.
+- Codex App Server items (`userMessage`, `commandExecution` input then output on
+  completion, `mcpToolCall`, `fileChange`), a peer-only turn through a full
+  `scan`, `rhizome` MCP calls; Codex rollouts (`event_msg` `user_message`,
+  `function_call`/`custom_tool_call` and their outputs, `mcp__rhizome__*`).
+- OpenCode bridge frames: human input text, tool start/end text, `rhizome_*` and
+  `execute` dropped, and a peer delivery suppressing the following tools. The
+  plugin relays prompt and tool text within the 60 KiB frame budget and relays
+  an unserializable payload as empty text.
+- Redaction and bounds: secrets in all three kinds become markers; a secret
+  straddling the 7 KiB clip leaves no fragment; a 2 MiB output is bounded
+  before the scan; a disabled node publishes none of the kinds.
+- Compatibility: over gRPC a subscriber without `FollowRequest.details` gets
+  neither replayed nor live detail events; one with it gets both, and an end to
+  end subscription queues a redacted `prompt` as automatic activity.
+- History: `read_session_history` for all three agents, locally and through the
+  paired-host access path, returns `user_prompt`, `tool_input` and `tool_output`
+  with `redacted: true` and `content_policy: "prompts_and_tools"`; turning the
+  serving host's switch off restores `assistant_activity_only`.
+
+Not covered: real Claude Code, Codex and OpenCode sessions with the switch on.
+The Codex App Server field names come from `codex app-server
+generate-json-schema` (codex-cli 0.165.0). The OpenCode hook payload fields
+(`input`, `result`/`output`/`error`) and the stored tool `state.content` follow
+the existing fixtures and still need the live smoke in [opencode.md](opencode.md).
+
 ## Paired-host history sharing (#44)
 
 Automated on macOS, same machine only:
@@ -711,3 +776,68 @@ ID signing, notarization `Accepted`, stapling, Gatekeeper assessment, draft
 staging and publication, and release downloads. Run a `v0.1.0-rc.1`
 prerelease and record the results here
 ([releasing.md](releasing.md#validating-before-a-stable-release)).
+
+## Auto-update (#67, 2026-10-23)
+
+Automated and local evidence, macOS 26 arm64 plus a `golang:1.27-bookworm`
+container for Linux amd64:
+
+- `go test -race ./internal/update/` covers SemVer precedence and eligibility
+  (no downgrade, prerelease only for prerelease builds, build metadata
+  ignored, `dev`/snapshot never), strict archive extraction for tar.gz and zip
+  (extra members, nested and traversal paths, absolute names, symlinks,
+  directories, duplicates, oversize documentation, wrong executable name),
+  the `codesign --display` policy (ad-hoc, other Team ID, no Developer ID
+  authority, no hardened runtime, no timestamp, other identifier, unsigned),
+  atomic install with a single backup, restore, non-writable directories and
+  the state file. A TLS `httptest` fake of the GitHub API and download host
+  drives the updater end to end: candidate selection over stable, prerelease,
+  draft and mislabelled releases; no releases and 404; rate limiting (429 and
+  403 with `X-RateLimit-Remaining: 0`); redirects to a foreign host or plain
+  HTTP; oversize bodies; a slow body against a deadline; cancellation; success
+  with restart, backup removal and state; install without a restarter and
+  confirmation by the new process; rollback when the restarted service is
+  unhealthy; deferred and required restarts; the detached finisher's success
+  and rollback; rejection with the binary untouched for an unsigned manifest,
+  no trusted keys, an unknown key, a tampered manifest, a tampered archive, an
+  archive with an extra member, a `--version` mismatch, a rejected code
+  signature, an oversize archive, a missing asset and a missing tag commit;
+  the non-writable report made once without downloading; lock contention; and
+  the background loop's backoff and prompt cancellation.
+- `go test -race ./internal/release/` covers signature round trips, wrong and
+  unknown keys, tampered manifests and signatures, truncated and oversize
+  signature files, substituted key ids, the signed-manifest file helpers and
+  the trusted key list; `./internal/config/` covers `[update]` precedence
+  (file, env, flag), source reporting in `rhizome config`, bounds and strict
+  unknown-key rejection; `./internal/service/` covers the service restarter
+  (skips when nothing is supervised, stop/start and version wait, start
+  failure), `waitHealthy` refusing a stale version, the self restarter
+  (`restart_required` without a definition, finisher spawn arguments, spawn
+  failure), the loopback-only environment hooks, status reporting and a
+  foreground run with updates disabled making no request. Root-package tests
+  cover the setup question, `--auto-update`, the terminal wizard field, stored
+  defaults and the sanitized status summary.
+- `python3 scripts/smoke_update.py` runs a real `service run` observer built
+  as version 1.0.0 against a loopback fake release 9.9.9 signed with a
+  throwaway key. On macOS: a tampered signature is refused
+  (`signature_invalid`), the disabled loop writes no state, `rhizome update`
+  reports the release, and the signed but locally built (unsigned) candidate
+  is refused with `codesign_failed` by both the loop and `update --apply`,
+  with the binary untouched and no stray files. On Linux (container): the
+  same refusals, then the signed release is installed, the foreground observer
+  exits with `restart_required`, the restarted observer reports version 9.9.9
+  in `observer-health.json`, confirms the update, removes `rhizome.previous`,
+  `rhizome update` reports up to date and `service status` prints
+  `last_outcome: updated`.
+- `goreleaser check`, `actionlint` and `shellcheck` pass with the signing
+  step added to the workflow; `GOOS=windows` and `GOOS=linux` `go vet` pass
+  for `internal/service`.
+
+Pending (requires the `release` environment, a generated signing key committed
+to `internal/release/keys.go`, and a pushed tag): a real signed prerelease
+verified by `rhizome update --check`, installed over a `.pkg` or archive
+install by `rhizome update --apply` and by the background loop, including the
+`codesign` policy against a Developer ID binary, the `not_writable` report for
+`/usr/local/bin`, the launchd finisher restart with health confirmation, and
+the systemd (`systemd-run --user`) and Task Scheduler finishers on Linux and
+Windows hosts. Record results here.

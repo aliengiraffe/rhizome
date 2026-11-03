@@ -76,7 +76,7 @@ lookback = "15d"
 		t.Fatal("original backup changed")
 	}
 	var out bytes.Buffer
-	if _, err := setupConfig(config.Config{}, path, nil, false, true, strings.NewReader("replace\n"+strings.Repeat("\n", 7)), &out, &out); err != nil {
+	if _, err := setupConfig(config.Config{}, path, nil, false, true, strings.NewReader("replace\n"+strings.Repeat("\n", 8)), &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	if after := storedDocument(t, path); !reflect.DeepEqual(before, after) {
@@ -146,7 +146,7 @@ func TestGatewayWizard(t *testing.T) {
 			if mode != "off" {
 				input += "\n\n"
 			}
-			input += "\n\n\n"
+			input += "\n\n\n\n"
 			var out bytes.Buffer
 			a, err := askConfig(prompter{in: bufioReader(input), out: &out}, c, func() error { return os.ErrNotExist })
 			if err != nil {

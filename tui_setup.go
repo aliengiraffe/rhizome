@@ -52,7 +52,7 @@ type setupModel struct {
 
 func newSetupModel(c config.Config, path string, agents []agent, checked []bool, answers *configAnswers, replace bool) *setupModel {
 	_, err := os.Lstat(path)
-	m := &setupModel{work: newUIWork(), c: c, path: path, agents: agents, fixedAgents: checked != nil, fixedAnswers: answers, exists: err == nil, replace: replace, values: map[string]string{"existing": "keep", "mode": "local", "mdns": "yes", "port": "7946", "interval": "20s", "custom": "no", "service": "no"}, width: 80, height: 24, probe: channel.CheckTailscale}
+	m := &setupModel{work: newUIWork(), c: c, path: path, agents: agents, fixedAgents: checked != nil, fixedAnswers: answers, exists: err == nil, replace: replace, values: map[string]string{"existing": "keep", "mode": "local", "mdns": "yes", "port": "7946", "interval": "20s", "custom": "no", "service": "no", "updates": map[bool]string{true: "yes", false: "no"}[c.AutoUpdate.Enabled]}, width: 80, height: 24, probe: channel.CheckTailscale}
 	m.checked = append([]bool(nil), checked...)
 	if checked == nil {
 		m.checked = make([]bool, len(agents))
@@ -82,7 +82,7 @@ func (m *setupModel) fields() []wizardField {
 			case "tailscale":
 				f = append(f, wizardField{"port", "Well-known gossip port", nil}, wizardField{"interval", "Tailnet discovery interval", nil}, wizardField{"join_tailscale", "Extra gossip host:port seeds (comma-separated)", nil})
 			}
-			f = append(f, wizardField{"hostname", "Hostname override (blank: OS hostname)", nil}, wizardField{"custom", "Customize directories or Codex binary?", []string{"no", "yes"}})
+			f = append(f, wizardField{"hostname", "Hostname override (blank: OS hostname)", nil}, wizardField{"updates", "Install verified updates automatically? (service only; HTTPS to github.com)", []string{"yes", "no"}}, wizardField{"custom", "Customize directories or Codex binary?", []string{"no", "yes"}})
 			if m.values["custom"] == "yes" {
 				f = append(f, wizardField{"runtime", "Runtime directory (blank: " + m.c.RuntimeDir + ")", nil}, wizardField{"claude", "Claude directory (blank: " + m.c.Claude.ConfigDir + ")", nil}, wizardField{"codex", "Codex home (blank: " + m.c.Codex.Home + ")", nil}, wizardField{"bin", "Codex executable (blank: " + m.c.Codex.Bin + ")", nil})
 			}
@@ -143,6 +143,12 @@ func (m *setupModel) answers() (*configAnswers, error) {
 				*v.dest = value
 			}
 		}
+	}
+	// The update answer is written when it differs from the effective value
+	// or when the file already holds the key, so an explicit choice persists.
+	if enabled := m.values["updates"] == "yes"; enabled != m.c.AutoUpdate.Enabled || m.c.Sources["update.enabled"] == "file" {
+		a.AutoUpdate = &enabled
+		a.Selected["auto-update"] = true
 	}
 	for flag, set := range map[string]bool{
 		"bind-addr": n.BindAddr != "", "advertise-addr": n.AdvertiseAddr != "", "join": len(n.Join) > 0,
@@ -349,6 +355,9 @@ func (m *setupModel) review() string {
 				b.WriteString(safeText(line) + "\n")
 			}
 		}
+	}
+	if m.fixedAnswers == nil && (!m.exists || m.values["existing"] == "replace") {
+		fmt.Fprintf(&b, "Automatic updates: %s\n", m.values["updates"])
 	}
 	fmt.Fprintf(&b, "Install and start service: %s\n", m.values["service"])
 	b.WriteString("Enter applies these changes. Esc cancels before any writes.")
