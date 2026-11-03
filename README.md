@@ -42,6 +42,16 @@ macOS has a signed and notarized installer that places `rhizome` in
 Linux and Windows artifacts are unsigned. See the
 [installation and checksum guide](docs/releasing.md#installing-and-upgrading).
 
+With Node.js 18 or later, install the same release binaries from npm:
+
+```sh
+npm i -g @aliengiraffe/rhizome     # or run once: npx @aliengiraffe/rhizome --version
+```
+
+The package runs no install scripts; npm picks the platform binary through an
+optional dependency, so do not install it with `--omit=optional`
+([npm packages](docs/releasing.md#npm)).
+
 Or build from source with Go 1.27.3+ and [Task v3](https://taskfile.dev/docs/installation):
 
 ```sh

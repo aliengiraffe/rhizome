@@ -1,5 +1,6 @@
 // Command releasetool is the release workflow's helper: it validates tags,
-// lists and checksums assets, and smoke-tests archives. Run it with
+// lists and checksums assets, smoke-tests archives, and generates, smoke-tests
+// and publishes the npm packages. Run it with
 // "go run ./internal/release/releasetool <command> [flags]".
 package main
 
@@ -17,7 +18,7 @@ import (
 	"rhizome/internal/release"
 )
 
-const usage = "usage: releasetool version|assets|checksums|sign|verify|extract|smoke|keygen [flags]"
+const usage = "usage: releasetool version|assets|checksums|sign|verify|extract|smoke|npm|npm-smoke|npm-publish|keygen [flags]"
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
@@ -38,11 +39,11 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	exact := fs.Bool("exact", false, "verify: reject files besides the assets, manifest and signature")
 	signed := fs.Bool("signed", false, "verify: require a manifest signature by a trusted key")
 	keyFile := fs.String("key-file", "", "keygen: file to create with the base64 private seed (never printed)")
-	commit := fs.String("commit", "", "smoke: commit the binary must report")
-	goos := fs.String("goos", runtime.GOOS, "smoke/extract: archive operating system")
-	goarch := fs.String("goarch", runtime.GOARCH, "smoke/extract: archive architecture (darwin uses all)")
+	commit := fs.String("commit", "", "smoke/npm-smoke: commit the binary must report")
+	goos := fs.String("goos", runtime.GOOS, "smoke/npm-smoke/extract: archive operating system")
+	goarch := fs.String("goarch", runtime.GOARCH, "smoke/npm-smoke/extract: archive architecture (darwin uses all)")
 	archive := fs.String("archive", "", "extract: archive path")
-	out := fs.String("out", "", "extract: destination directory")
+	out := fs.String("out", "", "extract: destination directory; npm/npm-publish: package directory")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -66,8 +67,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	switch args[0] {
 	case "version":
 		// KEY=VALUE lines, suitable for $GITHUB_OUTPUT.
-		fmt.Fprintf(stdout, "tag=%s\nversion=%s\nasset_version=%s\npackage_version=%s\nprerelease=%t\n",
-			v.Tag, v.Version, v.AssetVersion(), v.PackageVersion(), v.IsPrerelease())
+		fmt.Fprintf(stdout, "tag=%s\nversion=%s\nasset_version=%s\npackage_version=%s\nnpm_version=%s\nnpm_dist_tag=%s\nprerelease=%t\n",
+			v.Tag, v.Version, v.AssetVersion(), v.PackageVersion(), v.NPMVersion(), v.NPMDistTag(), v.IsPrerelease())
 	case "assets":
 		fmt.Fprintln(stdout, strings.Join(append(release.Assets(v.AssetVersion()), release.ManifestName(v.AssetVersion())), "\n"))
 	case "checksums":
@@ -116,6 +117,31 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			return err
 		}
 		fmt.Fprintln(stdout, line)
+	case "npm":
+		if *out == "" {
+			return fmt.Errorf("npm requires -out")
+		}
+		dirs, err := release.WriteNPMPackages(*dir, *out, v)
+		if err != nil {
+			return err
+		}
+		// Publish order: platform packages first, the launcher last.
+		fmt.Fprintln(stdout, strings.Join(dirs, "\n"))
+	case "npm-smoke":
+		arch := *goarch
+		if *goos == "darwin" {
+			arch = "all"
+		}
+		line, err := release.NPMSmoke(ctx, *dir, v, *commit, *goos, arch, release.ExecNPM)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, line)
+	case "npm-publish":
+		if *out == "" {
+			return fmt.Errorf("npm-publish requires -out")
+		}
+		return release.PublishNPM(ctx, *out, v, release.ExecNPM, stdout)
 	default:
 		return fmt.Errorf("%s", usage)
 	}
