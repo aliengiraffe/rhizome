@@ -164,23 +164,23 @@ func TestAskConfig(t *testing.T) {
 		check       func(configAnswers) bool
 		wantOut     string
 	}{
-		{"defaults are local", "\n\n\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" && a.RuntimeDir == "" }, ""},
-		{"numeric local", "1\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" }, ""},
-		{"lan", "lan\n192.168.1.5\n\na:7946, b:7946\nn\n\nn\n", ok, func(a configAnswers) bool {
+		{"defaults are local", "\n\n\n\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" && a.RuntimeDir == "" }, ""},
+		{"numeric local", "1\n\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" }, ""},
+		{"lan", "lan\n192.168.1.5\n\na:7946, b:7946\nn\n\n\nn\n", ok, func(a configAnswers) bool {
 			n := a.Network
 			return n.Mode == "lan" && n.BindAddr == "192.168.1.5" && n.AdvertiseAddr == "" && len(n.Join) == 2 && n.MDNS != nil && !*n.MDNS
 		}, "never written"},
-		{"lan keeps default mdns unset", "2\n\n\n\n\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "lan" && a.Network.MDNS == nil }, ""},
-		{"tailscale defaults", "3\n\n\n\n\nn\n", ok, func(a configAnswers) bool {
+		{"lan keeps default mdns unset", "2\n\n\n\n\n\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "lan" && a.Network.MDNS == nil }, ""},
+		{"tailscale defaults", "3\n\n\n\n\n\nn\n", ok, func(a configAnswers) bool {
 			n := a.Network
 			return n.Mode == "tailscale" && n.GossipPort == 0 && n.DiscoveryInterval == ""
 		}, ""},
-		{"tailscale custom and warning", "tailscale\n7950\n45s\nhost.ts.net:7946\n\nn\n", func() error { return errors.New("tailscale is not running") }, func(a configAnswers) bool {
+		{"tailscale custom and warning", "tailscale\n7950\n45s\nhost.ts.net:7946\n\n\nn\n", func() error { return errors.New("tailscale is not running") }, func(a configAnswers) bool {
 			n := a.Network
 			return n.GossipPort == 7950 && n.DiscoveryInterval == "45s" && len(n.Join) == 1
 		}, "Warning: tailscale is not running"},
-		{"retry bad choice", "wan\n1\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" }, "Choose 1, 2 or 3"},
-		{"paths only when non-default", "1\n\ny\n\n/c\n\n\n", ok, func(a configAnswers) bool {
+		{"retry bad choice", "wan\n1\n\n\nn\n", ok, func(a configAnswers) bool { return a.Network.Mode == "local" }, "Choose 1, 2 or 3"},
+		{"paths only when non-default", "1\n\n\ny\n\n/c\n\n\n", ok, func(a configAnswers) bool {
 			return a.ClaudeDir == "/c" && a.RuntimeDir == "" && a.CodexHome == "" && a.CodexBin == ""
 		}, ""},
 	}
@@ -323,7 +323,7 @@ func TestSetupConfig(t *testing.T) {
 		var out, errOut bytes.Buffer
 		f := &fakeInstaller{}
 		// replace, local, no hostname, no custom paths, install service.
-		if err := run(t, resolved(t), p, nil, false, true, "replace\noff\n1\n\nn\ny\n", &out, &errOut, f.install); err != nil {
+		if err := run(t, resolved(t), p, nil, false, true, "replace\noff\n1\n\n\nn\ny\n", &out, &errOut, f.install); err != nil {
 			t.Fatal(err)
 		}
 		backups, _ := filepath.Glob(p + ".bak-*")
@@ -338,7 +338,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
 		f := &fakeInstaller{err: errors.New("observer did not acquire its runtime lock")}
-		err := run(t, resolved(t), p, nil, false, true, "off\n1\n\nn\ny\n", &out, &errOut, f.install)
+		err := run(t, resolved(t), p, nil, false, true, "off\n1\n\n\nn\ny\n", &out, &errOut, f.install)
 		if err == nil || !errors.Is(err, f.err) {
 			t.Fatalf("got %v", err)
 		}
@@ -374,7 +374,7 @@ func TestSetupConfig(t *testing.T) {
 		p := path(t)
 		var out, errOut bytes.Buffer
 		// local, no custom paths, no service install.
-		if err := run(t, resolved(t), p, nil, false, true, "off\n1\n\nn\nn\n", &out, &errOut, never); err != nil {
+		if err := run(t, resolved(t), p, nil, false, true, "off\n1\n\n\nn\nn\n", &out, &errOut, never); err != nil {
 			t.Fatal(err)
 		}
 		if b, _ := os.ReadFile(p); !strings.Contains(string(b), `mode = "local"`) {
@@ -394,7 +394,7 @@ func TestSetupHostname(t *testing.T) {
 			c := resolved(t)
 			c.Hostname = "previous"
 			var out bytes.Buffer
-			a, err := askConfig(prompter{in: bufioReader("off\nlocal\n" + hostname + "\nn\n"), out: &out}, c, func() error { return nil })
+			a, err := askConfig(prompter{in: bufioReader("off\nlocal\n" + hostname + "\n\nn\n"), out: &out}, c, func() error { return nil })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -431,7 +431,7 @@ func TestSetupHostname(t *testing.T) {
 		})
 	}
 	var out bytes.Buffer
-	a, err := askConfig(prompter{in: bufioReader("off\nlocal\nbad\x00label\ngood\nn\n"), out: &out}, resolved(t), func() error { return nil })
+	a, err := askConfig(prompter{in: bufioReader("off\nlocal\nbad\x00label\ngood\n\nn\n"), out: &out}, resolved(t), func() error { return nil })
 	if err != nil || a.Hostname != "good" || !strings.Contains(out.String(), "control characters") {
 		t.Fatalf("%+v %v %s", a, err, &out)
 	}

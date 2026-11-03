@@ -80,7 +80,9 @@ def main():
         ui = Terminal(["setup", "--agents", ","], env)
         ui.expect("Network mode")
         ui.send(b"\r"); ui.expect("Hostname override")
-        ui.send(b"staged\r"); ui.expect("Customize directories")
+        ui.send(b"staged\r"); ui.expect("Install verified updates automatically")
+        ui.send(b"\r"); ui.expect("Customize directories")
+        ui.send(b"\x1b[Z"); ui.expect("Install verified updates")
         ui.send(b"\x1b[Z"); ui.expect("staged")
         ui.resize(30, 10)
         ui.send(b"\x03"); ui.finish(1)
@@ -89,7 +91,7 @@ def main():
 
         ui = Terminal(["setup", "--agents", ","], env)
         ui.expect("Network mode")
-        for expected in ("Hostname override", "Customize directories", "Install and start", "Enter applies"):
+        for expected in ("Hostname override", "Install verified updates automatically", "Customize directories", "Install and start", "Enter applies"):
             ui.send(b"\r"); ui.expect(expected)
         ui.send(b"\r"); ui.expect("Setup completed")
         ui.send(b"\r"); ui.finish()
