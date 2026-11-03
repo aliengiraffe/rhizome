@@ -34,7 +34,12 @@ func BinaryName(goos string) string {
 // ExtractBinary copies the executable at the root of archive into dstDir and
 // returns its path. Only that one member is written.
 func ExtractBinary(archive, goos, dstDir string) (string, error) {
-	name := BinaryName(goos)
+	return extractMember(archive, BinaryName(goos), dstDir, 0o755)
+}
+
+// extractMember copies the regular file name at the root of archive into
+// dstDir with mode perm and returns its path. Only that one member is written.
+func extractMember(archive, name, dstDir string, perm os.FileMode) (string, error) {
 	dst := filepath.Join(dstDir, name)
 	var src io.Reader
 	if strings.HasSuffix(archive, ".zip") {
@@ -87,7 +92,7 @@ func ExtractBinary(archive, goos, dstDir string) (string, error) {
 	if src == nil {
 		return "", fmt.Errorf("%s does not contain %s at its root", archive, name)
 	}
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 	if err != nil {
 		return "", err
 	}

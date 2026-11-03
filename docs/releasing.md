@@ -1,16 +1,17 @@
 # Releasing Rhizome
 
 Pushing a SemVer tag builds, signs, notarizes, smoke-tests and publishes a
-GitHub Release in `aliengiraffe/rhizome`. The pipeline is adapted from Lander's
+GitHub Release in `aliengiraffe/rhizome`, then publishes the same binaries to
+npm as [`@aliengiraffe/rhizome`](#npm). The pipeline is adapted from Lander's
 release pipeline in `aliengiraffe/env-manager`. It uses native `codesign` and
 `notarytool`, gates the build on executing the binary, and requires an explicit
 `Accepted` notarization verdict.
 
 | File | Role |
 | --- | --- |
-| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | Jobs: `meta` → `build` → `smoke` matrix → `publish`. |
+| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | Jobs: `meta` → `build` → `smoke` matrix → `publish` → `publish-npm`. |
 | [`.goreleaser.yaml`](../.goreleaser.yaml) | Cross-builds, darwin fusion and signing hook, archives. Never publishes. |
-| [`internal/release/`](../internal/release) | Tag validation, asset matrix, checksum manifest, manifest signing and trusted keys, archive smoke (`releasetool`). |
+| [`internal/release/`](../internal/release) | Tag validation, asset matrix, checksum manifest, manifest signing and trusted keys, archive smoke, npm package generation, smoke and publishing (`releasetool`). |
 | [`internal/update/`](../internal/update) | The auto-updater that consumes these assets ([service.md](service.md#automatic-updates)). |
 | [`scripts/release/`](../scripts/release) | Signing, notarization, `.pkg` build, payload verification, release notes. |
 
@@ -93,7 +94,11 @@ Snapshots are versioned `0.0.0-snapshot+<12-char commit>`.
 3. **smoke** downloads the assets on native hosts: Linux amd64 and arm64,
    Windows amd64 and arm64, macOS arm64 and Intel. Each host verifies the
    manifest, extracts its archive and runs `--version`, which must report the
-   expected version and commit. The macOS hosts re-verify the package payload.
+   expected version and commit. It then runs the npm launcher tests and
+   `releasetool npm-smoke`: generate all six npm packages, `npm pack` each,
+   install the launcher and native platform tarball into a temporary prefix
+   (offline) and run the installed `rhizome --version` with the same
+   expectations. The macOS hosts re-verify the package payload.
    In production they also check the Developer ID signature of the bare
    binary, and the installer signature, stapled ticket and Gatekeeper verdict
    of the package. `spctl` cannot assess a bare binary, so its notarization
@@ -105,6 +110,10 @@ Snapshots are versioned `0.0.0-snapshot+<12-char commit>`.
    draft's assets and re-verifies them (manifest, signature and byte-identical
    signature file), then publishes. A run that fails at any point
    leaves no public release.
+5. **publish-npm** (`contents: read`, `id-token: write`, `release`
+   environment, no secrets) runs only for tags and only after **publish**
+   succeeds. It re-verifies the assets and manifest signature, generates the
+   [npm packages](#npm) and publishes them through trusted publishing.
 
 Notarization fails unless `notarytool` exits zero **and** its JSON response is
 an object with a submission id and `"status": "Accepted"`. `Invalid`,
@@ -210,6 +219,98 @@ promptly and tell users of older builds to verify and install it by hand.
 Published releases are immutable, so a release signed by a compromised key is
 not unpublished but should be marked as a prerelease with a note.
 
+## npm
+
+Each release is also published to npm in the esbuild style: one small
+launcher package plus one package per platform, selected by npm's `os`/`cpu`
+fields. No package has install scripts (npm 12 no longer runs dependency
+lifecycle scripts), and nothing downloads at install time.
+
+| Package | `os` | `cpu` | Contents |
+| --- | --- | --- | --- |
+| `@aliengiraffe/rhizome` | – | – | `bin/rhizome.js` launcher; `optionalDependencies` on every platform package at the identical exact version |
+| `@aliengiraffe/rhizome-darwin` | `darwin` | `x64`, `arm64` | `bin/rhizome`, the signed universal binary from the darwin archive |
+| `@aliengiraffe/rhizome-linux-x64` | `linux` | `x64` | `bin/rhizome` |
+| `@aliengiraffe/rhizome-linux-arm64` | `linux` | `arm64` | `bin/rhizome` |
+| `@aliengiraffe/rhizome-win32-x64` | `win32` | `x64` | `bin/rhizome.exe` (unsigned; SmartScreen may warn) |
+| `@aliengiraffe/rhizome-win32-arm64` | `win32` | `arm64` | `bin/rhizome.exe` (unsigned; SmartScreen may warn) |
+
+`releasetool npm -tag <tag> -dir <assets> -out <dir>` (or `-snapshot <commit>`)
+verifies the checksum manifest, extracts each binary and LICENSE with the same
+strict extractor as the smoke runs, and writes the six package directories,
+printing them in publish order. Every `package.json` carries
+`repository.url` `git+https://github.com/aliengiraffe/rhizome.git` (trusted
+publishing requires the exact value), `publishConfig.access: public` and the
+source tag under `rhizome.tag`. The launcher (`internal/release/npm/rhizome.js`,
+plain CommonJS) resolves the platform binary, runs it with inherited stdio,
+forwards the exit status and re-raises a terminating signal. On an
+unsupported platform or a missing platform package (for example installed
+with `--omit=optional`) it names the package and points at GitHub Releases.
+`task test-npm` runs its `node:test` suite.
+
+**Versions and dist-tags.** The npm version is the tag without `v` and without
+SemVer build metadata, which npm ignores: `v1.2.3` → `1.2.3` (`latest`),
+`v1.3.0-rc.1` → `1.3.0-rc.1` (`next`, never `latest`), `v1.2.3+build.5` →
+`1.2.3` (`latest`). Snapshots map to `0.0.0-snapshot-<commit>` and are never
+published. `releasetool version` prints `npm_version` and `npm_dist_tag`.
+
+**Publishing.** `releasetool npm-publish -tag <tag> -out <dir>` requires npm
+11.5.1 or later, then publishes the platform packages first and the launcher
+last with `npm publish --tag <dist-tag>`. Before each publish it asks the
+registry for that exact version: one published from the same tag is skipped,
+so a run that failed halfway can be re-run without cleanup; one published from
+a different tag (`v1.2.3` and `v1.2.3+build.5`) fails the job, so cut a new
+version instead. A failed platform publish stops before the launcher, so the
+launcher never references a missing platform package.
+
+**Trusted publishing.** `publish-npm` authenticates with a short-lived OIDC
+token, not an npm token: no `NPM_TOKEN` or `NODE_AUTH_TOKEN` exists in the
+repository or the `release` environment. The repository is public, so npm
+records provenance attestations automatically. npm validates the calling
+workflow's file name, so the job must stay in `release.yml` (not a reusable
+workflow). Settings for **each** of the six packages on npmjs.com
+(Settings → Trusted publishing → GitHub Actions):
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `aliengiraffe` |
+| Repository | `rhizome` |
+| Workflow filename | `release.yml` |
+| Environment | `release` |
+| Allowed actions | `npm publish` (stage publish is always allowed) |
+
+### npm bootstrap runbook
+
+Trusted publishing can only be configured for a package that already exists,
+and a new trusted publisher configuration expires unless a publish uses it
+within 2 days. The first publish is therefore manual, done once by an owner
+of the `aliengiraffe` npm organization (2FA enforced). CI never does it.
+
+1. Generate the packages from the existing v0.9.3 release (it predates the
+   signed manifest, so `verify` checks the checksums without `-signed`):
+
+   ```sh
+   gh release download v0.9.3 -R aliengiraffe/rhizome -D /tmp/rz-assets
+   go run ./internal/release/releasetool verify -tag v0.9.3 -dir /tmp/rz-assets -exact
+   go run ./internal/release/releasetool npm -tag v0.9.3 -dir /tmp/rz-assets -out /tmp/rz-npm
+   ```
+
+2. `npm login` (npm 11 or later recommended), then publish each platform
+   package and the launcher last, approving each with 2FA:
+
+   ```sh
+   for p in darwin linux-x64 linux-arm64 win32-x64 win32-arm64; do npm publish "/tmp/rz-npm/rhizome-$p"; done
+   npm publish /tmp/rz-npm/rhizome
+   ```
+
+3. Configure trusted publishing for each of the six packages with the
+   settings above.
+4. Within 2 days of step 3, push the next release tag so CI completes the
+   first trusted publish. Otherwise the configurations expire and step 3 must
+   be repeated.
+5. After CI has published, set each package's *Publishing access* to
+   "Require two-factor authentication and disallow tokens".
+
 ## Validating before a stable release
 
 1. Open a pull request (or run the workflow manually). The ad-hoc snapshot
@@ -241,6 +342,14 @@ not unpublished but should be marked as a prerelease with a note.
   `~/.rhizome`, tokens, runtime state or the observer service. Run
   `rhizome setup` and `rhizome service install` yourself. Upgrades replace the
   binary in place.
+- **npm**: `npm i -g @aliengiraffe/rhizome` (Node.js 18 or later). The
+  binary lives in the platform package inside the global `node_modules`, and
+  `rhizome setup` and `rhizome service install` record that absolute path;
+  `npm i -g @aliengiraffe/rhizome@latest` upgrades it in place. Use a global
+  install for setup: `npx @aliengiraffe/rhizome` runs from npm's cache, whose
+  path can disappear. Automatic updates replace the binary inside
+  `node_modules` when that directory is writable, while npm keeps reporting
+  the package version it installed.
 - **Archives**: verify the checksum, extract, and put `rhizome` (or
   `rhizome.exe`) on `PATH`. A bare macOS binary has no stapled ticket, so
   Gatekeeper checks its notarization online on first run. Choose the `.pkg`
@@ -280,6 +389,10 @@ not unpublished but should be marked as a prerelease with a note.
 - **Tag moved or deleted** during a run: publish refuses because the tag no
   longer names the built commit. Do not retag a version that was ever pushed.
   Cut a new version instead.
+- **npm publish failed** after the GitHub Release was published: re-run the
+  failed `publish-npm` job. Versions already published from the tag are
+  skipped. An expired or missing trusted publisher configuration fails with
+  an authentication error; fix it on npmjs.com and re-run.
 - **Already published**: the publish job refuses to replace a published
   release or its assets. Never use `--clobber` on a published release. To
   correct one, publish a new version and, if needed, mark the bad release as a
@@ -292,7 +405,7 @@ not unpublished but should be marked as a prerelease with a note.
 ## Not included
 
 There is no Windows Authenticode signing or MSI, no Linux packages (deb/rpm),
-no Homebrew tap and no public mirror. The auto-updater updates the `rhizome`
+no Homebrew tap and no public mirror besides npm. The auto-updater updates the `rhizome`
 binary only, never agent clients, skills, hooks or plugins (`rhizome setup`
 owns those), with no delta updates and no rollback beyond the single previous
 binary kept for one cycle. The macOS package is CLI-only, with no menu-bar app

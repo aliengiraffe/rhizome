@@ -31,7 +31,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin. |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
-| `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums, Ed25519 manifest signing and the trusted key list (`keys.go`), smoke tool, and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
+| `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums, Ed25519 manifest signing and the trusted key list (`keys.go`), smoke tool, npm package generation/smoke/publishing (`npm.go`, launcher in `npm/rhizome.js`), and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
 | `.github/workflows/vulncheck.yml` | `govulncheck ./...` on pull requests, pushes to `main`, and weekly; a Go toolchain or dependency advisory fails the check. Run `govulncheck ./...` locally when bumping `go.mod`. |
 | `Taskfile.yml`, `go.mod` | Authoritative build targets and Go module/toolchain requirements. |
 
@@ -55,6 +55,7 @@ task build                         # Build the rhizome executable.
 ./rhizome config                   # Inspect effective configuration and sources.
 task check                         # go vet ./... and go test -race ./...
 task test-plugin                   # OpenCode plugin tests (Node 20+; skips without node).
+task test-npm                      # npm launcher tests (Node 18+; skips without node).
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
 python3 scripts/smoke_service.py    # Separate observer/MCP processes, handoffs, history catalog.
 python3 scripts/smoke_update.py     # Observer against a loopback fake release: refusals everywhere, install+restart on Linux.
@@ -284,7 +285,21 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   the checksum manifest and signature of every asset, and never replaces a
   published release. Linux and Windows assets are unsigned; the signed
   manifest is their authenticity root. PRs and manual runs build ad-hoc,
-  unsigned-manifest snapshots without secrets. Run `goreleaser check`,
+  unsigned-manifest snapshots without secrets. After `publish`, the
+  `publish-npm` job (production only, `release` environment, `contents: read`
+  + `id-token: write`, never an npm token) publishes `@aliengiraffe/rhizome`
+  and its five `os`/`cpu` platform packages through npm trusted publishing
+  (OIDC bound to `release.yml`, so it must not move to a reusable workflow)
+  via `releasetool npm` / `npm-publish`. No package may have install scripts;
+  every `package.json` keeps the exact `repository.url`
+  `git+https://github.com/aliengiraffe/rhizome.git`. The npm version drops
+  `v` and `+build`; prereleases use dist-tag `next`, never `latest`. Platform
+  packages publish before the launcher; a version already published from the
+  same tag (`rhizome.tag`) is skipped and one from another tag fails. Every
+  smoke runner packs and installs the tarballs offline (`releasetool
+  npm-smoke`) without publishing. The first publish and the npmjs.com trusted
+  publisher settings are a manual runbook (docs/releasing.md "npm"); never
+  automate them. Run `goreleaser check`,
   `actionlint` and `shellcheck -x -P SCRIPTDIR scripts/release/*.sh` for
   pipeline changes. Real signing is validated only by a tagged prerelease
   (docs/releasing.md).

@@ -30,6 +30,11 @@ tasks:
       - go vet ./...
       - go test -race ./...
 
+  test-npm:
+    desc: Run npm launcher tests (Node 18+; skipped when node is absent)
+    cmds:
+      - 'if command -v node >/dev/null 2>&1; then node --test internal/release/npm/rhizome.test.cjs; else echo "node not found; skipping launcher tests"; fi'
+
   test-plugin:
     desc: Run OpenCode plugin tests (Node 20+; skipped when node is absent)
     cmds:
