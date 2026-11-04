@@ -58,7 +58,7 @@ task test-plugin                   # OpenCode plugin tests (Node 20+; skips with
 task test-npm                      # npm launcher tests (Node 18+; skips without node).
 python3 scripts/smoke_stdio.py      # Isolated cluster and synthetic transcripts.
 python3 scripts/smoke_service.py    # Separate observer/MCP processes, handoffs, history catalog.
-python3 scripts/smoke_update.py     # Observer against a loopback fake release: refusals everywhere, install+restart on Linux.
+python3 scripts/smoke_update.py     # Observer against a loopback fake release: refusals everywhere, install+restart on Linux, restart notice to an older MCP.
 python3 scripts/smoke_tui.py        # Unix PTYs; isolated setup/service/peers UI and restoration.
 python3 scripts/smoke_stdio.py --lan # Same scenario in LAN mode: pinned TLS, separate registries.
 git diff --check                   # Check whitespace errors.
@@ -180,7 +180,9 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   resolves with `RHIZOME_UPDATE` / `RHIZOME_UPDATE_CHECK_INTERVAL` and the
   `--update` / `--update-check-interval` flags of `service run|install` and
   `config`; setup asks or takes `--auto-update` and writes only an explicit
-  choice (`internal/config/update.go`). It is never a per-agent key.
+  choice (`internal/config/update.go`). File-only `notify_sessions` (default
+  true) is read by `mcp`: see the restart notice below. It is never a
+  per-agent key.
   The `[network]` table (`mode` = local/lan/tailscale, plus bind/advertise/join/
   mdns/gossip_port/discovery_interval) is validated at read time and applies to
   `mcp` only, with flag > env > file > default. `rhizome setup` is the only
@@ -338,6 +340,15 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   and `RHIZOME_UPDATE_INITIAL_DELAY` (valid only with the loopback source) serve
   `scripts/smoke_update.py`; never widen them. Keep docs/service.md
   "Automatic updates" and docs/releasing.md "Release signing key" in step.
+  **Restart notice:** with `[update].notify_sessions`, each MCP node's delivery
+  loop re-reads `<runtime>/observer-health.json` every 30 s (bounded, local
+  only) and, when the observer `version` is a strictly newer release than
+  `Options.Version` (`update.ParseRunning`/`Compare`; never `dev`/snapshot),
+  calls `n.notify` once per observer version with meta `kind=update_notice`,
+  `from`, `to` and no peer identity (`internal/channel/update_notice.go`). It
+  waits for the bound/ready gates, bypasses pause, batching and the rate limit,
+  and never enters activity, retention, gossip, the gateway or history; logs
+  carry versions and outcome codes only.
 - **Hostnames are display labels.** Shared top-level `hostname` is written by
   the setup prompt or `setup --network ... --hostname ...`. Blank clears an
   override and uses the OS short hostname in every mode, including Tailscale.

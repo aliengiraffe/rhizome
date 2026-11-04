@@ -692,6 +692,7 @@ func (m *openCodeNodes) close() {
 func RunOpenCode(c config.Config, o Options) error {
 	o.Runtime = c.RuntimeDir
 	o.Hostname = c.Hostname
+	o.UpdateNotice = c.AutoUpdate.NotifySessions
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, LogOptions(c.Debug))))
 	runtime, err := runtimeDir(c.RuntimeDir)
 	if err != nil {

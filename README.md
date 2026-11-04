@@ -70,7 +70,11 @@ Releases once a day, verifies a newer release (signed manifest, SHA-256,
 macOS Developer ID, `--version`) and restarts onto it. This is the only
 outbound connection Rhizome makes; disable it with `[update] enabled = false`
 in the configuration file, `RHIZOME_UPDATE=0`, or the setup question, and use
-`rhizome update --apply` when you want. Source builds are never updated. See
+`rhizome update --apply` when you want. Source builds are never updated. Once
+the service runs a newer release than an open coding session's MCP process
+(after an automatic update, `rhizome update --apply` or a manual upgrade),
+that session gets one Rhizome notice asking you to restart it; turn this off
+with `[update] notify_sessions = false`. See
 [automatic updates](docs/service.md#automatic-updates).
 
 ### 2. Connect your agents

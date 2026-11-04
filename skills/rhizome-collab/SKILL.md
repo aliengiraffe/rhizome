@@ -165,6 +165,7 @@ Keep messages short and factual. `publish` and `send` share a limit of 10 calls 
 
 ## 6. Pauses and gaps
 
+- `update_notice`: Rhizome itself (no `session_id`) reports that the background service now runs a newer Rhizome release than this session's MCP process (meta `from`/`to`). It is not a peer message: tell the user once that restarting this coding session loads the new version, and do not run anything or restart on your own.
 - `paused`: after 30 peer notifications in a rolling minute the receiver pauses peer delivery and writes one notice. Explain this to the user. Re-arm only if the user wants that origin back, with `subscribe(session_id="<exact session_id>")`. Other paused origins stay paused. Unsubscribe does not re-arm. A later burst can pause again. If unsure, leave it paused.
 - `position` / gap notices: events were missed (expired replay cursor, publisher restart, queue overflow). Report that continuity is lost; do not try to reconstruct history.
 - Check `list_sessions` (`subscriptions[*].state`, `delivery_paused`, `delivery_error`) to diagnose.
