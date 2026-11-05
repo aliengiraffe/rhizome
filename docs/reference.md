@@ -40,6 +40,7 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `sessions.share_prompts_and_tools` | — | — | `false`: no prompts or tool inputs/outputs ([Activity](#activity-replay-and-bounded-delivery)) |
 | `update.enabled` | `RHIZOME_UPDATE` | service `--update`, setup `--auto-update` (writes file) | `true`: the observer installs verified releases ([Automatic updates](service.md#automatic-updates)) |
 | `update.check_interval` | `RHIZOME_UPDATE_CHECK_INTERVAL` | service `--update-check-interval` | `24h`; between `1h` and `720h` |
+| `update.notify_sessions` | — | — | `true`: MCP processes tell their session to restart once the observer runs a newer release ([Automatic updates](service.md#automatic-updates)) |
 | `gateway.history.enabled` | — | — | `false`: paired hosts cannot search or read history |
 | `gateway.history.lookback` | — | — | `30d`; positive whole days or `all` |
 | `claude.peer_history.enabled`, `codex.peer_history.enabled` | — | — | inherit `gateway.history.enabled`; can only narrow it |
@@ -65,10 +66,12 @@ sessions_dir = ""
 mode = "local"   # or "lan", or "tailscale"
 
 # Optional. The background service checks GitHub Releases for newer signed
-# builds; set enabled = false to make it contact nothing.
+# builds; set enabled = false to make it contact nothing. notify_sessions =
+# false stops the one-time "restart this session" notice after an upgrade.
 [update]
 enabled = true
 check_interval = "24h"
+notify_sessions = true
 ```
 
 `hostname` controls the `host` label in session listings for both supported agents
@@ -122,8 +125,12 @@ updates, and `rhizome update` (explicit check or `--apply`) works whatever the
 setting. `enabled` defaults to `true`; `check_interval` accepts a Go duration
 from `1h` to `720h`. `RHIZOME_UPDATE=0` (also `false`, `no`, `off`) and
 `service run --update=false` disable it with the standard precedence, and
-`rhizome config` shows the effective values and sources. There is no per-agent
-update key.
+`rhizome config` shows the effective values and sources. `notify_sessions`
+(default `true`, file-only) is the one `[update]` key `rhizome mcp` reads: when
+the observer runs a strictly newer release than the MCP process, the bound
+session gets one restart notice per observer version, from a local read of
+`observer-health.json` only. It works whatever `enabled` says, so manual
+upgrades notify too. There is no per-agent update key.
 
 The `gateway.history` and `*.peer_history` keys are file-only. They let directly
 [paired hosts](gateway.md) search and read this device's session history

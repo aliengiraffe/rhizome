@@ -828,7 +828,20 @@ container for Linux amd64:
   exits with `restart_required`, the restarted observer reports version 9.9.9
   in `observer-health.json`, confirms the update, removes `rhizome.previous`,
   `rhizome update` reports up to date and `service status` prints
-  `last_outcome: updated`.
+  `last_outcome: updated`. On every platform it first runs a 9.9.9 observer
+  with updates disabled next to Claude-mode MCP processes: a 1.0.0 process
+  delivers exactly one `update_notice` channel notification naming both
+  versions and logs only `update_notice_delivered` with versions and outcome;
+  a 9.9.9 process and a 1.0.0 process with `[update] notify_sessions = false`
+  deliver none; and the notice, written back into the transcript as a channel
+  injection, is not collected as activity for a subscriber.
+- `go test ./internal/channel -run 'UpdateNotice|ObserverUpgrade'` covers the
+  version matrix (equal, newer, older, prerelease, `dev`, snapshot, missing,
+  malformed, oversized health), one notice per observer version across polls,
+  rebinding and failed delivery, re-arming for a newer version, the
+  bound/`observation_only`/destination-ready gates, a paused peer feed, and the
+  Claude, Codex and OpenCode notify paths (Codex/OpenCode envelopes stay
+  recognised as peer input, so they are never re-collected).
 - `goreleaser check`, `actionlint` and `shellcheck` pass with the signing
   step added to the workflow; `GOOS=windows` and `GOOS=linux` `go vet` pass
   for `internal/service`.
