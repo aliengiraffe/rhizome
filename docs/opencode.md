@@ -10,28 +10,35 @@ deliveries; all filtering and routing decisions are made in Go.
 
 ## Install
 
-1. `task build`.
-2. `./rhizome setup --agents opencode` installs the collaboration skill, writes
+With `rhizome` installed on `PATH` ([npm recommended](reference.md#install)):
+
+1. `rhizome setup --agents opencode` installs the collaboration skill, writes
    the embedded relay plugin to `<config>/opencode/plugins/rhizome.js` and the
    display-only TUI plugin to `<config>/opencode/plugins/rhizome-tui/tui.js`
    (each reported as installed, updated or unchanged; an existing symlink is left
    alone). OpenCode discovers both from that directory; no configuration entry is
    needed. The TUI watches that directory; restart an already open TUI if peer
    toasts do not appear.
-3. Merge [`examples/opencode/opencode.json`](../examples/opencode/opencode.json)
+2. Merge [`examples/opencode/opencode.json`](../examples/opencode/opencode.json)
    into `~/.config/opencode/opencode.json`, using an absolute binary path. The
    server key must stay `rhizome`: Rhizome identifies its own tools by the
    `rhizome_` prefix. The MCP `command` must start the rhizome binary directly
    (no `sh -c`, `npx` or other wrapper), because the plugin pairs with the
-   Rhizome process by OpenCode's process ID. Rhizome never edits OpenCode config.
-4. Restart the OpenCode service: `opencode service restart`.
-5. The plugin locates the socket only through `RHIZOME_RUNTIME_DIR` in the
+   Rhizome process by OpenCode's process ID. For npm installs, use the native
+   binary in the platform package inside global `node_modules`, not the `rhizome`
+   JavaScript launcher on `PATH` (see [npm binary paths](releasing.md#installing-and-upgrading)).
+   Rhizome never edits OpenCode config.
+3. Restart the OpenCode service: `opencode service restart`.
+4. The plugin locates the socket only through `RHIZOME_RUNTIME_DIR` in the
    OpenCode service environment or the default `~/.rhizome/run`. If
    `RHIZOME_RUNTIME_DIR` is set for the MCP entry, or `runtime_dir` is set in
    `~/.rhizome/config.toml`, set the identical `RHIZOME_RUNTIME_DIR` in the
    OpenCode service environment, or the plugin and Rhizome will not find the same
    socket (Rhizome logs `opencode_runtime_from_config` when the directory comes
    from the file).
+
+For a source build instead, follow the [source instructions](../README.md#1-install)
+and run `./rhizome setup --agents opencode` from the checkout.
 
 `rhizome mcp --agent opencode` resolves configuration like the other agents:
 `runtime_dir`, `hostname` and the `[network]` table with flag > env > file >

@@ -2,8 +2,8 @@
 
 For an introduction and quickstart, see the [README](../README.md).
 This reference covers configuration, agent installation, tools, networking,
-and delivery behavior. Run shell examples from the repository root when using
-a source build.
+and delivery behavior. Shell examples assume `rhizome` is on `PATH`; for a
+source build, use `./rhizome` from the repository root.
 
 ## Configuration
 
@@ -154,6 +154,20 @@ limitations](codex.md) and the samples in `examples/codex/`.
 
 ## Install
 
+**Recommended: npm** (Node.js 18 or later):
+
+```sh
+npm i -g @aliengiraffe/rhizome
+```
+
+The package runs no install scripts and selects the platform binary through an
+optional dependency; do not use `--omit=optional`. Use a global install for
+setup: `npx @aliengiraffe/rhizome --version` is suitable for a one-off check,
+but its cache path can disappear. See [npm packages](releasing.md#npm) and the
+[installation and upgrade guide](releasing.md#installing-and-upgrading) for
+binary paths, upgrades and service restarts.
+
+**Alternative: GitHub Releases.**
 Tagged releases on the [GitHub Releases page](https://github.com/aliengiraffe/rhizome/releases)
 ship a signed and notarized macOS installer (`rhizome_<version>_macos.pkg`, which
 installs `/usr/local/bin/rhizome`) and a universal macOS archive. They also ship
@@ -167,7 +181,10 @@ yourself, and after an upgrade run `rhizome service stop` and then
 package removal and platform limits are in [docs/releasing.md](releasing.md);
 removing Rhizome from the agents and the service is
 [`rhizome uninstall`](#uninstalling).
-To build from source, follow the steps below.
+
+**Alternative: build from source.** Follow the
+[README source instructions](../README.md#1-install), then use `./rhizome`
+from the checkout in place of `rhizome`.
 
 ## OpenCode
 
@@ -186,20 +203,16 @@ by hand from `examples/opencode/`; tested with OpenCode **2.0.32**. See
 
 ## Claude setup
 
-Building from source requires Go 1.27.3+ and [Task v3](https://taskfile.dev/docs/installation).
-The MCP integration is tested on macOS and Linux.
-Claude Code **2.1.302** is the tested client; older versions are not supported by this verification.
-
-Install Task with `brew install go-task` or
-`go install github.com/go-task/task/v3/cmd/task@latest` (ensure your Go bin directory
-is on `PATH`). List available tasks with `task --list`.
+With `rhizome` installed on `PATH` (see [Install](#install)), register the
+server and hooks at user scope:
 
 ```sh
-task build
+rhizome setup --agents claude
 ```
 
-This repository ships both `.mcp.json` and `.claude/settings.json`. From this
-directory, start Claude in two terminals:
+The MCP integration is tested on macOS and Linux.
+Claude Code **2.1.302** is the tested client; older versions are not supported by this verification.
+Restart Claude Code after setup and launch it with channel support:
 
 ```sh
 claude --dangerously-load-development-channels server:rhizome
@@ -211,9 +224,16 @@ channel policy still applies. The development flag requires an **interactive**
 terminal; `claude -p` does not enable it. See the
 [Claude channel reference](https://code.claude.com/docs/en/channels-reference).
 
-For every other project, `./rhizome setup --agents claude` registers the server
-at user scope (`~/.claude.json`) and installs the same hooks in
+`rhizome setup --agents claude` registers the server
+at user scope (`~/.claude.json`) and installs the binding hooks in
 `~/.claude/settings.json`; see [Installing into agents](#installing-into-agents).
+
+**Contributor path for this repository:** build the checkout with `task build`
+(Go 1.27.3+ and [Task v3](https://taskfile.dev/docs/installation) required).
+This repository ships `.mcp.json` and `.claude/settings.json`; from its root,
+start Claude in two terminals with
+`claude --dangerously-load-development-channels server:rhizome`.
+
 A project `.mcp.json` entry named `rhizome` takes precedence over the user-scope
 one, and project hooks run in addition to user hooks, so keep the Rhizome hooks
 in one place. Do not change the server key unless you also update the hook server
@@ -362,11 +382,11 @@ tailnet, see [Tailscale mode](#tailscale-mode) below.
 
 ```sh
 # Device A: create or print this machine's cluster token.
-./rhizome token
+rhizome token
 
 # Every device: adopt the same token, enable LAN mode.
-RHIZOME_TOKEN=<token> ./rhizome mcp --lan            # flag
-RHIZOME_TOKEN=<token> RHIZOME_LAN=1 ./rhizome mcp    # or env, for .mcp.json
+RHIZOME_TOKEN=<token> rhizome mcp --lan            # flag
+RHIZOME_TOKEN=<token> RHIZOME_LAN=1 rhizome mcp    # or env, for .mcp.json
 ```
 
 `RHIZOME_TOKEN` (or `--token-file`/`RHIZOME_TOKEN_FILE`) seeds a machine whose
@@ -431,11 +451,11 @@ with Tailscale mode and the same token.
 
 ```sh
 # Device A: print the cluster token; copy it to every device.
-./rhizome token
+rhizome token
 
 # Every device:
-RHIZOME_TOKEN=<token> ./rhizome mcp --tailscale             # flag
-RHIZOME_TOKEN=<token> RHIZOME_TAILSCALE=1 ./rhizome mcp     # or env, for .mcp.json
+RHIZOME_TOKEN=<token> rhizome mcp --tailscale             # flag
+RHIZOME_TOKEN=<token> RHIZOME_TAILSCALE=1 rhizome mcp     # or env, for .mcp.json
 ```
 
 | Flag / env | Default | Meaning |
@@ -605,11 +625,11 @@ with the agent's MCP registration and hooks.
 ### Installing into agents
 
 ```sh
-./rhizome setup                     # interactive: pick agents with a checkbox list
-./rhizome setup --agents all        # select every agent (incl. opencode); terminal still asks config questions
-./rhizome setup --agents claude     # or codex, opencode, or claude,codex,opencode
-./rhizome setup --list              # read-only: detected agents and destinations
-./rhizome setup --plain             # original line/picker prompts
+rhizome setup                     # interactive: pick agents with a checkbox list
+rhizome setup --agents all        # select every agent (incl. opencode); terminal still asks config questions
+rhizome setup --agents claude     # or codex, opencode, or claude,codex,opencode
+rhizome setup --list              # read-only: detected agents and destinations
+rhizome setup --plain             # original line/picker prompts
 ```
 
 Setup detects Claude Code (`$CLAUDE_CONFIG_DIR` or `~/.claude`, or `claude` on
@@ -672,13 +692,13 @@ Then run `/rhizome-collab` in the agent with an optional task description.
 ### Uninstalling
 
 ```sh
-./rhizome uninstall                       # interactive: pick agents (preselects where Rhizome is installed), then confirm
-./rhizome uninstall --all --yes           # every agent plus the background service, no questions
-./rhizome uninstall --agents codex --yes  # one agent; claude, opencode or a comma-separated list
-./rhizome uninstall --service --yes       # only stop the observer and remove its startup definition
-./rhizome uninstall --agents all --only skills --yes   # a subset: skills, mcp, hooks, plugins
-./rhizome uninstall --all --dry-run       # print the plan; writes nothing
-./rhizome uninstall --list                # read-only: which components are installed, and where
+rhizome uninstall                       # interactive: pick agents (preselects where Rhizome is installed), then confirm
+rhizome uninstall --all --yes           # every agent plus the background service, no questions
+rhizome uninstall --agents codex --yes  # one agent; claude, opencode or a comma-separated list
+rhizome uninstall --service --yes       # only stop the observer and remove its startup definition
+rhizome uninstall --agents all --only skills --yes   # a subset: skills, mcp, hooks, plugins
+rhizome uninstall --all --dry-run       # print the plan; writes nothing
+rhizome uninstall --list                # read-only: which components are installed, and where
 ```
 
 `rhizome uninstall` reverses what setup installed, resolving the agent
@@ -775,14 +795,14 @@ tokens or changes host keys, trust, invitations, or revocations.
 Without a terminal, use `--network` or `--gateway-mode`:
 
 ```sh
-./rhizome setup --config /absolute/path/config.toml --gateway-mode lan --gateway-listen 192.168.1.10:7947
-./rhizome setup --gateway-mode tailscale --network local --replace-config
-./rhizome setup --gateway-mode off --replace-config
-./rhizome setup --network local --hostname "Work laptop"
-./rhizome setup --network local --hostname "" --replace-config # restore OS hostname
-./rhizome setup --network local --auto-update false --replace-config # service never contacts GitHub
-./rhizome setup --network lan --join 192.168.1.20:7946 --mdns=false
-./rhizome setup --network tailscale --gossip-port 7950 --discovery-interval 45s
+rhizome setup --config /absolute/path/config.toml --gateway-mode lan --gateway-listen 192.168.1.10:7947
+rhizome setup --gateway-mode tailscale --network local --replace-config
+rhizome setup --gateway-mode off --replace-config
+rhizome setup --network local --hostname "Work laptop"
+rhizome setup --network local --hostname "" --replace-config # restore OS hostname
+rhizome setup --network local --auto-update false --replace-config # service never contacts GitHub
+rhizome setup --network lan --join 192.168.1.20:7946 --mdns=false
+rhizome setup --network tailscale --gossip-port 7950 --discovery-interval 45s
 ```
 
 `--gateway-advertise IP:port` sets a separate reachable endpoint; an explicit
@@ -848,8 +868,8 @@ with `PROTOC=/path/to/protoc task proto`. Production service
 Randomized subscriptions are available only via an explicit command:
 
 ```sh
-./rhizome demo -gossip 7946 -grpc 9000
-./rhizome demo -gossip 7947 -grpc 9001 -join 127.0.0.1:7946
+rhizome demo -gossip 7946 -grpc 9000
+rhizome demo -gossip 7947 -grpc 9001 -join 127.0.0.1:7946
 ```
 
 The demo retains its original unauthenticated, live-only `sessions` channel and
