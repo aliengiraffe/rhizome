@@ -48,6 +48,12 @@ Use a global install for setup: `npx @aliengiraffe/rhizome --version` is fine
 for a one-off check, but its cache path can disappear. See
 [npm packages](docs/releasing.md#npm).
 
+**Alternative: Homebrew** on macOS or Linux (stable releases):
+
+```sh
+brew install --cask aliengiraffe/spaceship/rhizome
+```
+
 **Alternative: GitHub Releases.** Download a build from
 [GitHub Releases](https://github.com/aliengiraffe/rhizome/releases): a signed and
 notarized macOS installer places `rhizome` in `/usr/local/bin`, and archives are

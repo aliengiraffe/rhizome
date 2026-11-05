@@ -167,6 +167,11 @@ but its cache path can disappear. See [npm packages](releasing.md#npm) and the
 [installation and upgrade guide](releasing.md#installing-and-upgrading) for
 binary paths, upgrades and service restarts.
 
+**Alternative: Homebrew.** Install stable releases on macOS or Linux with
+`brew install --cask aliengiraffe/spaceship/rhizome`. The cask installs the
+same release binary, never touches `~/.rhizome` and never installs or restarts
+the observer.
+
 **Alternative: GitHub Releases.**
 Tagged releases on the [GitHub Releases page](https://github.com/aliengiraffe/rhizome/releases)
 ship a signed and notarized macOS installer (`rhizome_<version>_macos.pkg`, which
