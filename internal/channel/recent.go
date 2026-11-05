@@ -76,14 +76,16 @@ func recentUntil(last *time.Time, window time.Duration, now time.Time) (time.Tim
 // recentFromCatalog selects the catalog sessions that are recent at now. The
 // result is sorted by newest activity, then agent and session ID, and capped at
 // maxRecentSessions; the second value counts rows dropped by the cap.
-func recentFromCatalog(c *catalogFile, window time.Duration, now time.Time, host string, name func(*historySession) string) ([]recentSession, int) {
+// accept, when not nil, filters by agent type before sorting and capping, so rows
+// withheld from one audience never use up its 64 slots.
+func recentFromCatalog(c *catalogFile, window time.Duration, now time.Time, host string, accept func(agent string) bool, name func(*historySession) string) ([]recentSession, int) {
 	if c == nil || window <= 0 {
 		return nil, 0
 	}
 	now = now.UTC()
 	var out []recentSession
 	for _, s := range c.sessions() {
-		if !recentExportable(s) {
+		if !recentExportable(s) || accept != nil && !accept(s.AgentType) {
 			continue
 		}
 		expires, ok := recentUntil(s.LastActivityAt, window, now)
@@ -159,7 +161,7 @@ func (n *Node) recentSessions(now time.Time) ([]recentSession, map[sessionKey]ti
 		}
 	}
 	overrides := n.archive.names()
-	rows, omitted := recentFromCatalog(c, n.recentWindow, now, n.local().Host, func(s *historySession) string {
+	rows, omitted := recentFromCatalog(c, n.recentWindow, now, n.local().Host, nil, func(s *historySession) string {
 		name, _ := n.archive.effectiveName(s, overrides)
 		return name
 	})

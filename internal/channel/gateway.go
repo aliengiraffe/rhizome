@@ -785,18 +785,11 @@ func (g *gateway) recentExport(now time.Time, pi bool) []recentSession {
 		return nil
 	}
 	overrides := g.history.names()
-	rows, _ := recentFromCatalog(c, g.recentWindow, now, g.base.local().Host, func(s *historySession) string {
+	// Pi rows are withheld from peers without the Pi subprotocol before the cap
+	// applies, so they never crowd out the rows those peers may see.
+	rows, _ := recentFromCatalog(c, g.recentWindow, now, g.base.local().Host, func(agent string) bool { return pi || agent != "pi" }, func(s *historySession) string {
 		name, _ := g.history.effectiveName(s, overrides)
 		return name
 	})
-	if !pi {
-		kept := rows[:0]
-		for _, r := range rows {
-			if r.AgentType != "pi" {
-				kept = append(kept, r)
-			}
-		}
-		rows = kept
-	}
 	return rows
 }

@@ -208,7 +208,10 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   one (preferred, implies OpenCode), and `pi` sessions, `recent` rows and history
   only over the Pi one (older peers drop links over unknown agent types, so every
   new exported agent type needs its own subprotocol; a Pi identity or `recent` row
-  on a link without it drops the link). Never forward proxy advertisements, trust peer-supplied endpoints,
+  on a link without it drops the link). The rule holds in every direction through
+  `gatewayLink.accepts`: snapshots, a peer naming a local target (`localRoute`),
+  a local sender or subscriber put on the wire (`gatewayProxy.source`), and
+  `recent` rows, which are filtered by link capability before the 64-row cap. Never forward proxy advertisements, trust peer-supplied endpoints,
   or expose the admin API or history except through the opt-in peer-history policy below. Cross-host ID collisions fail closed.
   Revocation closes connections and invalidates queued events via local trust
   grants; old invitations cannot restore revoked trust. Every link end logs a

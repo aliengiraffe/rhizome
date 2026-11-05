@@ -29,7 +29,12 @@ sees a Pi session, a Pi `recent` row or Pi history, while a build that knows
 neither negotiates none. A Pi identity or Pi `recent` row arriving on a link that
 did not negotiate Pi support is invalid and drops the link. Remote Pi sessions
 are routable, followable and file-transfer targets like any other exported
-session, and `[pi.peer_history]` governs shared Pi history.
+session, and `[pi.peer_history]` governs shared Pi history. The same capability
+check applies when a peer names a local session as a target and when a local
+session is put on the wire as the sender or subscriber of a request, for OpenCode
+and Pi alike, so a link without the matching subprotocol never carries those
+sessions in either direction. `recent` rows are filtered by capability before the
+64-row cap, so withheld Pi rows never crowd out the rows an older peer may see.
 
 On each host, setup can save these settings without a terminal:
 

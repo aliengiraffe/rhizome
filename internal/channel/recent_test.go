@@ -61,7 +61,7 @@ func TestRecentSelectionIsBoundedAndDeterministic(t *testing.T) {
 	c.Files = append(c.Files, &indexedFile{Path: "/claude/gone", Agent: "claude", Session: "gone", LastAt: &now, MissingAt: &missing})
 	add("claude", "dup", now)
 	add("claude", "dup", now)
-	rows, omitted := recentFromCatalog(c, 24*time.Hour, now, "dev", func(s *historySession) string { return "name:" + s.SessionID })
+	rows, omitted := recentFromCatalog(c, 24*time.Hour, now, "dev", nil, func(s *historySession) string { return "name:" + s.SessionID })
 	if len(rows) != maxRecentSessions || omitted != 4 {
 		t.Fatalf("rows %d omitted %d", len(rows), omitted)
 	}
@@ -76,10 +76,10 @@ func TestRecentSelectionIsBoundedAndDeterministic(t *testing.T) {
 			t.Fatalf("unexpected row %+v", r)
 		}
 	}
-	if again, _ := recentFromCatalog(c, 24*time.Hour, now, "dev", func(s *historySession) string { return "" }); fmt.Sprint(again) != fmt.Sprint(rows) && len(again) != len(rows) {
+	if again, _ := recentFromCatalog(c, 24*time.Hour, now, "dev", nil, func(s *historySession) string { return "" }); fmt.Sprint(again) != fmt.Sprint(rows) && len(again) != len(rows) {
 		t.Fatal("selection is not deterministic")
 	}
-	if rows, omitted := recentFromCatalog(c, 0, now, "dev", nil); rows != nil || omitted != 0 {
+	if rows, omitted := recentFromCatalog(c, 0, now, "dev", nil, nil); rows != nil || omitted != 0 {
 		t.Fatal("zero window advertised rows")
 	}
 }
@@ -418,5 +418,31 @@ func TestOpenCodeListsRecentSessions(t *testing.T) {
 	hh.h.clock = func() time.Time { return now.Add(2 * time.Hour) }
 	if got := rowStatus(t, n.listSessions(), "ended"); got != "absent" {
 		t.Fatalf("expired session: %s", got)
+	}
+}
+
+// Rows withheld from one audience must not use up its slots: filtering happens
+// before the cap, so a host with more than 64 newer Pi rows still lets a peer
+// without the Pi subprotocol see its older Claude rows.
+func TestRecentFilterAppliesBeforeCap(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	c := &catalogFile{}
+	add := func(agent, session string, last time.Time) {
+		c.Files = append(c.Files, &indexedFile{Path: "/" + agent + "/" + session, Agent: agent, Session: session, Cwd: "/work/" + session, LastAt: &last})
+	}
+	for i := 0; i < maxRecentSessions+6; i++ {
+		add("pi", fmt.Sprintf("p%02d", i), now.Add(-time.Duration(i)*time.Second))
+	}
+	add("claude", "older-a", now.Add(-time.Hour))
+	add("claude", "older-b", now.Add(-2*time.Hour))
+	name := func(s *historySession) string { return "" }
+	withoutPi := func(agent string) bool { return agent != "pi" }
+	rows, omitted := recentFromCatalog(c, 24*time.Hour, now, "dev", withoutPi, name)
+	if len(rows) != 2 || omitted != 0 || rows[0].SessionID != "older-a" || rows[1].SessionID != "older-b" {
+		t.Fatalf("a peer without Pi saw %d rows (omitted %d): %+v", len(rows), omitted, rows)
+	}
+	rows, omitted = recentFromCatalog(c, 24*time.Hour, now, "dev", nil, name)
+	if len(rows) != maxRecentSessions || omitted != 8 || rows[0].AgentType != "pi" {
+		t.Fatalf("unfiltered selection changed: %d rows, omitted %d", len(rows), omitted)
 	}
 }

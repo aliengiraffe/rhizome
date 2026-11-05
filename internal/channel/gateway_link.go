@@ -330,7 +330,7 @@ func (l *gatewayLink) advertise() {
 		sessions := []*pb.Identity{}
 		scanCtx, stopScan := context.WithTimeout(l.ctx, 3*time.Second)
 		for _, p := range logicalPeers(l.g.base.peers()) {
-			if !gatewayExportable(p) || !gatewayPeerAccepts(p, l.opencode, l.pi) {
+			if !gatewayExportable(p) || !l.accepts(p) {
 				continue
 			}
 			// Probe before export: stale gossip never establishes remote authority.
@@ -498,7 +498,7 @@ func (l *gatewayLink) localRoute(ctx context.Context, source, target *pb.Identit
 		return nil, nil, errors.New("unadvertised source")
 	}
 	dst, err := l.g.base.resolve(ctx, target.SessionId)
-	if err != nil || !gatewayExportable(dst) || !matches(dst, target) {
+	if err != nil || !gatewayExportable(dst) || !l.accepts(dst) || !matches(dst, target) {
 		return nil, nil, errors.New("stale or ambiguous local target")
 	}
 	src, err := l.g.base.resolve(ctx, source.SessionId)
@@ -589,7 +589,7 @@ func (p *gatewayProxy) source(ctx context.Context, source, target *pb.Identity) 
 		return nil, errors.New("stale gateway target")
 	}
 	actual, err := p.node.resolve(ctx, source.GetSessionId())
-	if err != nil || !gatewayExportable(actual) || !matches(actual, source) {
+	if err != nil || !gatewayExportable(actual) || !p.link.accepts(actual) || !matches(actual, source) {
 		return nil, errors.New("invalid local gateway source")
 	}
 	actual.Endpoint = ""
@@ -665,6 +665,13 @@ func newGatewayUpgrader() *websocket.Upgrader {
 
 func newGatewayDialer(tlsCfg *tls.Config) *websocket.Dialer {
 	return &websocket.Dialer{TLSClientConfig: tlsCfg, HandshakeTimeout: 5 * time.Second, Proxy: nil, Subprotocols: []string{gatewaySubprotocolPi, gatewaySubprotocolOpenCode}}
+}
+
+// accepts reports whether the subprotocol negotiated on this link allows p to
+// cross it in either direction: advertised in a snapshot, named as a target by
+// a peer, or put on the wire as the sender or subscriber of a local request.
+func (l *gatewayLink) accepts(p *pb.Identity) bool {
+	return gatewayPeerAccepts(p, l.opencode, l.pi)
 }
 
 // gatewayPeerAccepts reports whether a snapshot sent to a peer may include p.

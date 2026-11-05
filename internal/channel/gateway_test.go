@@ -703,3 +703,62 @@ func TestGatewayPeerAccepts(t *testing.T) {
 		}
 	}
 }
+
+// A link that did not negotiate the Pi subprotocol must never carry a Pi session
+// in either direction: a peer naming it as the target of a request (localRoute),
+// or a local Pi session put on the wire as the sender of one (proxy source).
+// OpenCode follows the same rule for its own subprotocol.
+func TestGatewayLinkWithholdsSessionsWithoutSubprotocol(t *testing.T) {
+	runtime := filepath.Join(t.TempDir(), "runtime")
+	start := func(session, agent string) *Node {
+		t.Helper()
+		n := node(t)
+		if err := n.start(Options{Runtime: runtime}); err != nil {
+			t.Fatal(err)
+		}
+		bind(t, n, session, t.TempDir())
+		n.mu.Lock()
+		n.identity.AgentType = agent
+		n.mu.Unlock()
+		return n
+	}
+	// The sessions under test start first, so they are registered before the nodes
+	// that resolve them look (a failed first probe is not retried for 30 s).
+	live := map[string]*Node{"pi": start("pi-live", "pi"), "opencode": start("oc-live", "opencode"), "claude": start("cl-live", "claude")}
+	remote := start("remote", "claude") // stands in for the paired host's session proxy
+	base := start("base", "claude")     // resolves everything above, so it starts last
+	gatewayUntil(t, func() bool {
+		_, err := base.resolve(context.Background(), "remote")
+		return err == nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for _, tc := range []struct {
+		name         string
+		opencode, pi bool
+		allowed      map[string]bool
+	}{
+		{"no subprotocol", false, false, map[string]bool{"claude": true}},
+		{"OpenCode subprotocol", true, false, map[string]bool{"claude": true, "opencode": true}},
+		{"Pi subprotocol", true, true, map[string]bool{"claude": true, "opencode": true, "pi": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &gatewayLink{ctx: ctx, g: &gateway{base: base}, opencode: tc.opencode, pi: tc.pi, proxies: map[string]*gatewayProxy{}}
+			p := &gatewayProxy{link: l, remote: cloneIdentity(remote.local()), node: remote}
+			l.proxies[remote.local().NodeId] = p
+			for agent, n := range live {
+				var e1, e2 error
+				gatewayUntil(t, func() bool { // both resolvers must see the session before it is judged
+					_, e1 = remote.resolve(ctx, n.local().SessionId)
+					_, e2 = base.resolve(ctx, n.local().SessionId)
+					return e1 == nil && e2 == nil
+				})
+				_, _, routeErr := l.localRoute(ctx, remote.local(), n.local())
+				_, sourceErr := p.source(ctx, n.local(), remote.local())
+				if tc.allowed[agent] != (routeErr == nil) || tc.allowed[agent] != (sourceErr == nil) {
+					t.Errorf("%s session: allowed=%v, localRoute err=%v, source err=%v", agent, tc.allowed[agent], routeErr, sourceErr)
+				}
+			}
+		})
+	}
+}
