@@ -2,7 +2,8 @@
 """Live Pi check: `rhizome setup --agents pi` installs the embedded extension and a real
 `pi --mode rpc` loads it. Rhizome must bind exactly the Pi session (and rebind on /new),
 publish the session's activity to a peer, and deliver a peer's `send` into the session,
-which runs a turn that is not republished.
+which runs a turn that is not republished. Finally the observer indexes Pi's own session
+file and the peer reads the history back through `search_sessions`/`read_session_history`.
 
 Models are served by a loopback OpenAI-compatible stub registered through models.json in
 a private agent directory: no credentials and no real provider are used. Skips without
@@ -97,7 +98,7 @@ try:
         fail(f'setup did not pin the explicit configuration: {settings}')
     settings['command'] = str(wrapper)
     launch.write_text(json.dumps(settings))
-    proc = subprocess.Popen(['pi', '--mode', 'rpc', '--no-session', '--provider', 'stub', '--model', 'stub-1'], cwd=work, env=env,
+    proc = subprocess.Popen(['pi', '--mode', 'rpc', '--provider', 'stub', '--model', 'stub-1'], cwd=work, env=env,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(root / 'pi.err', 'w'), text=True)
     responses, agent_ends = {}, []
 
@@ -174,7 +175,13 @@ try:
         fail(f'unexpected bindings {bindings()}')
 
     # A peer in the same runtime sees the Pi session and follows it.
-    peer = Client(peerdir, run=run, agent='claude', cwd=work)
+    # The observer and the peer share one configuration, so they agree on the log roots.
+    hist = root / 'hist.toml'
+    for d in ('claude', 'codex'):
+        (root / d).mkdir()
+    hist.write_text('runtime_dir = %s\n[claude]\nprojects_dir = %s\n[codex]\nsessions_dir = %s\n[pi]\nsessions_dir = %s\n'
+                    % tuple(json.dumps(str(x)) for x in (run, root / 'claude', root / 'codex', agent / 'sessions')))
+    peer = Client(peerdir, run=run, agent='claude', cwd=work, env={'RHIZOME_CONFIG': str(hist)})
     peer.bind('smoke-peer', peerdir)
     until(lambda: any(s['identity']['session_id'] == second and s['identity']['agent_type'] == 'pi' and s['status'] == 'live'
                       and s['delivery_capable'] for s in peer.tool('list_sessions')['sessions']))
@@ -207,9 +214,32 @@ try:
         fail(f'a peer-only turn was republished: {leaked}')
     print('peer message delivered, model saw the envelope, reaction not republished')
 
+    # History: the observer indexes the file Pi wrote (never tailing it) and the peer reads it.
+    sessions = list((agent / 'sessions').rglob('*.jsonl'))
+    if not sessions:
+        fail('pi wrote no session file')
+    observer = subprocess.Popen([str(binary), 'service', 'run', '--config', str(hist)], stdout=subprocess.DEVNULL,
+                                stderr=open(root / 'observer.err', 'w'), env={k: v for k, v in env.items() if k != 'RHIZOME_CONFIG'})
+    try:
+        def pi_rows():  # the catalog does not exist until the observer's first flush
+            result = peer.call('tools/call', {'name': 'search_sessions', 'arguments': {'agent_type': 'pi'}})
+            return [] if result.get('isError') else json.loads(result['content'][0]['text'])['sessions']
+        until(lambda: any(r['session_id'] == second for r in pi_rows()))
+        row = next(r for r in pi_rows() if r['session_id'] == second)
+        if row['agent_type'] != 'pi' or Path(row['project_path']).resolve() != work.resolve() or row['delivery_capable'] is not True:
+            fail(f'unexpected history row for the live Pi session: {row}')
+        page = peer.tool('read_session_history', {'session_id': second, 'agent_type': 'pi'})
+        texts = [e['text'] for e in page['events'] if e.get('text')]
+        if 'stub reply #1' not in texts or any('stub reply #2' in t or 'smoke ping' in t for t in texts):
+            fail(f'history does not match the published activity: {page["events"]}')
+        print('history indexed from Pi\'s session file and read through the peer')
+    finally:
+        observer.terminate()
+        observer.wait(timeout=15)
+
     proc.stdin.close()
     proc.wait(timeout=15)
-    print('OK: pi binds, collects and receives deliveries through the installed extension')
+    print('OK: pi binds, collects, receives deliveries and is searchable through the installed extension')
 finally:
     if peer is not None:
         try:

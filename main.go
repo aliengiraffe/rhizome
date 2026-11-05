@@ -104,7 +104,7 @@ func entry() error {
 		}
 	case "config":
 		fs := flag.NewFlagSet("config", flag.ContinueOnError)
-		config.Bind(fs, "runtime-dir", "codex-bin", "claude-root", "codex-root", "opencode-root", "update", "update-check-interval")
+		config.Bind(fs, "runtime-dir", "codex-bin", "claude-root", "codex-root", "opencode-root", "pi-root", "update", "update-check-interval")
 		if err := fs.Parse(os.Args[1:]); err != nil {
 			return err
 		}

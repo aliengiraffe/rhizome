@@ -478,7 +478,8 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   so redaction, opt-in prompt/tool kinds and peer-turn suppression are identical;
   a delivery emits an `input` marker with `rhizome: true`. Implemented: bind,
   titles, delivery ack, collection, node, `list_sessions`, and `rhizome
-  setup|uninstall --agents pi`. Not implemented: history source, `recent`,
+  setup|uninstall --agents pi`, and local-only history (below). Not implemented:
+  `recent` rows, peer history,
   gateway (`gatewayExportable` excludes `pi` until a
   subprotocol exists). Smoke: `python3 scripts/smoke_pi.py` (needs `pi`; skips
   without it; stub model, no credentials; covers bind, collection and peer
@@ -505,7 +506,12 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   queues/cursors, contact an agent daemon, or open files outside the configured
   roots (re-confined on every page, symlinks refused). Reads reuse the live
   normalizers through `activitySink` from byte zero so the content policy stays
-  identical; never add a raw-record fallback. OpenCode is the one non-file
+  identical; never add a raw-record fallback. Pi is a third file source
+  (`pi.sessions_dir`, `--pi-root`, `internal/channel/pi_log.go`): the observer
+  indexes its logs for the catalog only and never tails them (live Pi activity
+  comes from the extension), history is local-only (no `[pi.peer_history]` and
+  no `HistoryAgents` entry, so paired hosts never see Pi sessions) and Pi is
+  not in `recentExportable` until the gateway subprotocol exists. OpenCode is the one non-file
   source: its sessions are rows in `opencode.db`, opened only read-only
   (`mode=ro`, `query_only`, short-lived connection, never written or
   checkpointed) through the pure-Go `modernc.org/sqlite` driver (the sole SQLite

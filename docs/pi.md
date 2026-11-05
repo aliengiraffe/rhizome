@@ -12,7 +12,8 @@ built-in MCP (before 0.99.0) are unsupported. Design, research and spike results
 | `list_sessions` shows the live Pi session; Pi native title (`session_info`) | Implemented (title unverified live) |
 | Peer delivery as `pi.sendMessage` custom messages, with acknowledgement | Implemented; `smoke_pi.py` delivers a peer `send` into a real Pi session (stub model) and checks the model saw the peer envelope |
 | Activity collection (assistant text, tool start/end, turn end; prompts and tool bodies only with `[sessions].share_prompts_and_tools`) | Implemented; the same redaction, peer-turn suppression and gap reporting as OpenCode |
-| History source, `recent` rows | Not implemented |
+| History source (`search_sessions`, `read_session_history`, `agent_type: "pi"`), local only | Implemented: the observer indexes `pi.sessions_dir`, never tails it ([history.md](history.md#sources-identity-titles)) |
+| `recent` rows, peer history (`[pi.peer_history]`) | Not implemented |
 | `rhizome setup` / `uninstall --agents pi`, skill install | Implemented |
 | Paired-host gateway (`pi` sessions are not exported) | Not implemented |
 

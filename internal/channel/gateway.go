@@ -128,7 +128,7 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway, history
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	served := newHistoryService(historyScope{Runtime: runtime, ClaudeRoot: history.ClaudeRoot, CodexRoot: history.CodexRoot, OpenCodeRoot: history.OpenCodeRoot})
+	served := newHistoryService(historyScope{Runtime: runtime, ClaudeRoot: history.ClaudeRoot, CodexRoot: history.CodexRoot, OpenCodeRoot: history.OpenCodeRoot, PiRoot: history.PiRoot})
 	served.details = history.Details
 	g := &gateway{recent: newGatewayRecent(dir), recentWindow: history.RecentWindow, history: served, historyPolicy: history.Policy, historyActive: map[string]int{}, retry: map[string]gatewayRetry{}, proxySlots: make(chan struct{}, 128), enrollmentRate: rate.NewLimiter(4, 8), ctx: ctx, cancel: cancel, cfg: cfg, runtime: runtime, host: host, endpoint: endpoint, cert: cert, statePath: statePath, state: state, links: map[string]*gatewayLink{}, dialing: map[string]bool{}}
 	g.files, err = newGatewayFiles(runtime)

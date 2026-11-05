@@ -716,7 +716,7 @@ func RunOpenCode(c config.Config, o Options) error {
 	if err != nil {
 		return err
 	}
-	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
+	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, PiRoot: c.Pi.SessionsDir})
 	manager := newOpenCodeNodes(ctx, runtime)
 	history.details = c.Sessions.SharePromptsAndTools
 	manager.history = history

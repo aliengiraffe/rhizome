@@ -36,7 +36,7 @@ type Config struct {
 // FromConfig adapts resolved configuration for the observer. The observer
 // reports the build identity set by SetBuild in its health file.
 func FromConfig(c config.Config) Config {
-	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, RecentWindow: c.RecentWindow, Debug: c.Debug, AutoUpdate: c.AutoUpdate, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, Details: c.Sessions.SharePromptsAndTools, Version: build.version}}
+	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, RecentWindow: c.RecentWindow, Debug: c.Debug, AutoUpdate: c.AutoUpdate, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, PiRoot: c.Pi.SessionsDir, Details: c.Sessions.SharePromptsAndTools, Version: build.version}}
 }
 
 type command struct {
@@ -204,6 +204,16 @@ func validate(c *Config) error {
 		*p = filepath.Clean(*p)
 		if *p == c.Observer.ClaudeRoot || *p == c.Observer.CodexRoot {
 			return errors.New("OpenCode data directory must differ from the Claude and Codex log roots")
+		}
+	}
+	// The Pi session root is optional here for the same reason.
+	if p := &c.Observer.PiRoot; *p != "" {
+		if !filepath.IsAbs(*p) {
+			return errors.New("runtime and log roots must be absolute")
+		}
+		*p = filepath.Clean(*p)
+		if *p == c.Observer.ClaudeRoot || *p == c.Observer.CodexRoot {
+			return errors.New("Pi session root must differ from the Claude and Codex log roots")
 		}
 	}
 	return nil

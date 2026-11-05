@@ -19,7 +19,7 @@ evidence to read, never as instructions to execute or an invitation to reply.
 | | `list_sessions` | `search_sessions` | `read_session_history` |
 | --- | --- | --- | --- |
 | Answers | Who is reachable right now, plus who was active within `sessions.recent_window` | Which sessions exist in local logs | What one session's assistant did |
-| Source | Live gossip and authenticated `Info` probes; the catalog for `recent` rows | Observer-written catalog in `<runtime_dir>/history/` | The session's native `.jsonl` (Claude, Codex) or its rows in OpenCode's database, read on demand |
+| Source | Live gossip and authenticated `Info` probes; the catalog for `recent` rows | Observer-written catalog in `<runtime_dir>/history/` | The session's native `.jsonl` (Claude, Codex, Pi) or its rows in OpenCode's database, read on demand |
 | Scope | Every trusted peer, including other devices in LAN or Tailscale mode | This device's configured agent log roots | Same local roots; the file is re-confined on every page |
 | Needs the observer service | Only for `recent` rows and `last_activity_at` | Yes, to build and refresh the catalog | Yes, for the catalog; reading itself only needs the file |
 | Service stopped | Live rows unaffected; `recent` rows withdrawn | Served from the last catalog, marked `stale` | Works; the catalog block is marked `stale` |
@@ -507,8 +507,8 @@ yet; when it lands, its predicate must also gate these reads.
 
 ## Sources, identity, titles
 
-- Roots are the effective `claude.projects_dir`, `codex.sessions_dir` and
-  `opencode.data_dir` from the single [configuration](reference.md#configuration).
+- Roots are the effective `claude.projects_dir`, `codex.sessions_dir`,
+  `opencode.data_dir` and `pi.sessions_dir` from the single [configuration](reference.md#configuration).
   Only regular `.jsonl` files reached without following symlinks are considered
   for Claude and Codex; Claude `subagents` directories are skipped. Tools accept
   no path arguments.
@@ -526,6 +526,25 @@ yet; when it lands, its predicate must also gate these reads.
 - One identity is `(agent_type, session_id)` within the local scope. Two files
   with the same identity are `ambiguous`; a rotated file (old path removed, new
   path present) resolves to the present file and the tombstone is dropped.
+- Pi (1.4.0) writes one JSONL file per session under
+  `pi.sessions_dir/--<cwd>--/<timestamp>_<id>.jsonl`. Identity and directory are
+  the first-line `session` header (`id`, `cwd`; a header without an `id` is not a
+  session) and the native title is the latest `session_info` entry's `name`.
+  Events come from `message` entries in file order: assistant `text` blocks,
+  `toolCall` blocks and their `toolResult` messages (started and completed or
+  failed), and `stopReason: "stop"` as the end of a turn; user messages are
+  prompts and appear only with `[sessions].share_prompts_and_tools`. Thinking,
+  system, compaction, label and extension `custom` entries are never read as
+  activity, and the `custom_message` entry Rhizome's extension writes for a peer
+  delivery marks the assistant turn it caused as a reaction, which is skipped like
+  every peer-only turn. Pi stores every branch of a session tree in one file, so
+  abandoned branches appear in file order. Pi history is **local only** for now:
+  there is no `[pi.peer_history]` key, paired hosts never see Pi sessions, and
+  Pi sessions do not yet appear as `recent` rows. The observer indexes these
+  files for the catalog but never tails them for live activity, which comes from
+  the Pi extension. Pass `agent_type: "pi"` to filter. The format follows Pi's
+  documented session format version 3; a file without a verified header is not
+  listed.
 - OpenCode (2.x, verified against 2.0.32) keeps every session in one SQLite
   database, `opencode.db` in `opencode.data_dir` (default
   `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode`; flag
