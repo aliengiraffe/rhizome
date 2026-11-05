@@ -43,9 +43,9 @@ type Config struct {
 		DataDir     string      `toml:"data_dir"`     // Directory holding opencode.db; default $XDG_DATA_HOME/opencode or ~/.local/share/opencode.
 		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for OpenCode-sourced history.
 	} `toml:"opencode"`
-	// Pi sessions are history-only here: peers never read them (see HistoryAgents).
 	Pi struct {
-		SessionsDir string `toml:"sessions_dir"` // Session log root the observer indexes; default $PI_CODING_AGENT_DIR/sessions or ~/.pi/agent/sessions.
+		SessionsDir string      `toml:"sessions_dir"` // Session log root the observer indexes; default $PI_CODING_AGENT_DIR/sessions or ~/.pi/agent/sessions.
+		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for Pi-sourced history.
 	} `toml:"pi"`
 	Gateway      Gateway           `toml:"gateway"`
 	Network      Network           `toml:"network"`
@@ -252,7 +252,7 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	for _, k := range updateKeys {
 		known["update."+k] = true
 	}
-	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history"} {
+	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history", "pi.peer_history"} {
 		known[table] = true
 		for _, k := range peerHistoryKeys {
 			known[table+"."+k] = true
@@ -280,14 +280,14 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	if err := raw.Gateway.Validate(); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
-	c.PeerHistory, err = historyPolicy(raw.Gateway.History, map[string]PeerHistory{"claude": raw.Claude.PeerHistory, "codex": raw.Codex.PeerHistory, "opencode": raw.OpenCode.PeerHistory}, func(table, key string) bool {
+	c.PeerHistory, err = historyPolicy(raw.Gateway.History, map[string]PeerHistory{"claude": raw.Claude.PeerHistory, "codex": raw.Codex.PeerHistory, "opencode": raw.OpenCode.PeerHistory, "pi": raw.Pi.PeerHistory}, func(table, key string) bool {
 		return md.IsDefined(append(strings.Split(table, "."), key)...)
 	})
 	if err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
-	c.Gateway.History, c.Claude.PeerHistory, c.Codex.PeerHistory, c.OpenCode.PeerHistory = raw.Gateway.History, raw.Claude.PeerHistory, raw.Codex.PeerHistory, raw.OpenCode.PeerHistory
-	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history"} {
+	c.Gateway.History, c.Claude.PeerHistory, c.Codex.PeerHistory, c.OpenCode.PeerHistory, c.Pi.PeerHistory = raw.Gateway.History, raw.Claude.PeerHistory, raw.Codex.PeerHistory, raw.OpenCode.PeerHistory, raw.Pi.PeerHistory
+	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history", "pi.peer_history"} {
 		for _, k := range peerHistoryKeys {
 			source := "default"
 			if md.IsDefined(append(strings.Split(table, "."), k)...) {

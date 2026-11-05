@@ -21,6 +21,16 @@ the link stays up and that host sees only Claude and Codex sessions; upgrade bot
 hosts to share OpenCode sessions. Without this negotiation such a host would
 reject the snapshot and drop the link.
 
+Pi sessions (`agent_type: "pi"`) follow the same pattern with the later
+`rhizome.gateway.pi.v1` subprotocol, which implies the OpenCode one. A build that
+supports it offers it first, so two such hosts negotiate it; against a host that
+only knows `opencode.v1` the link negotiates that one and the older host never
+sees a Pi session, a Pi `recent` row or Pi history, while a build that knows
+neither negotiates none. A Pi identity or Pi `recent` row arriving on a link that
+did not negotiate Pi support is invalid and drops the link. Remote Pi sessions
+are routable, followable and file-transfer targets like any other exported
+session, and `[pi.peer_history]` governs shared Pi history.
+
 On each host, setup can save these settings without a terminal:
 
 ```sh
@@ -240,7 +250,7 @@ A host owner can let paired hosts search and read its session-history catalog
 through `search_sessions`/`read_session_history` with an exact `host_id`. This
 is off unless the serving host's file sets `gateway.history.enabled = true`. A
 global `lookback` (default `30d`, or `all`) and per-source-agent
-`[claude.peer_history]`/`[codex.peer_history]` overrides limit what is shared.
+`[claude.peer_history]`/`[codex.peer_history]`/`[opencode.peer_history]`/`[pi.peer_history]` overrides limit what is shared.
 The serving service reads the policy at startup, so restart it after a change;
 the restart also expires every outstanding remote cursor.
 

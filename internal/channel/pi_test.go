@@ -83,8 +83,8 @@ func TestPiBindAndList(t *testing.T) {
 	if id.Project != dir || id.DisplayName != filepath.Base(dir) {
 		t.Fatalf("project %q display %q", id.Project, id.DisplayName)
 	}
-	if gatewayExportable(id) {
-		t.Fatal("pi sessions must not be exported to paired hosts yet")
+	if !gatewayExportable(id) || gatewayPeerAccepts(id, true, false) || !gatewayPeerAccepts(id, true, true) {
+		t.Fatal("pi sessions are exportable, but only over the Pi subprotocol")
 	}
 	if _, ok := n.listSessions()["sessions"]; !ok {
 		t.Fatal("list_sessions has no sessions key")

@@ -87,8 +87,14 @@ func TestRecentSelectionIsBoundedAndDeterministic(t *testing.T) {
 func TestValidRecentSession(t *testing.T) {
 	now := time.Now()
 	ok := recentSession{SessionID: "s", AgentType: "claude", DisplayName: "d", Project: "/p", SessionName: "n", Host: "h", LastActivityAt: now, ExpiresAt: now.Add(time.Hour)}
-	if !validRecentSession(ok) {
+	if !validRecentSession(ok, false) {
 		t.Fatal("valid entry rejected")
+	}
+	// Pi rows are valid only on a link that negotiated the Pi subprotocol.
+	pi := ok
+	pi.AgentType = "pi"
+	if validRecentSession(pi, false) || !validRecentSession(pi, true) {
+		t.Fatal("Pi recent row must require the Pi subprotocol")
 	}
 	for name, mutate := range map[string]func(*recentSession){
 		"empty session":     func(r *recentSession) { r.SessionID = "" },
@@ -105,7 +111,7 @@ func TestValidRecentSession(t *testing.T) {
 	} {
 		r := ok
 		mutate(&r)
-		if validRecentSession(r) {
+		if validRecentSession(r, true) {
 			t.Errorf("%s accepted", name)
 		}
 	}

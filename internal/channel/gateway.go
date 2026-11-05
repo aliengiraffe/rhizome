@@ -776,7 +776,7 @@ func gatewayAddresses(ctx context.Context, cfg config.Gateway, ts tailscaleClien
 // recentExport lists this host's own recent-only sessions for one snapshot.
 // It reads only the local catalog, so entries learned from other paired hosts
 // are never forwarded, and it advertises nothing while the observer is stopped.
-func (g *gateway) recentExport(now time.Time) []recentSession {
+func (g *gateway) recentExport(now time.Time, pi bool) []recentSession {
 	if g.recentWindow <= 0 || g.history == nil {
 		return nil
 	}
@@ -789,5 +789,14 @@ func (g *gateway) recentExport(now time.Time) []recentSession {
 		name, _ := g.history.effectiveName(s, overrides)
 		return name
 	})
+	if !pi {
+		kept := rows[:0]
+		for _, r := range rows {
+			if r.AgentType != "pi" {
+				kept = append(kept, r)
+			}
+		}
+		rows = kept
+	}
 	return rows
 }

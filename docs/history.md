@@ -66,7 +66,7 @@ Metadata search only. Rows prove that a log exists, not that an agent runs.
 | Field | Type / default | Semantics |
 | --- | --- | --- |
 | `session_id` | optional string, 1–128 bytes | Exact, case-sensitive native ID. No prefix, glob, or display-name matching. |
-| `agent_type` | optional `claude` \| `codex` \| `opencode` | Omitted means all supported agent types. |
+| `agent_type` | optional `claude` \| `codex` \| `opencode` \| `pi` | Omitted means all supported agent types. |
 | `project_path` | optional absolute string, ≤ 4096 bytes | Lexically cleaned and compared for equality with the session's recorded `cwd`. No subtree matching, filesystem access, symlink resolution, or implicit caller-project restriction. |
 | `name_contains` | optional nonempty string, ≤ 256 UTF-8 bytes | Literal substring of the effective `session_name` after Unicode lowercase folding. Not a regex, glob, SQL pattern, or transcript search. |
 | `updated_after` | optional RFC 3339 | Inclusive lower bound on `last_activity_at`. |
@@ -127,7 +127,7 @@ Reads permitted records from one session's native log in source order.
 | Field | Type / default | Semantics |
 | --- | --- | --- |
 | `session_id` | required string, 1–128 bytes | Exact ID from a search row. |
-| `agent_type` | required `claude` \| `codex` | Selects the historical namespace. It is not a live routing key. |
+| `agent_type` | required `claude` \| `codex` \| `opencode` \| `pi` | Selects the historical namespace. It is not a live routing key. |
 | `limit` | integer 1–200, default 50 | Maximum events per page. |
 | `cursor` | optional string, ≤ 512 bytes | Continuation of the same session, agent, and limit. |
 
@@ -371,6 +371,9 @@ enabled = false
 
 [opencode.peer_history] # optional override for OpenCode-sourced history
 lookback = "7d"
+
+[pi.peer_history]       # optional override for Pi-sourced history
+enabled = false
 ```
 
 - Agent overrides apply to the **source history's** agent type, never to the
@@ -390,6 +393,11 @@ lookback = "7d"
   already enables `[gateway.history]` therefore starts sharing its OpenCode
   history with paired hosts after upgrading; set `[opencode.peer_history]`
   `enabled = false` to withhold it.
+- Pi history inherits the global switch too, but is served only over a link that
+  negotiated `rhizome.gateway.pi.v1` ([gateway.md](gateway.md)): to a host that
+  predates it Pi sessions look absent. A host that already enables
+  `[gateway.history]` starts sharing its Pi history after upgrading; set
+  `[pi.peer_history]` `enabled = false` to withhold it.
 - `rhizome config` prints the effective, inherited value for every agent. The
   policy applies uniformly to all paired hosts; there are no per-peer ACLs.
 - The service reads the policy when it starts. **Restart the service** (`rhizome
@@ -538,9 +546,9 @@ yet; when it lands, its predicate must also gate these reads.
   activity, and the `custom_message` entry Rhizome's extension writes for a peer
   delivery marks the assistant turn it caused as a reaction, which is skipped like
   every peer-only turn. Pi stores every branch of a session tree in one file, so
-  abandoned branches appear in file order. Pi history is **local only** for now:
-  there is no `[pi.peer_history]` key, paired hosts never see Pi sessions, and
-  Pi sessions do not yet appear as `recent` rows. The observer indexes these
+  abandoned branches appear in file order. Paired hosts see Pi history only
+  under `[pi.peer_history]` and over the Pi gateway subprotocol, and finished
+  Pi sessions can appear as `recent` rows like Claude and Codex. The observer indexes these
   files for the catalog but never tails them for live activity, which comes from
   the Pi extension. Pass `agent_type: "pi"` to filter. The format follows Pi's
   documented session format version 3; a file without a verified header is not

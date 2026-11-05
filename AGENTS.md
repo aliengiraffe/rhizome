@@ -2,12 +2,13 @@
 
 ## Orientation
 
-Rhizome is a Go MCP bridge for local coding agent sessions (Claude Code, Codex
-and OpenCode). It binds verified session identities, collects selected activity,
+Rhizome is a Go MCP bridge for local coding agent sessions (Claude Code, Codex,
+OpenCode and Pi). It binds verified session identities, collects selected activity,
 discovers peers through memberlist, and delivers events over authenticated
 loopback gRPC. Claude uses channel notifications; Codex uses per-thread nodes and
 local queue delivery; OpenCode uses an embedded plugin over a private Unix socket
-bridge. An optional per-user service observes coding agent logs independently of MCP
+bridge; Pi uses an embedded extension over the same kind of bridge, bound by a
+per-session nonce ([docs/pi.md](docs/pi.md)). An optional per-user service observes coding agent logs independently of MCP
 and maintains the local session-history catalog behind `search_sessions` and
 `read_session_history`; see [docs/service.md](docs/service.md) for lifecycle,
 boundaries, and validation and [docs/history.md](docs/history.md) for the
@@ -200,9 +201,12 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   service flags are opt-in and separate from MCP networking, which stays local
   when pairing is enabled. The service bridges remote sessions through protocol-2
   proxies (`gateway_host`); only local identities with `gateway_version = 1`
-  are exported, and `opencode` sessions only over links that negotiated the
-  `rhizome.gateway.opencode.v1` subprotocol (older peers drop links over unknown agent
-  types). Never forward proxy advertisements, trust peer-supplied endpoints,
+  are exported, `opencode` sessions only over links that negotiated the
+  `rhizome.gateway.opencode.v1` subprotocol or the later `rhizome.gateway.pi.v1`
+  one (preferred, implies OpenCode), and `pi` sessions, `recent` rows and history
+  only over the Pi one (older peers drop links over unknown agent types, so every
+  new exported agent type needs its own subprotocol; a Pi identity or `recent` row
+  on a link without it drops the link). Never forward proxy advertisements, trust peer-supplied endpoints,
   or expose the admin API or history except through the opt-in peer-history policy below. Cross-host ID collisions fail closed.
   Revocation closes connections and invalidates queued events via local trust
   grants; old invitations cannot restore revoked trust. Every link end logs a
@@ -478,10 +482,9 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   so redaction, opt-in prompt/tool kinds and peer-turn suppression are identical;
   a delivery emits an `input` marker with `rhizome: true`. Implemented: bind,
   titles, delivery ack, collection, node, `list_sessions`, and `rhizome
-  setup|uninstall --agents pi`, and local-only history (below). Not implemented:
-  `recent` rows, peer history,
-  gateway (`gatewayExportable` excludes `pi` until a
-  subprotocol exists). Smoke: `python3 scripts/smoke_pi.py` (needs `pi`; skips
+  setup|uninstall --agents pi`, history (below), and the paired-host
+  gateway (`recent` rows, `[pi.peer_history]`, sessions; only over
+  `rhizome.gateway.pi.v1`, covered by `smoke_gateway.py`). Smoke: `python3 scripts/smoke_pi.py` (needs `pi`; skips
   without it; stub model, no credentials; covers bind, collection and peer
   delivery); `task test-plugin` covers the extension. Design: `docs/superpowers/specs/2026-10-28-pi-support-design.md`.
 - **Coordinate collection across processes.** Direct integrations acquire the
@@ -540,8 +543,9 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   `recent (catalog)`) and enables debug-level stderr/`observer.log` records,
   which carry metadata only; no parentheses without it.
 - **Recent sessions are metadata, never routes.** `recent` rows (`internal/channel/recent.go`) are
-  computed for Claude Code and Codex on the owning host from the observer's catalog
-  (OpenCode callers can list them, but OpenCode history is not advertised): `now -
+  computed for Claude Code, Codex and Pi on the owning host from the observer's catalog
+  (OpenCode callers can list them, but OpenCode history is not advertised; Pi rows
+  go to paired hosts only over the Pi subprotocol): `now -
   last_activity_at <= [sessions].recent_window` (default `24h`, `0s` disables),
   inclusive, UTC, from recorded log timestamps only; unknown timestamps never
   qualify and timestamps more than five minutes in the future fail closed.
@@ -562,7 +566,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   is the user contract; restart applies configuration changes.
 - **Peer history is opt-in, serving-host enforced and direct.** File-only keys
   `[gateway.history]` (`enabled` default false, `lookback` default `30d`) and
-  `[claude|codex|opencode.peer_history]` overrides resolve to `config.HistoryPolicy`.
+  `[claude|codex|opencode|pi.peer_history]` overrides resolve to `config.HistoryPolicy`.
   The global switch is a master gate, and agent keys refer to the source
   history's agent (any caller may pass `host_id`). The service reads the policy at start; a restart applies a
   change and expires remote cursors. Tools take an optional exact `host_id`

@@ -59,7 +59,7 @@ type recentStatus struct {
 // privacy (#37) must extend both. Only sessions with exactly one readable
 // source qualify; tombstones and duplicate sources are never advertised.
 func recentExportable(s *historySession) bool {
-	return s != nil && s.SessionID != "" && len(s.SessionID) <= 128 && (s.AgentType == "claude" || s.AgentType == "codex") && (s.Availability == "available" || s.Availability == "partial")
+	return s != nil && s.SessionID != "" && len(s.SessionID) <= 128 && (s.AgentType == "claude" || s.AgentType == "codex" || s.AgentType == "pi") && (s.Availability == "available" || s.Availability == "partial")
 }
 
 // recentUntil applies the recency rule to one recorded timestamp and returns
@@ -118,13 +118,13 @@ func sortRecent(rows []recentSession) {
 
 // validRecentSession bounds an entry received from a paired host with the
 // same limits as exported identities. Peer-supplied host IDs are ignored.
-func validRecentSession(r recentSession) bool {
+func validRecentSession(r recentSession, pi bool) bool {
 	for _, s := range []string{r.SessionID, r.AgentType, r.DisplayName, r.Project, r.SessionName, r.Host} {
 		if !utf8.ValidString(s) {
 			return false
 		}
 	}
-	return r.SessionID != "" && len(r.SessionID) <= 128 && (r.AgentType == "claude" || r.AgentType == "codex") && len(r.DisplayName) <= 40 && len(r.Project) <= 180 && len(r.SessionName) <= 96 && len(r.Host) <= 64 && !r.LastActivityAt.IsZero() && !r.ExpiresAt.IsZero() && !r.ExpiresAt.Before(r.LastActivityAt)
+	return r.SessionID != "" && len(r.SessionID) <= 128 && (r.AgentType == "claude" || r.AgentType == "codex" || pi && r.AgentType == "pi") && len(r.DisplayName) <= 40 && len(r.Project) <= 180 && len(r.SessionName) <= 96 && len(r.Host) <= 64 && !r.LastActivityAt.IsZero() && !r.ExpiresAt.IsZero() && !r.ExpiresAt.Before(r.LastActivityAt)
 }
 
 // recentSessions returns this device's recent-only rows, the recorded last
@@ -219,7 +219,7 @@ func (r *gatewayRecent) set(l *gatewayLink, entries []recentSession) {
 			break
 		}
 		key := sessionKey{e.AgentType, e.SessionID}
-		if !validRecentSession(e) || seen[key] {
+		if !validRecentSession(e, l.pi) || seen[key] {
 			continue
 		}
 		seen[key] = true
@@ -288,7 +288,7 @@ func gatewayRecentPeers(runtime string, now time.Time) []recentSession {
 			continue
 		}
 		for _, e := range entries[:min(len(entries), maxRecentSessions)] {
-			if !validRecentSession(e) || now.After(e.ExpiresAt) {
+			if !validRecentSession(e, true) || now.After(e.ExpiresAt) { // written only after validation on a Pi link
 				continue
 			}
 			e.HostID = host

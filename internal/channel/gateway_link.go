@@ -28,7 +28,8 @@ type gatewayFrame struct {
 	Error      string            `json:"error,omitempty"`
 }
 type gatewayLink struct {
-	opencode     bool // the peer negotiated gatewaySubprotocolOpenCode
+	opencode     bool // the peer negotiated gatewaySubprotocolOpenCode or the later Pi one
+	pi           bool // the peer negotiated gatewaySubprotocolPi
 	lastSnapshot time.Time
 	established  time.Time
 	stopOnce     sync.Once
@@ -111,7 +112,8 @@ func (g *gateway) attach(host string, c *websocket.Conn, outgoing bool) bool {
 		<-old.done
 	}
 	ctx, cancel := context.WithCancel(g.ctx)
-	l := &gatewayLink{opencode: c.Subprotocol() == gatewaySubprotocolOpenCode, lastSnapshot: time.Now(), established: time.Now(), g: g, host: host, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
+	sub := c.Subprotocol()
+	l := &gatewayLink{opencode: sub == gatewaySubprotocolOpenCode || sub == gatewaySubprotocolPi, pi: sub == gatewaySubprotocolPi, lastSnapshot: time.Now(), established: time.Now(), g: g, host: host, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
 	g.mu.Lock()
 	if reason := g.attachRejection(host, outgoing, true); reason != "" {
 		g.mu.Unlock()
@@ -328,7 +330,7 @@ func (l *gatewayLink) advertise() {
 		sessions := []*pb.Identity{}
 		scanCtx, stopScan := context.WithTimeout(l.ctx, 3*time.Second)
 		for _, p := range logicalPeers(l.g.base.peers()) {
-			if !gatewayExportable(p) || !gatewayPeerAccepts(p, l.opencode) {
+			if !gatewayExportable(p) || !gatewayPeerAccepts(p, l.opencode, l.pi) {
 				continue
 			}
 			// Probe before export: stale gossip never establishes remote authority.
@@ -347,7 +349,7 @@ func (l *gatewayLink) advertise() {
 			}
 		}
 		stopScan()
-		if l.write(gatewayFrame{Type: "snapshot", Sessions: sessions, Recent: l.g.recentExport(l.g.now())}) != nil {
+		if l.write(gatewayFrame{Type: "snapshot", Sessions: sessions, Recent: l.g.recentExport(l.g.now(), l.pi)}) != nil {
 			return
 		}
 		select {
@@ -357,8 +359,11 @@ func (l *gatewayLink) advertise() {
 		}
 	}
 }
-func validGatewayIdentity(p *pb.Identity) bool {
-	return p != nil && p.Protocol == 1 && p.GatewayVersion == 1 && len(p.NodeId) == 32 && p.SessionId != "" && len(p.SessionId) <= 128 && p.Generation > 0 && p.GatewayHost == "" && p.Endpoint == "" && p.GossipEndpoint == "" && p.CertFingerprint == "" && len(p.Host) <= 64 && len(p.SessionName) <= 96 && len(p.Project) <= 180 && len(p.DisplayName) <= 40 && (p.AgentType == "claude" || p.AgentType == "codex" || p.AgentType == "opencode")
+
+// validGatewayIdentity bounds a session received from a paired host. Pi
+// sessions are valid only on a link that negotiated the Pi subprotocol.
+func validGatewayIdentity(p *pb.Identity, pi bool) bool {
+	return p != nil && p.Protocol == 1 && p.GatewayVersion == 1 && len(p.NodeId) == 32 && p.SessionId != "" && len(p.SessionId) <= 128 && p.Generation > 0 && p.GatewayHost == "" && p.Endpoint == "" && p.GossipEndpoint == "" && p.CertFingerprint == "" && len(p.Host) <= 64 && len(p.SessionName) <= 96 && len(p.Project) <= 180 && len(p.DisplayName) <= 40 && (p.AgentType == "claude" || p.AgentType == "codex" || p.AgentType == "opencode" || pi && p.AgentType == "pi")
 }
 func (l *gatewayLink) reconcile() {
 	for {
@@ -368,7 +373,7 @@ func (l *gatewayLink) reconcile() {
 		case list := <-l.snapshots:
 			wanted := map[string]*pb.Identity{}
 			for _, p := range list {
-				if !validGatewayIdentity(p) || wanted[p.NodeId] != nil {
+				if !validGatewayIdentity(p, l.pi) || wanted[p.NodeId] != nil {
 					l.stop("invalid_snapshot")
 					return
 				}
@@ -646,20 +651,33 @@ func (p *gatewayProxy) close() {
 // OpenCode sessions.
 const gatewaySubprotocolOpenCode = "rhizome.gateway.opencode.v1"
 
+// gatewaySubprotocolPi is offered before the OpenCode one by builds whose
+// snapshots, recent rows and served history may carry Pi sessions. It implies
+// OpenCode support. gorilla selects the first client-offered protocol the server
+// supports, so a Pi-capable peer talking to an OpenCode-only build negotiates
+// the OpenCode one and never sees Pi sessions, and a build that knows neither
+// negotiates none.
+const gatewaySubprotocolPi = "rhizome.gateway.pi.v1"
+
 func newGatewayUpgrader() *websocket.Upgrader {
-	return &websocket.Upgrader{HandshakeTimeout: 5 * time.Second, Subprotocols: []string{gatewaySubprotocolOpenCode}, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}
+	return &websocket.Upgrader{HandshakeTimeout: 5 * time.Second, Subprotocols: []string{gatewaySubprotocolPi, gatewaySubprotocolOpenCode}, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}
 }
 
 func newGatewayDialer(tlsCfg *tls.Config) *websocket.Dialer {
-	return &websocket.Dialer{TLSClientConfig: tlsCfg, HandshakeTimeout: 5 * time.Second, Proxy: nil, Subprotocols: []string{gatewaySubprotocolOpenCode}}
+	return &websocket.Dialer{TLSClientConfig: tlsCfg, HandshakeTimeout: 5 * time.Second, Proxy: nil, Subprotocols: []string{gatewaySubprotocolPi, gatewaySubprotocolOpenCode}}
 }
 
 // gatewayPeerAccepts reports whether a snapshot sent to a peer may include p.
-func gatewayPeerAccepts(p *pb.Identity, opencode bool) bool {
-	return opencode || p.AgentType != "opencode"
+func gatewayPeerAccepts(p *pb.Identity, opencode, pi bool) bool {
+	switch p.AgentType {
+	case "opencode":
+		return opencode
+	case "pi":
+		return pi
+	}
+	return true
 }
 
 func gatewayExportable(p *pb.Identity) bool {
-	// Pi sessions are not exported until a gateway subprotocol exists for them.
-	return p != nil && p.SessionId != "" && p.GatewayHost == "" && p.GatewayVersion == 1 && p.AgentType != "pi"
+	return p != nil && p.SessionId != "" && p.GatewayHost == "" && p.GatewayVersion == 1
 }
