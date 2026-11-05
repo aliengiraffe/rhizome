@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Live Pi binding check: `rhizome setup --agents pi` installs the embedded extension and a real `pi --mode rpc` loads it; it
-registers `rhizome mcp --agent pi`; the Go side must bind exactly the Pi session and
-re-bind on /new. No model turn and no credentials are used. Skips without `pi`.
+"""Live Pi check: `rhizome setup --agents pi` installs the embedded extension and a real
+`pi --mode rpc` loads it. Rhizome must bind exactly the Pi session (and rebind on /new),
+publish the session's activity to a peer, and deliver a peer's `send` into the session,
+which runs a turn that is not republished.
 
-Run after `task build`: python3 scripts/smoke_pi.py [--bin ./rhizome]
+Models are served by a loopback OpenAI-compatible stub registered through models.json in
+a private agent directory: no credentials and no real provider are used. Skips without
+`pi`. Run after `task build`: python3 scripts/smoke_pi.py [--bin ./rhizome]
 """
 import json
 import os
@@ -14,8 +17,10 @@ import sys
 import tempfile
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 binary = Path(sys.argv[sys.argv.index('--bin') + 1] if '--bin' in sys.argv else ROOT / 'rhizome').resolve()
 
 
@@ -34,13 +39,43 @@ if shutil.which('pi') is None:
     sys.exit(0)
 if not binary.exists():
     fail(f'{binary} not found; run task build')
+from smoke_stdio import Client, until  # noqa: E402  (after sys.path)
 
 root = Path(tempfile.mkdtemp(prefix='rzpi-'))  # short path: Unix socket names are bounded
+requests = []  # bodies the stub model received
+
+
+class Stub(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get('content-length', 0)))
+        requests.append(body.decode())
+        reply = 'stub reply #%d' % len(requests)
+        chunk = lambda delta, finish=None, **extra: 'data: ' + json.dumps({
+            'id': 'c%d' % len(requests), 'object': 'chat.completion.chunk', 'created': 0, 'model': 'stub-1',
+            'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}], **extra}) + '\n\n'
+        self.send_response(200)
+        self.send_header('content-type', 'text/event-stream')
+        self.end_headers()
+        for part in (chunk({'role': 'assistant', 'content': reply}), chunk({}, 'stop'),
+                     chunk({}, None, usage={'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2}), 'data: [DONE]\n\n'):
+            self.wfile.write(part.encode())
+        self.wfile.flush()
+
+
+stub = ThreadingHTTPServer(('127.0.0.1', 0), Stub)
+threading.Thread(target=stub.serve_forever, daemon=True).start()
+peer = proc = None
 try:
-    agent, work, run = (root / d for d in ('agent', 'work', 'run'))
-    for d in (agent, work):
+    agent, work, run, peerdir = (root / d for d in ('agent', 'work', 'run', 'peer'))
+    for d in (agent, work, peerdir):
         d.mkdir(parents=True)
     run.mkdir(mode=0o700)
+    (agent / 'models.json').write_text(json.dumps({'providers': {'stub': {
+        'baseUrl': 'http://127.0.0.1:%d/v1' % stub.server_port, 'api': 'openai-completions', 'apiKey': 'stub',
+        'models': [{'id': 'stub-1'}]}}}))
     env = {k: v for k, v in os.environ.items() if not k.startswith(('RHIZOME_', 'PI_', 'XDG_'))}
     # HOME stays real: version-manager shims for `pi` need it. Rhizome's own state is
     # isolated through an empty config file and a private runtime directory instead.
@@ -62,9 +97,9 @@ try:
         fail(f'setup did not pin the explicit configuration: {settings}')
     settings['command'] = str(wrapper)
     launch.write_text(json.dumps(settings))
-    proc = subprocess.Popen(['pi', '--mode', 'rpc', '--no-session'], cwd=work, env=env, stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=open(root / 'pi.err', 'w'), text=True)
-    responses = {}
+    proc = subprocess.Popen(['pi', '--mode', 'rpc', '--no-session', '--provider', 'stub', '--model', 'stub-1'], cwd=work, env=env,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(root / 'pi.err', 'w'), text=True)
+    responses, agent_ends = {}, []
 
     def drain():  # an undrained stdout pipe blocks pi
         for line in proc.stdout:
@@ -74,22 +109,27 @@ try:
                 continue
             if o.get('type') == 'response':
                 responses[o.get('id')] = o
+            elif o.get('type') == 'agent_end':
+                agent_ends.append(o)
 
     threading.Thread(target=drain, daemon=True).start()
 
-    def call(i, type_):
-        # Pi reads stdin only after startup; resend until the first answer arrives.
+    def call(i, type_, **extra):
+        # Pi reads stdin only after startup; resend until the first answer arrives
+        # (state queries are idempotent; prompts are sent once, below).
         deadline = time.time() + 30
         sent = 0.0
         while i not in responses:
             if time.time() > deadline:
                 fail(f'no response to {type_}')
-            if time.time() - sent > 2:
-                proc.stdin.write(json.dumps({'id': i, 'type': type_}) + '\n')
+            if time.time() - sent > 2 and (not sent or type_ == 'get_state'):
+                proc.stdin.write(json.dumps({'id': i, 'type': type_, **extra}) + '\n')
                 proc.stdin.flush()
                 sent = time.time()
             time.sleep(0.05)
-        return responses[i]['data']
+        if not responses[i].get('success', True):
+            fail(f'{type_} failed: {responses[i]}')
+        return responses[i].get('data')
 
     def bindings():
         """Session IDs the Go side logged as bound (metadata only), in order."""
@@ -132,8 +172,51 @@ try:
     time.sleep(1)  # a duplicate session_start must not cause a third bind
     if bindings() != [first, second]:
         fail(f'unexpected bindings {bindings()}')
+
+    # A peer in the same runtime sees the Pi session and follows it.
+    peer = Client(peerdir, run=run, agent='claude', cwd=work)
+    peer.bind('smoke-peer', peerdir)
+    until(lambda: any(s['identity']['session_id'] == second and s['identity']['agent_type'] == 'pi' and s['status'] == 'live'
+                      and s['delivery_capable'] for s in peer.tool('list_sessions')['sessions']))
+    peer.tool('subscribe', {'session_id': second})
+    until(lambda: peer.tool('list_sessions')['subscriptions'][second]['state'] == 'following')
+    print('peer sees the live Pi session and follows it')
+
+    # A human turn is published: the assistant text (turn ends only flush batches).
+    call('4', 'prompt', message='please say something')
+    ev = peer.event('stub reply #1')
+    if ev['meta']['session_id'] != second:
+        fail(f'activity from the wrong session: {ev}')
+    print('human turn published to the peer')
+
+    # A peer message is delivered into the session and runs a turn: the model sees it
+    # framed as untrusted peer activity, and the reaction is not republished.
+    peer.tool('send', {'session_id': second, 'text': 'smoke ping from peer'})
+    until(lambda: len(requests) >= 2 and 'smoke ping from peer' in requests[-1])
+    if '<rhizome-peer-event>' not in requests[-1]:
+        fail('peer text reached the model without the peer envelope')
+    until(lambda: len(agent_ends) >= 2)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:  # drain what the peer receives for a while
+        try:
+            peer.events.append(peer.messages.get(timeout=0.2))
+        except Exception:
+            pass
+    leaked = [m for m in peer.events if 'stub reply #2' in json.dumps(m)]
+    if leaked:
+        fail(f'a peer-only turn was republished: {leaked}')
+    print('peer message delivered, model saw the envelope, reaction not republished')
+
     proc.stdin.close()
     proc.wait(timeout=15)
-    print('OK: pi sessions bind once per session ID and rebind on /new')
+    print('OK: pi binds, collects and receives deliveries through the installed extension')
 finally:
+    if peer is not None:
+        try:
+            peer.close()
+        except Exception:
+            pass
+    if proc is not None and proc.poll() is None:
+        proc.kill()
+    stub.shutdown()
     shutil.rmtree(root, ignore_errors=True)

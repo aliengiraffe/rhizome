@@ -471,11 +471,18 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   sends no session identity in MCP `_meta`, so never infer one from cwd or
   newest file. Deliveries are non-user `pi.sendMessage` custom messages
   (`followUp`, `triggerTurn`), framed with `peerEnvelope` because Pi shows them
-  to the model as role `user`. Implemented: bind, titles, delivery ack, node,
-  `list_sessions`, and `rhizome setup|uninstall --agents pi`. Not implemented: collection, history source, `recent`,
+  to the model as role `user`. Collection is relay-only too: the extension forwards raw
+  `message_end`, top-level `tool_execution_*` and `agent_end` events through a
+  256-entry queue (overflow becomes a `gap`), and `piSession` feeds them to the
+  shared collector (`opencode_collect.go`; Pi's own tools are `mcp__rhizome__*`),
+  so redaction, opt-in prompt/tool kinds and peer-turn suppression are identical;
+  a delivery emits an `input` marker with `rhizome: true`. Implemented: bind,
+  titles, delivery ack, collection, node, `list_sessions`, and `rhizome
+  setup|uninstall --agents pi`. Not implemented: history source, `recent`,
   gateway (`gatewayExportable` excludes `pi` until a
   subprotocol exists). Smoke: `python3 scripts/smoke_pi.py` (needs `pi`; skips
-  without it, no credentials). Design: `docs/superpowers/specs/2026-10-28-pi-support-design.md`.
+  without it; stub model, no credentials; covers bind, collection and peer
+  delivery); `task test-plugin` covers the extension. Design: `docs/superpowers/specs/2026-10-28-pi-support-design.md`.
 - **Coordinate collection across processes.** Direct integrations acquire the
   per-session OS lease before baselining. Passive scans yield and expose handoff
   gaps. Never route delivery to `observation_only` identities or replay another

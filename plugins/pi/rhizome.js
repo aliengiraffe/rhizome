@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const MAX_FRAME = 64 * 1024;
 const MAX_TEXT = 16 * 1024;
+const MAX_BUFFER = 256;
 const CONNECT_ATTEMPTS = 50;
 const CONNECT_DELAY_MS = 100;
 const RECONNECT_LIMIT = 5;
@@ -40,14 +41,47 @@ export function socketPath(runtime, pid, nonce) {
   return path.join(runtime, `pi-${pid}-${hash}.sock`);
 }
 
+// Text of a Pi content value: a string, or the text blocks of a content array.
+function textOf(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((b) => b && b.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n");
+}
+
+function jsonText(v) {
+  try { return typeof v === "string" ? v : JSON.stringify(v) ?? ""; } catch { return ""; }
+}
+
 export default function (pi) {
-  let current = null; // { sessionId, nonce, cwd, title, socket, closed }
+  let current = null; // { sessionId, nonce, cwd, title, socket, closed, queue, dropped }
 
   function frame(socket, f) {
     const raw = JSON.stringify(f);
     if (raw.length >= MAX_FRAME) return false;
     socket.write(raw + "\n");
     return true;
+  }
+
+  // Collected events are relayed raw; every publication decision is made in Go.
+  // Until the bind is written they wait in a bounded queue, and what overflows is
+  // reported as a gap so subscribers never mistake a hole for silence.
+  function emit(s, f) {
+    if (!s || s.closed || s !== current) return;
+    f = { ...f, sessionID: s.sessionId };
+    if (typeof f.text === "string") f.text = f.text.slice(0, MAX_TEXT);
+    while (JSON.stringify(f).length >= MAX_FRAME && f.text) f.text = f.text.slice(0, f.text.length >> 1);
+    if (s.socket && s.ready) {
+      frame(s.socket, f);
+      return;
+    }
+    if (s.queue.length >= MAX_BUFFER) { s.queue.shift(); s.dropped++; }
+    s.queue.push(f);
+  }
+
+  function flush(s) {
+    if (s.dropped > 0) { frame(s.socket, { type: "overflow", sessionID: s.sessionId, dropped: s.dropped }); s.dropped = 0; }
+    for (const f of s.queue.splice(0)) frame(s.socket, f);
+    s.ready = true;
   }
 
   function onData(s, buf) {
@@ -76,6 +110,8 @@ export default function (pi) {
         { customType: "rhizome", content: f.text.slice(0, MAX_TEXT), display: true },
         { deliverAs: "followUp", triggerTurn: true },
       );
+      // Marks the next turn as a reaction to a peer; the next human prompt clears it.
+      emit(s, { type: "input", kind: "custom", rhizome: true });
       frame(socket, { type: "ack", id: f.id });
     } catch (err) {
       frame(socket, { type: "fail", id: f.id, reason: String(err?.message ?? err).slice(0, 200) });
@@ -91,13 +127,15 @@ export default function (pi) {
     socket.on("connect", () => {
       up = true;
       s.socket = socket;
+      s.ready = false;
       frame(socket, { type: "hello", version: 1, opencode: "pi" });
       frame(socket, { type: "bind", nonce: s.nonce, sessionID: s.sessionId, directory: s.cwd, title: s.title });
+      flush(s);
     });
     socket.on("data", (d) => { buf.data += d; onData(s, buf); });
     socket.on("error", () => {});
     socket.on("close", () => {
-      if (s.socket === socket) s.socket = null;
+      if (s.socket === socket) { s.socket = null; s.ready = false; }
       if (s.closed || s !== current) return;
       const limit = up ? RECONNECT_LIMIT : CONNECT_ATTEMPTS;
       if (attempt + 1 >= limit) return;
@@ -118,7 +156,7 @@ export default function (pi) {
     // no-op, a different one replaces the registration with a fresh nonce.
     if (current && !current.closed && current.sessionId === sessionId) return;
     stop(current);
-    const s = { sessionId, cwd: ctx.cwd, nonce: crypto.randomBytes(16).toString("hex"), title: "", socket: null, closed: false };
+    const s = { sessionId, cwd: ctx.cwd, nonce: crypto.randomBytes(16).toString("hex"), title: "", socket: null, ready: false, queue: [], dropped: 0, closed: false };
     current = s;
     const launch = launchSettings();
     pi.registerMcpServer("rhizome", {
@@ -129,6 +167,33 @@ export default function (pi) {
       description: "Rhizome: discover and message peer coding-agent sessions",
     });
     connect(s);
+  });
+
+  pi.on("message_end", async (event) => {
+    const m = event?.message;
+    if (!m) return;
+    if (m.role === "user") {
+      emit(current, { type: "input", kind: "user", text: textOf(m.content) });
+    } else if (m.role === "assistant") {
+      const text = textOf((m.content ?? []).filter((b) => b?.type === "text"));
+      if (text) emit(current, { type: "text", messageID: String(m.responseId ?? m.timestamp ?? ""), text });
+    }
+  });
+
+  // Nested calls (parentToolCallId) run inside another tool and are not transcript entries.
+  pi.on("tool_execution_start", async (event) => {
+    if (event?.parentToolCallId) return;
+    emit(current, { type: "tool", callID: event.toolCallId, name: event.toolName, phase: "start", text: jsonText(event.args) });
+  });
+
+  pi.on("tool_execution_end", async (event) => {
+    if (event?.parentToolCallId) return;
+    const text = textOf(event.result?.content) || jsonText(event.result);
+    emit(current, { type: "tool", callID: event.toolCallId, name: event.toolName, phase: event.isError ? "failed" : "completed", text });
+  });
+
+  pi.on("agent_end", async () => {
+    emit(current, { type: "turn" });
   });
 
   pi.on("session_info_changed", async (event) => {
