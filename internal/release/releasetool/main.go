@@ -1,6 +1,6 @@
 // Command releasetool is the release workflow's helper: it validates tags,
-// lists and checksums assets, smoke-tests archives, and generates, smoke-tests
-// and publishes the npm packages. Run it with
+// lists and checksums assets, smoke-tests archives, generates, smoke-tests
+// and publishes the npm packages, and renders the Homebrew cask. Run it with
 // "go run ./internal/release/releasetool <command> [flags]".
 package main
 
@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,7 +19,7 @@ import (
 	"rhizome/internal/release"
 )
 
-const usage = "usage: releasetool version|assets|checksums|sign|verify|extract|smoke|npm|npm-smoke|npm-publish|keygen [flags]"
+const usage = "usage: releasetool version|assets|checksums|sign|verify|extract|smoke|npm|npm-smoke|npm-publish|cask|keygen [flags]"
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
@@ -44,6 +45,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	goarch := fs.String("goarch", runtime.GOARCH, "smoke/npm-smoke/extract: archive architecture (darwin uses all)")
 	archive := fs.String("archive", "", "extract: archive path")
 	out := fs.String("out", "", "extract: destination directory; npm/npm-publish: package directory")
+	current := fs.String("current", "", "cask: the tap's existing cask file, if any")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -142,6 +144,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 			return fmt.Errorf("npm-publish requires -out")
 		}
 		return release.PublishNPM(ctx, *out, v, release.ExecNPM, stdout)
+	case "cask":
+		return cask(stdout, *dir, *current, v)
 	default:
 		return fmt.Errorf("%s", usage)
 	}
@@ -173,6 +177,33 @@ func keygen(keyFile string, stdout io.Writer) error {
 	pub := priv.Public().(ed25519.PublicKey)
 	fmt.Fprintf(stdout, "private seed written to %s; store it as the RHIZOME_RELEASE_SIGNING_KEY secret of the release environment\npublic key: %s\nkey id: %s\n", keyFile, hex.EncodeToString(pub), release.KeyID(pub))
 	return nil
+}
+
+// cask writes the rendered cask to stdout. When the tap already holds a newer
+// release it writes the existing cask unchanged, so the caller sees no change
+// and never downgrades the tap.
+func cask(stdout io.Writer, dir, current string, v release.Version) error {
+	rendered, err := release.RenderCask(dir, v)
+	if err != nil {
+		return err
+	}
+	var existing []byte
+	if current != "" {
+		existing, err = os.ReadFile(current)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	superseded, err := release.CaskSuperseded(existing, v)
+	if err != nil {
+		return err
+	}
+	if superseded {
+		fmt.Fprintf(os.Stderr, "releasetool: the tap already holds a release newer than %s; keeping it\n", v.Version)
+		rendered = existing
+	}
+	_, err = stdout.Write(rendered)
+	return err
 }
 
 func identity(tag, snapshot string) (release.Version, error) {

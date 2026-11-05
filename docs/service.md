@@ -170,9 +170,31 @@ new observer confirms the update on start and removes the backup. Without a
 native definition (a foreground `service run` under a custom supervisor) the
 observer exits non-zero with `restart required` so its supervisor restarts it
 on the new binary. `rhizome update --apply` from a shell restarts an installed,
-running service directly and rolls back the same way. MCP processes keep
-running the old binary until their agent client restarts them; run
-`rhizome setup` again if a release changes skills or hooks.
+running service directly and rolls back the same way. Run `rhizome setup`
+again if a release changes skills or hooks.
+
+MCP processes keep running the old binary until their agent client restarts
+them, so each one tells its session once. Every 30 s a live MCP process reads
+the observer's version from `<runtime>/observer-health.json` (a bounded local
+read, never the network). When that version is a strictly newer release than
+its own build, the bound session receives a single notice such as `Rhizome was
+updated to v0.10.2; this session still runs v0.10.1. Restart this coding
+session to load the new version.` (channel meta, Codex queue item or OpenCode
+synthetic input of kind `update_notice`, carrying `from`/`to` versions and no
+peer session, node or host). The trigger is the version gap, not the update
+mechanism, so `rhizome update --apply` and a manual upgrade followed by a
+service restart notify too. A process notifies again only if the observer
+moves to another newer version. It stays silent when the versions are equal,
+when the observer is older, when either side is a `dev` or snapshot build, and
+when the health file is missing (service stopped) or malformed. The notice
+waits until the session is bound and its destination ready, ignores a paused
+peer feed, and does not count toward the notification limit. It is never
+published, gossiped, forwarded to paired hosts, collected as activity or
+written to the history catalog. Logs record `update_notice_delivered` with
+versions and an outcome code only. Set `[update] notify_sessions = false`
+(file-only, read by `rhizome mcp` at start) to turn it off; `rhizome config`
+shows the value and its source. Paired hosts and LAN/Tailscale peers are never
+notified.
 
 Status lives in `<runtime>/update-state.json` (0600): running version, last
 check, last outcome code, available version, blocked reason, pending restart

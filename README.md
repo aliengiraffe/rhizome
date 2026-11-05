@@ -36,23 +36,31 @@ access, branches, and how changes are reviewed and merged.
 
 ### 1. Install
 
-Download a build from [GitHub Releases](https://github.com/aliengiraffe/rhizome/releases).
-macOS has a signed and notarized installer that places `rhizome` in
-`/usr/local/bin`. Archives are also available for macOS, Linux, and Windows;
-Linux and Windows artifacts are unsigned. See the
-[installation and checksum guide](docs/releasing.md#installing-and-upgrading).
-
-With Node.js 18 or later, install the same release binaries from npm:
+**Recommended: npm** (Node.js 18 or later):
 
 ```sh
-npm i -g @aliengiraffe/rhizome     # or run once: npx @aliengiraffe/rhizome --version
+npm i -g @aliengiraffe/rhizome
 ```
 
 The package runs no install scripts; npm picks the platform binary through an
-optional dependency, so do not install it with `--omit=optional`
-([npm packages](docs/releasing.md#npm)).
+optional dependency, so do not install it with `--omit=optional`.
+Use a global install for setup: `npx @aliengiraffe/rhizome --version` is fine
+for a one-off check, but its cache path can disappear. See
+[npm packages](docs/releasing.md#npm).
 
-Or build from source with Go 1.27.3+ and [Task v3](https://taskfile.dev/docs/installation):
+**Alternative: Homebrew** on macOS or Linux (stable releases):
+
+```sh
+brew install --cask aliengiraffe/spaceship/rhizome
+```
+
+**Alternative: GitHub Releases.** Download a build from
+[GitHub Releases](https://github.com/aliengiraffe/rhizome/releases): a signed and
+notarized macOS installer places `rhizome` in `/usr/local/bin`, and archives are
+available for macOS, Linux, and Windows (Linux and Windows artifacts are unsigned).
+See the [installation and checksum guide](docs/releasing.md#installing-and-upgrading).
+
+**Alternative: build from source** with Go 1.27.3+ and [Task v3](https://taskfile.dev/docs/installation):
 
 ```sh
 git clone https://github.com/aliengiraffe/rhizome.git
@@ -62,18 +70,29 @@ task build
 ```
 
 The commands below assume `rhizome` is on your `PATH`. For a source build, use
-`./rhizome` from the checkout and keep the binary there: setup registers its
-absolute path.
+`./rhizome` from the checkout and keep the binary there. Setup and service
+installation record the absolute binary path (inside global `node_modules` for
+npm). If that path changes, rerun setup and reinstall the service as described in
+the [upgrade guide](docs/releasing.md#installing-and-upgrading).
 
-Release builds keep themselves current: the background service checks GitHub
-Releases once a day, verifies a newer release (signed manifest, SHA-256,
+Release builds with the self-updater keep themselves current: the background
+service checks GitHub Releases once a day, verifies a newer release (signed manifest, SHA-256,
 macOS Developer ID, `--version`) and restarts onto it. This is the only
 outbound connection Rhizome makes; disable it with `[update] enabled = false`
 in the configuration file, `RHIZOME_UPDATE=0`, or the setup question, and use
-`rhizome update --apply` when you want. Source builds are never updated. See
-[automatic updates](docs/service.md#automatic-updates).
+`rhizome update --apply` when you want. Source builds are never updated. Once
+the service runs a newer release than an open coding session's MCP process
+(after an automatic update, `rhizome update --apply` or a manual upgrade),
+that session gets one Rhizome notice asking you to restart it; turn this off
+with `[update] notify_sessions = false`. See
+[automatic updates](docs/service.md#automatic-updates). For older npm builds
+without the updater, run `npm i -g @aliengiraffe/rhizome@latest`, then
+`rhizome service stop` and `rhizome service start` if the service is installed,
+and restart your agents.
 
 ### 2. Connect your agents
+
+With `rhizome` installed on `PATH`, run:
 
 ```sh
 rhizome setup

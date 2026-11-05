@@ -4,11 +4,14 @@ discovers a newer signed release on a loopback server, verifies it and either
 installs it and restarts onto it (Linux, where release archives are unsigned
 and the manifest signature is the trust root) or refuses it because the
 locally built binary carries no Developer ID signature (macOS). Tampered
-signatures are refused everywhere. No GitHub access, no real keys."""
+signatures are refused everywhere. Live MCP processes built from the old
+version get one restart notice once the observer runs the newer one. No GitHub
+access, no real keys."""
 import http.server
 import json
 import os
 import platform
+import queue
 import re
 import shutil
 import subprocess
@@ -106,6 +109,132 @@ def state(run):
     return json.loads((run / 'update-state.json').read_text())
 
 
+class MCP:
+    """A Claude-mode `rhizome mcp` process speaking newline-delimited JSON-RPC."""
+
+    def __init__(self, binary, env):
+        self.proc = subprocess.Popen([str(binary), 'mcp'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True, env=env)
+        self.messages = queue.Queue()
+        self.notices = []
+        self.number = 0
+
+        def read():
+            for line in self.proc.stdout:
+                self.messages.put(json.loads(line))  # Any stdout log is a failure.
+        threading.Thread(target=read, daemon=True).start()
+        self.call('initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
+                                 'clientInfo': {'name': 'update-smoke', 'version': '1'}})
+        self.write({'method': 'notifications/initialized'})
+
+    def write(self, obj):
+        self.proc.stdin.write(json.dumps({'jsonrpc': '2.0', **obj}) + '\n')
+        self.proc.stdin.flush()
+
+    def take(self, msg):
+        if msg.get('method') == 'notifications/claude/channel':
+            self.notices.append(msg['params'])
+
+    def call(self, method, params):
+        self.number += 1
+        self.write({'id': self.number, 'method': method, 'params': params})
+        while True:
+            msg = self.messages.get(timeout=10)
+            if msg.get('id') == self.number:
+                assert 'error' not in msg, msg
+                return msg['result']
+            self.take(msg)
+
+    def tool(self, name, args):
+        result = self.call('tools/call', {'name': name, 'arguments': args})
+        assert not result.get('isError'), result
+        return json.loads(result['content'][0]['text'])
+
+    def drain(self, seconds):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            try:
+                self.take(self.messages.get(timeout=max(.05, deadline - time.monotonic())))
+            except queue.Empty:
+                pass
+
+    def kinds(self, kind):
+        return [n for n in self.notices if n['meta'].get('kind') == kind]
+
+    def close(self):
+        self.proc.stdin.close()
+        assert self.proc.wait(timeout=10) == 0
+        return self.proc.stderr.read()
+
+
+def notice_scenario(directory, old, new):
+    """An observer on NEW; MCP processes on OLD are told once, NEW ones never."""
+    run = directory / 'notice-run'
+    sessions = directory / 'notice-sessions'
+    sessions.mkdir()
+    config = directory / 'notice.toml'
+    base = 'runtime_dir = %s\n[claude]\nprojects_dir = %s\n[codex]\nsessions_dir = %s\n[opencode]\ndata_dir = %s\n' % tuple(
+        json.dumps(str(directory / p)) for p in ('notice-run', 'notice-claude', 'notice-codex', 'notice-opencode'))
+    config.write_text(base)
+    # Updates are disabled: the observer must not contact anything in this scenario.
+    env = {k: v for k, v in os.environ.items() if not k.startswith('RHIZOME_')}
+    env.update(RHIZOME_CONFIG=str(config), RHIZOME_UPDATE='0')
+    observer = subprocess.Popen([str(new), 'service', 'run', '--config', str(config)], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        until(lambda: (run / 'observer-health.json').exists())
+        assert json.loads((run / 'observer-health.json').read_text())['version'] == NEW
+
+        def bind(client, session):
+            client.tool('observe_session', {'session_id': session, 'transcript_path': str(sessions / (session + '.jsonl')),
+                                            'cwd': str(sessions), 'hook_event_name': 'UserPromptSubmit'})
+
+        stale, current = MCP(old, env), MCP(new, env)
+        bind(stale, 'stale-session')
+        bind(current, 'current-session')
+        current.tool('subscribe', {'session_id': 'stale-session'})
+        until(lambda: (stale.drain(.2), len(stale.kinds('update_notice')) == 1)[1])
+        notice = stale.kinds('update_notice')[0]
+        assert notice['meta'] == {'kind': 'update_notice', 'from': OLD, 'to': NEW}, notice
+        assert notice['content'] == ('Rhizome was updated to v%s; this session still runs v%s. Restart this coding '
+                                     'session to load the new version.' % (NEW, OLD)), notice
+        # The agent client records the channel injection in the transcript; it is
+        # never collected as activity, so the subscriber sees the marker only.
+        with (sessions / 'stale-session.jsonl').open('a') as transcript:
+            transcript.write(json.dumps({'type': 'user', 'uuid': 'n1', 'message': {'role': 'user', 'content':
+                '<channel source="rhizome" kind="update_notice" from="%s" to="%s">%s</channel>' % (OLD, NEW, notice['content'])}}) + '\n')
+            # A genuine prompt ends the peer-only turn, whose reply is suppressed by design.
+            transcript.write(json.dumps({'type': 'user', 'uuid': 'n2', 'message': {'role': 'user', 'content': 'next task'}}) + '\n')
+            transcript.write(json.dumps({'type': 'assistant', 'uuid': 'n3', 'message': {
+                'content': [{'type': 'text', 'text': 'after-notice-marker'}], 'stop_reason': 'end_turn'}}) + '\n')
+        until(lambda: (current.drain(.2), any('after-notice-marker' in n['content'] for n in current.notices))[1])
+        current.drain(2.5)  # past the 2 s batching window
+        stale.drain(1)
+        assert not any('Rhizome was updated' in n['content'] for n in current.notices), current.notices
+        assert not current.kinds('update_notice'), current.notices
+        assert len(stale.kinds('update_notice')) == 1, stale.notices
+        stale_log, current_log = stale.close(), current.close()
+        records = [json.loads(line) for line in stale_log.splitlines() if '"update_notice' in line]
+        assert [r['msg'] for r in records] == ['update_notice_delivered'], stale_log
+        # Versions and an outcome code only: no session, name or notice text.
+        assert {k: v for k, v in records[0].items() if k not in ('time', 'level')} == {
+            'msg': 'update_notice_delivered', 'from': OLD, 'to': NEW, 'outcome': 'delivered'}, records
+        assert 'update_notice_delivered' not in current_log, current_log
+
+        # [update].notify_sessions = false silences the same version gap.
+        config.write_text(base + '[update]\nnotify_sessions = false\n')
+        assert 'update.notify_sessions = false # source: file' in subprocess.run(
+            [str(old), 'config'], env=env, capture_output=True, text=True, check=True).stdout
+        quiet = MCP(old, env)
+        bind(quiet, 'quiet-session')
+        quiet.drain(2)
+        assert not quiet.kinds('update_notice'), quiet.notices
+        assert 'update_notice_delivered' not in quiet.close()
+    finally:
+        observer.terminate()
+        observer.wait(timeout=15)
+
+
 def main():
     assert GOOS, 'unsupported platform ' + platform.system()
     with tempfile.TemporaryDirectory() as tmp:
@@ -116,6 +245,7 @@ def main():
         build(OLD, target)
         new_binary = directory / 'new-rhizome'
         build(NEW, new_binary)
+        notice_scenario(directory, target, new_binary)
         key_file = directory / 'seed'
         keygen = releasetool('keygen', '-key-file', str(key_file))
         public = re.search(r'public key: ([0-9a-f]{64})', keygen).group(1)
@@ -207,7 +337,7 @@ def main():
         server.shutdown()
         log_blob = (run / 'observer.log').read_text() if (run / 'observer.log').exists() else ''
         assert seed not in log_blob and 'placeholder' not in log_blob
-    print('PASS: tampered signature refused, disabled loop makes no request, explicit check; ' + verdict)
+    print('PASS: one restart notice for an older MCP process (none when current or disabled), tampered signature refused, disabled loop makes no request, explicit check; ' + verdict)
 
 
 if __name__ == '__main__':

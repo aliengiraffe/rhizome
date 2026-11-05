@@ -44,6 +44,8 @@ type Options struct {
 	TokenFile     string        // file holding the cluster token
 	GossipPort    int           // Tailscale: well-known gossip port tried first (the beacon); 0 means 7946
 	Discovery     time.Duration // Tailscale: tailnet peer enumeration interval; 0 means 20s
+	Version       string        // running build version; a release build may send the update notice
+	UpdateNotice  bool          // [update].notify_sessions: tell the bound session when the observer is newer
 
 	tailscale tailscaleClient // test hook; nil uses the tailscale CLI
 }
