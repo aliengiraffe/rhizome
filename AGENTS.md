@@ -28,7 +28,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `internal/update/` | Verified self-update: eligibility, bounded GitHub source, signed-manifest/digest/codesign/`--version` verification chain, strict extraction, atomic install with one backup, state file, background loop. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
 | `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), recent-only advertisements (`recent.go`), secret redaction of collected text (`redact.go`), and the OpenCode bridge (`opencode*.go`). |
-| `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin; `plugins/pi/rhizome.js` is the Pi relay extension (not yet embedded or installed by `setup`). |
+| `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin; `plugins/pi/rhizome.js` is the Pi relay extension (embedded and installed by `setup --agents pi`). |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
 | `version.go`, `internal/release/`, `.goreleaser.yaml`, `.github/workflows/release.yml` | `--version`, SemVer tag validation, asset matrix/checksums, Ed25519 manifest signing and the trusted key list (`keys.go`), smoke tool, npm package generation/smoke/publishing (`npm.go`, launcher in `npm/rhizome.js`), and the tag-driven release pipeline ([docs/releasing.md](docs/releasing.md)). |
@@ -240,7 +240,12 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   keep everything else, back up changed files as `<file>.bak-<timestamp>`,
   follow symlinks, reject malformed files without replacing them and skip
   unchanged files. OpenCode gets the skill and its two plugins only (no hooks;
-  its MCP entry stays manual, see `docs/opencode.md`). Configuration is written before installs so wizard
+  its MCP entry stays manual, see `docs/opencode.md`). Pi gets the skill, the
+  embedded extension (`<PI_CODING_AGENT_DIR or ~/.pi/agent>/extensions/rhizome/index.js`)
+  and a generated `rhizome.json` beside it that pins the absolute executable
+  (and `--config` only for an explicit existing file); Pi's own settings and
+  `mcp.json` are never edited because the extension registers the MCP server
+  per session. Configuration is written before installs so wizard
   directories apply. Project files, `--list` and `--network`-only runs never
   install anything; remaining restart/trust/channel steps are printed.
 - **Uninstall reverses setup through the same ownership rules.** `rhizome
@@ -250,7 +255,8 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   `stripCodexServer` are the strip halves `mergeHooks`, `mergeJSONServer` and
   `mergeCodexConfig` build on, so install output stays byte-for-byte; the
   skill list comes from the embedded `skills/` tree (`skillNames`) and the
-  OpenCode plugin list from `agent.plugins()`. Order is service first (an
+  OpenCode plugin and Pi extension lists from `agent.plugins()` (Pi: the
+  extension and `rhizome.json`, then its emptied directory). Order is service first (an
   injectable `serviceUninstaller` around `service.Manage(ctx, "uninstall",
   …)`; a missing definition reports `not installed`), then claude, codex,
   opencode. Files get the same backup and atomic replacement; an absent file
@@ -465,9 +471,9 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   sends no session identity in MCP `_meta`, so never infer one from cwd or
   newest file. Deliveries are non-user `pi.sendMessage` custom messages
   (`followUp`, `triggerTurn`), framed with `peerEnvelope` because Pi shows them
-  to the model as role `user`. Implemented: bind, titles, delivery ack, node and
-  `list_sessions`. Not implemented: collection, history source, `recent`,
-  `setup`/`uninstall`, gateway (`gatewayExportable` excludes `pi` until a
+  to the model as role `user`. Implemented: bind, titles, delivery ack, node,
+  `list_sessions`, and `rhizome setup|uninstall --agents pi`. Not implemented: collection, history source, `recent`,
+  gateway (`gatewayExportable` excludes `pi` until a
   subprotocol exists). Smoke: `python3 scripts/smoke_pi.py` (needs `pi`; skips
   without it, no credentials). Design: `docs/superpowers/specs/2026-10-28-pi-support-design.md`.
 - **Coordinate collection across processes.** Direct integrations acquire the

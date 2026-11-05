@@ -62,34 +62,51 @@ var openCodePlugin []byte
 //go:embed plugins/opencode/rhizome-tui.js
 var openCodeTUIPlugin []byte
 
+// piExtension is the Pi relay extension. It registers `rhizome mcp --agent pi`
+// per session and executes deliveries, so it must match this binary's bridge
+// protocol and setup reinstalls it on every upgrade.
+//
+//go:embed plugins/pi/rhizome.js
+var piExtension []byte
+
+// piConfigName is the generated file next to the Pi extension that pins the
+// absolute Rhizome executable (and an explicit configuration file) the
+// extension launches, so it never depends on the PATH Pi runs with.
+const piConfigName = "rhizome.json"
+
 // agent is a coding agent Rhizome knows how to serve and where its user-scope
 // skill, MCP server registration and hooks live.
 type agent struct {
-	Name     string // CLI/flag identifier: claude, codex, opencode
+	Name     string // CLI/flag identifier: claude, codex, opencode, pi
 	Label    string // human-readable name
 	Skills   string // directory that holds <skill>/SKILL.md
-	Plugin   string // OpenCode plugin destination; empty for other agents
+	Plugin   string // OpenCode plugin or Pi extension destination; empty for other agents
 	TUI      string // OpenCode TUI plugin destination; empty for other agents
+	Config   string // Pi extension launch settings (generated); empty for other agents
 	MCP      string // file holding the user-scope MCP server registration
 	Hooks    string // file holding the user-scope hooks
 	Detected bool
 	Reason   string // why it was (not) detected
 }
 
-// pluginFile is one embedded OpenCode plugin and its destination.
+// pluginFile is one plugin or extension file and its destination.
 type pluginFile struct {
-	Label   string // plugin or tui, as printed by setup and uninstall
+	Label   string // plugin, tui, extension or config, as printed by setup and uninstall
 	Dest    string
-	Content []byte
+	Content []byte // nil for the generated Pi config, which setup renders per install
 }
 
-// plugins lists the OpenCode plugin files setup installs and uninstall
-// removes, in output order; it is empty for other agents.
+// plugins lists the plugin files setup installs and uninstall removes, in
+// output order: OpenCode's two plugins, or Pi's extension and its generated
+// launch settings. It is empty for other agents.
 func (a agent) plugins() []pluginFile {
-	if a.Name != "opencode" {
-		return nil
+	switch a.Name {
+	case "opencode":
+		return []pluginFile{{"plugin", a.Plugin, openCodePlugin}, {"tui", a.TUI, openCodeTUIPlugin}}
+	case "pi":
+		return []pluginFile{{"extension", a.Plugin, piExtension}, {"config", a.Config, nil}}
 	}
-	return []pluginFile{{"plugin", a.Plugin, openCodePlugin}, {"tui", a.TUI, openCodeTUIPlugin}}
+	return nil
 }
 
 // detectAgents reports the agents Rhizome can integrate with. Detection uses the
@@ -99,11 +116,12 @@ func (a agent) plugins() []pluginFile {
 // (CLAUDE_CONFIG_DIR) and Codex's home (CODEX_HOME).
 func detectAgents(c config.Config, lookPath func(string) (string, error)) []agent {
 	home, _ := os.UserHomeDir()
-	claudeDir, codexDir, openCodeDir := c.Claude.ConfigDir, c.Codex.Home, openCodeConfigDir(os.Getenv, os.UserHomeDir)
+	claudeDir, codexDir, openCodeDir, piDir := c.Claude.ConfigDir, c.Codex.Home, openCodeConfigDir(os.Getenv, os.UserHomeDir), piAgentDir(os.Getenv, os.UserHomeDir)
 	agents := []agent{
 		{Name: "claude", Label: "Claude Code", Skills: filepath.Join(claudeDir, "skills"), MCP: claudeGlobalConfig(claudeDir, home), Hooks: filepath.Join(claudeDir, "settings.json")},
 		{Name: "codex", Label: "Codex", Skills: filepath.Join(codexDir, "skills"), MCP: filepath.Join(codexDir, "config.toml"), Hooks: filepath.Join(codexDir, "hooks.json")},
 		{Name: "opencode", Label: "OpenCode", Skills: filepath.Join(openCodeDir, "skills"), Plugin: filepath.Join(openCodeDir, "plugins", "rhizome.js"), TUI: filepath.Join(openCodeDir, "plugins", "rhizome-tui", "tui.js")},
+		{Name: "pi", Label: "Pi", Skills: filepath.Join(piDir, "skills"), Plugin: filepath.Join(piDir, "extensions", "rhizome", "index.js"), Config: filepath.Join(piDir, "extensions", "rhizome", piConfigName)},
 	}
 	for i := range agents {
 		a := &agents[i]
@@ -134,6 +152,20 @@ func openCodeConfigDir(getenv func(string) string, home func() (string, error)) 
 		base = filepath.Join(h, ".config")
 	}
 	return filepath.Join(base, "opencode")
+}
+
+// piAgentDir is Pi's agent directory: $PI_CODING_AGENT_DIR, or ~/.pi/agent.
+// Rhizome only adds its skill and extension there and never edits Pi's own
+// settings or mcp.json.
+func piAgentDir(getenv func(string) string, home func() (string, error)) string {
+	if dir := getenv("PI_CODING_AGENT_DIR"); dir != "" {
+		return dir
+	}
+	h, err := home()
+	if err != nil {
+		h = "."
+	}
+	return filepath.Join(h, ".pi", "agent")
 }
 
 // installSkill writes the embedded skill into <skillsDir>/<skillName>. It returns
@@ -343,7 +375,7 @@ func parseAgentFlag(value string, agents []agent) ([]bool, error) {
 
 func setup(args []string) error {
 	opts := flag.NewFlagSet("setup", flag.ContinueOnError)
-	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex, opencode) or \"all\": installs the skill, and for Claude and Codex also registers the MCP server and hooks at user scope (OpenCode: skill and plugins; its MCP entry is added by hand, see docs/opencode.md); omit for an interactive picker")
+	agentsFlag := opts.String("agents", "", "comma-separated agents to install for (claude, codex, opencode, pi) or \"all\": installs the skill, and for Claude and Codex also registers the MCP server and hooks at user scope (OpenCode: skill and plugins; its MCP entry is added by hand, see docs/opencode.md; Pi: skill and extension, which registers the MCP server per session); omit for an interactive picker")
 	config.Bind(opts, "runtime-dir", "gateway-mode", "gateway-listen", "gateway-advertise")
 	opts.Lookup("gateway-mode").Usage = "configure service-owned gateway pairing: off, lan or tailscale; requires local MCP networking"
 	opts.Lookup("gateway-listen").Usage = "gateway concrete listen IP:port; blank selects automatically"
@@ -459,7 +491,7 @@ func setup(args []string) error {
 			return err
 		}
 	default:
-		return fmt.Errorf("stdin is not a terminal; pass --agents claude,codex,opencode or --agents all")
+		return fmt.Errorf("stdin is not a terminal; pass --agents claude,codex,opencode,pi or --agents all")
 	}
 	selected := false
 	for _, ok := range checked {

@@ -6,9 +6,11 @@
 // environment and repeated in the bind frame; the Go side pairs them with the
 // Pi process ID in the socket name. The model never supplies an identity.
 import crypto from "node:crypto";
+import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const MAX_FRAME = 64 * 1024;
 const MAX_TEXT = 16 * 1024;
@@ -18,6 +20,19 @@ const RECONNECT_LIMIT = 5;
 
 function runtimeDir() {
   return process.env.RHIZOME_RUNTIME_DIR || path.join(os.homedir(), ".rhizome", "run");
+}
+
+// `rhizome setup --agents pi` writes rhizome.json next to this file: the absolute
+// executable and, only for an explicit configuration file, its path. RHIZOME_BIN
+// overrides it; without either, `rhizome` is looked up on PATH.
+function launchSettings() {
+  try {
+    const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "rhizome.json");
+    const s = JSON.parse(fs.readFileSync(file, "utf8"));
+    return { command: typeof s.command === "string" ? s.command : "", config: typeof s.config === "string" ? s.config : "" };
+  } catch {
+    return { command: "", config: "" };
+  }
 }
 
 export function socketPath(runtime, pid, nonce) {
@@ -105,9 +120,10 @@ export default function (pi) {
     stop(current);
     const s = { sessionId, cwd: ctx.cwd, nonce: crypto.randomBytes(16).toString("hex"), title: "", socket: null, closed: false };
     current = s;
+    const launch = launchSettings();
     pi.registerMcpServer("rhizome", {
-      command: process.env.RHIZOME_BIN || "rhizome",
-      args: ["mcp", "--agent", "pi"],
+      command: process.env.RHIZOME_BIN || launch.command || "rhizome",
+      args: ["mcp", "--agent", "pi", ...(launch.config ? ["--config", launch.config] : [])],
       env: { RHIZOME_PI_NONCE: s.nonce, ...(process.env.RHIZOME_RUNTIME_DIR ? { RHIZOME_RUNTIME_DIR: process.env.RHIZOME_RUNTIME_DIR } : {}) },
       exposure: "direct",
       description: "Rhizome: discover and message peer coding-agent sessions",

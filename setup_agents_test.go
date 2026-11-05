@@ -393,6 +393,8 @@ func installEnv(t *testing.T, env map[string]string) (config.Config, string) {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	os.Unsetenv("PI_CODING_AGENT_DIR")
 	for k, v := range env {
 		t.Setenv(k, v)
 	}
@@ -451,6 +453,28 @@ func TestInstallAgentsFreshRepeatAndStale(t *testing.T) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
 		}
 	}
+	// Pi: skill, extension and generated launch settings; Pi's own files are not created.
+	piDir := filepath.Join(home, ".pi", "agent")
+	if agents[3].Name != "pi" || agents[3].MCP != "" || agents[3].Hooks != "" {
+		t.Fatalf("pi destinations: %+v", agents[3])
+	}
+	if b, err := os.ReadFile(filepath.Join(piDir, "extensions", "rhizome", "index.js")); err != nil || !bytes.Equal(b, piExtension) {
+		t.Fatalf("pi extension: %v", err)
+	}
+	var launch piLaunch
+	if b, err := os.ReadFile(filepath.Join(piDir, "extensions", "rhizome", piConfigName)); err != nil || json.Unmarshal(b, &launch) != nil || launch != (piLaunch{Command: exe}) {
+		t.Fatalf("pi launch settings %+v: %v", launch, err)
+	}
+	for _, p := range []string{"settings.json", "mcp.json"} {
+		if _, err := os.Stat(filepath.Join(piDir, p)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("setup created Pi's own %s: %v", p, err)
+		}
+	}
+	for _, want := range []string{"extension: installed", "config:    installed", "restart Pi", "skill: installed " + filepath.Join(piDir, "skills", skillName)} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out.String())
+		}
+	}
 	for _, p := range []string{claudeJSON, claudeSettings, codexTOML, codexHooks} {
 		if st, err := os.Stat(p); err != nil || st.Mode().Perm() != 0o600 {
 			t.Fatalf("%s: %v %v", p, st, err)
@@ -472,8 +496,8 @@ func TestInstallAgentsFreshRepeatAndStale(t *testing.T) {
 		}
 	}
 	// Claude and Codex report the skill, MCP entry and hooks; OpenCode reports the
-	// skill and its two plugins.
-	if strings.Count(out.String(), "unchanged") != 9 || strings.Contains(out.String(), "backup") {
+	// skill and its two plugins; Pi the skill, extension and launch settings.
+	if strings.Count(out.String(), "unchanged") != 12 || strings.Contains(out.String(), "backup") {
 		t.Fatalf("repeat run not idempotent:\n%s", out.String())
 	}
 	if matches, _ := filepath.Glob(filepath.Join(home, "*", "*.bak-*")); len(matches) != 0 {
@@ -680,5 +704,50 @@ func TestSetupCLIInstallsGlobalRegistration(t *testing.T) {
 	run("setup", "--agents", "all", "--config", cfg)
 	if matches, _ := filepath.Glob(filepath.Join(home, ".claude.json.bak-*")); len(matches) != 0 {
 		t.Fatalf("backups after an unchanged run: %v", matches)
+	}
+}
+
+func TestInstallPiHonorsAgentDirAndExplicitConfig(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pi agent")
+	c, home := installEnv(t, map[string]string{"PI_CODING_AGENT_DIR": dir})
+	var out bytes.Buffer
+	in := agentInstaller{exe: "/opt/rhizome", home: home, c: c, lookPath: noPath, now: fixedNow, out: &out}
+	pi := detectAgents(c, noPath)[3]
+	if pi.Name != "pi" || pi.Plugin != filepath.Join(dir, "extensions", "rhizome", "index.js") {
+		t.Fatalf("PI_CODING_AGENT_DIR ignored: %+v", pi)
+	}
+	// An explicit configuration must exist and is pinned for the extension.
+	in.explicit, in.c.Path = true, filepath.Join(home, "missing.toml")
+	if err := in.install(pi); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("missing explicit config: %v", err)
+	}
+	cfg := filepath.Join(home, "rhizome.toml")
+	if err := os.WriteFile(cfg, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in.c.Path = cfg
+	if err := in.install(pi); err != nil {
+		t.Fatal(err)
+	}
+	var launch piLaunch
+	b, err := os.ReadFile(pi.Config)
+	if err != nil || json.Unmarshal(b, &launch) != nil || launch != (piLaunch{Command: "/opt/rhizome", Config: cfg}) {
+		t.Fatalf("launch settings %+v: %v", launch, err)
+	}
+	// A symlinked extension is a checkout the user manages: never overwritten.
+	target := filepath.Join(home, "checkout.js")
+	if err := os.WriteFile(target, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(pi.Plugin)
+	if err := os.Symlink(target, pi.Plugin); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := in.install(pi); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "mine" || !strings.Contains(out.String(), "skipped (symlink to "+target+")") {
+		t.Fatalf("symlinked extension overwritten:\n%s", out.String())
 	}
 }

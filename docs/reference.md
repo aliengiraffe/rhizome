@@ -600,7 +600,7 @@ with the agent's MCP registration and hooks.
 ```sh
 ./rhizome setup                     # interactive: pick agents with a checkbox list
 ./rhizome setup --agents all        # select every agent (incl. opencode); terminal still asks config questions
-./rhizome setup --agents claude     # or codex, opencode, or claude,codex,opencode
+./rhizome setup --agents claude     # or codex, opencode, pi, or claude,codex,opencode,pi
 ./rhizome setup --list              # read-only: detected agents and destinations
 ./rhizome setup --plain             # original line/picker prompts
 ```

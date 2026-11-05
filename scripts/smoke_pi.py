@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live Pi binding check: a real `pi --mode rpc` loads the embedded extension, which
+"""Live Pi binding check: `rhizome setup --agents pi` installs the embedded extension and a real `pi --mode rpc` loads it; it
 registers `rhizome mcp --agent pi`; the Go side must bind exactly the Pi session and
 re-bind on /new. No model turn and no credentials are used. Skips without `pi`.
 
@@ -38,10 +38,9 @@ if not binary.exists():
 root = Path(tempfile.mkdtemp(prefix='rzpi-'))  # short path: Unix socket names are bounded
 try:
     agent, work, run = (root / d for d in ('agent', 'work', 'run'))
-    for d in (agent / 'extensions' / 'rhizome', work):
+    for d in (agent, work):
         d.mkdir(parents=True)
     run.mkdir(mode=0o700)
-    shutil.copy(ROOT / 'plugins' / 'pi' / 'rhizome.js', agent / 'extensions' / 'rhizome' / 'index.js')
     env = {k: v for k, v in os.environ.items() if not k.startswith(('RHIZOME_', 'PI_', 'XDG_'))}
     # HOME stays real: version-manager shims for `pi` need it. Rhizome's own state is
     # isolated through an empty config file and a private runtime directory instead.
@@ -50,7 +49,19 @@ try:
     wrapper = root / 'rhizome-wrapper'  # Pi discards child stderr; keep it for the check
     wrapper.write_text(f'#!/bin/sh\nexec "{binary}" "$@" 2>>"{log}"\n')
     wrapper.chmod(0o755)
-    env.update(RHIZOME_CONFIG=str(root / 'config.toml'), PI_CODING_AGENT_DIR=str(agent), RHIZOME_BIN=str(wrapper), RHIZOME_RUNTIME_DIR=str(run))
+    env.update(RHIZOME_CONFIG=str(root / 'config.toml'), PI_CODING_AGENT_DIR=str(agent), RHIZOME_RUNTIME_DIR=str(run))
+    # Install exactly as users do; the wrapper stands in for the executable that setup
+    # pins in rhizome.json (RHIZOME_BIN is deliberately unset), so this also checks that
+    # the extension reads its launch settings and the explicit configuration.
+    setup = subprocess.run([str(binary), 'setup', '--agents', 'pi'], env=env, capture_output=True, text=True)
+    if setup.returncode != 0 or not (agent / 'extensions' / 'rhizome' / 'index.js').exists():
+        fail('setup --agents pi failed: ' + setup.stdout[-500:] + setup.stderr[-500:])
+    launch = agent / 'extensions' / 'rhizome' / 'rhizome.json'
+    settings = json.loads(launch.read_text())
+    if settings.get('config') != str(root / 'config.toml'):
+        fail(f'setup did not pin the explicit configuration: {settings}')
+    settings['command'] = str(wrapper)
+    launch.write_text(json.dumps(settings))
     proc = subprocess.Popen(['pi', '--mode', 'rpc', '--no-session'], cwd=work, env=env, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=open(root / 'pi.err', 'w'), text=True)
     responses = {}

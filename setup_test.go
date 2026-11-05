@@ -23,7 +23,7 @@ func TestDetectAgents(t *testing.T) {
 	}
 	missing := func(string) (string, error) { return "", errors.New("not found") }
 	agents := detectAgents(c, missing)
-	if len(agents) != 3 || agents[0].Name != "claude" || agents[1].Name != "codex" || agents[2].Name != "opencode" {
+	if len(agents) != 4 || agents[0].Name != "claude" || agents[1].Name != "codex" || agents[2].Name != "opencode" || agents[3].Name != "pi" {
 		t.Fatalf("unexpected agents %+v", agents)
 	}
 	if !agents[0].Detected || agents[0].Skills != filepath.Join(home, ".claude", "skills") {
