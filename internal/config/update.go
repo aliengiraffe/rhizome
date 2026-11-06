@@ -8,10 +8,13 @@ import (
 
 // Update holds the file-side [update] table. The background observer checks
 // GitHub Releases for newer signed builds when enabled; MCP processes and
-// one-shot commands never do.
+// one-shot commands never do. NotifySessions is file-only and read by MCP
+// processes, which tell their bound session to restart once the observer
+// runs a newer release than they do.
 type Update struct {
-	Enabled       *bool  `toml:"enabled"`
-	CheckInterval string `toml:"check_interval"`
+	Enabled        *bool  `toml:"enabled"`
+	CheckInterval  string `toml:"check_interval"`
+	NotifySessions *bool  `toml:"notify_sessions"`
 }
 
 // UpdatePolicy is the effective auto-update setting after flag, environment,
@@ -19,6 +22,9 @@ type Update struct {
 type UpdatePolicy struct {
 	Enabled       bool
 	CheckInterval time.Duration
+	// NotifySessions lets MCP processes deliver one restart notice per
+	// observer version that is newer than their own build.
+	NotifySessions bool
 }
 
 const (
@@ -31,7 +37,7 @@ const (
 	MaxUpdateInterval = 30 * 24 * time.Hour
 )
 
-var updateKeys = []string{"enabled", "check_interval"}
+var updateKeys = []string{"enabled", "check_interval", "notify_sessions"}
 
 // ParseUpdateInterval accepts a Go duration between MinUpdateInterval and
 // MaxUpdateInterval, such as "24h" or "6h30m".
@@ -58,13 +64,17 @@ func ParseUpdateEnabled(value string) (bool, error) {
 	return false, fmt.Errorf("update.enabled %q must be true or false", value)
 }
 
-// resolveUpdate layers flag > env > file > default for the [update] table.
+// resolveUpdate layers flag > env > file > default for the [update] table;
+// notify_sessions is file > default only.
 func resolveUpdate(raw Update, defined func(key string) bool, flags map[string]string, getenv func(string) string) (UpdatePolicy, map[string]string, error) {
-	p := UpdatePolicy{Enabled: true, CheckInterval: DefaultUpdateInterval}
-	sources := map[string]string{"update.enabled": "default", "update.check_interval": "default"}
+	p := UpdatePolicy{Enabled: true, CheckInterval: DefaultUpdateInterval, NotifySessions: true}
+	sources := map[string]string{"update.enabled": "default", "update.check_interval": "default", "update.notify_sessions": "default"}
 	var err error
 	if defined("enabled") && raw.Enabled != nil {
 		p.Enabled, sources["update.enabled"] = *raw.Enabled, "file"
+	}
+	if defined("notify_sessions") && raw.NotifySessions != nil {
+		p.NotifySessions, sources["update.notify_sessions"] = *raw.NotifySessions, "file"
 	}
 	if defined("check_interval") {
 		if p.CheckInterval, err = ParseUpdateInterval(raw.CheckInterval); err != nil {

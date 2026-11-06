@@ -828,7 +828,20 @@ container for Linux amd64:
   exits with `restart_required`, the restarted observer reports version 9.9.9
   in `observer-health.json`, confirms the update, removes `rhizome.previous`,
   `rhizome update` reports up to date and `service status` prints
-  `last_outcome: updated`.
+  `last_outcome: updated`. On every platform it first runs a 9.9.9 observer
+  with updates disabled next to Claude-mode MCP processes: a 1.0.0 process
+  delivers exactly one `update_notice` channel notification naming both
+  versions and logs only `update_notice_delivered` with versions and outcome;
+  a 9.9.9 process and a 1.0.0 process with `[update] notify_sessions = false`
+  deliver none; and the notice, written back into the transcript as a channel
+  injection, is not collected as activity for a subscriber.
+- `go test ./internal/channel -run 'UpdateNotice|ObserverUpgrade'` covers the
+  version matrix (equal, newer, older, prerelease, `dev`, snapshot, missing,
+  malformed, oversized health), one notice per observer version across polls,
+  rebinding and failed delivery, re-arming for a newer version, the
+  bound/`observation_only`/destination-ready gates, a paused peer feed, and the
+  Claude, Codex and OpenCode notify paths (Codex/OpenCode envelopes stay
+  recognised as peer input, so they are never re-collected).
 - `goreleaser check`, `actionlint` and `shellcheck` pass with the signing
   step added to the workflow; `GOOS=windows` and `GOOS=linux` `go vet` pass
   for `internal/service`.
@@ -841,3 +854,39 @@ install by `rhizome update --apply` and by the background loop, including the
 `/usr/local/bin`, the launchd finisher restart with health confirmation, and
 the systemd (`systemd-run --user`) and Task Scheduler finishers on Linux and
 Windows hosts. Record results here.
+
+## Homebrew cask (#81, 2026-10-26)
+
+Automated and local evidence, macOS 26 arm64 with Homebrew 7.0.10:
+
+- `go test -race ./internal/release/...` covers cask rendering for `v`-prefixed,
+  unprefixed and build-metadata tags (`+` replaced by `.` in asset URLs), the
+  universal darwin archive as the only Mac download, Linux arm64/amd64 digests
+  taken from the manifest, refusal of prereleases, prereleases with build
+  metadata and snapshots, and failures on a missing manifest, a missing entry,
+  a tampered asset or a stray file. It also covers the downgrade guard
+  (older, equal and newer cores) and the refusal of a hand-written or
+  unparsable existing cask.
+- `actionlint` passes on `release.yml`.
+- Dry run: the cask rendered by `releasetool cask` from the published v0.9.0
+  and v0.9.1 assets passed `brew style` and
+  `brew audit --cask --strict --online` on a scratch local tap; a fixture
+  `2.0.0+build.5` cask passed `brew style` and the offline strict audit.
+  Rendering v0.9.0 against the v0.9.1 cask returned the v0.9.1 cask unchanged.
+- From the scratch tap on this Mac: `brew install --cask` of v0.9.0 linked
+  `/opt/homebrew/bin/rhizome`, which reported `rhizome 0.9.0 (commit cc5fbc9…)`;
+  `brew upgrade --cask` moved it to `rhizome 0.9.1 (commit 43934c8…)`;
+  `codesign --verify --strict` passed with `Developer ID Application`,
+  hardened runtime and a secure timestamp; `brew uninstall --cask` removed the
+  link. `~/.rhizome` was unchanged apart from the already-running observer's
+  own health file and log. The caveat printed on install and upgrade.
+- `os.Executable` keeps the `bin/rhizome` symlink path on macOS (checked with a
+  symlinked test binary), so setup and service registrations survive cask
+  upgrades there. On Linux it resolves to the versioned Caskroom path; that is
+  documented, not tested.
+
+Pending: the `tap` job itself (app token, contents API commit, idempotent
+re-run) runs only on a stable tag with the `homebrew-tap` environment
+configured; the first stable release after this change is its end-to-end
+check. Installation from `aliengiraffe/spaceship` and on Linux with Homebrew
+have not been run.

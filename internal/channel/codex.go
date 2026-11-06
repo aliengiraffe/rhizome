@@ -248,6 +248,7 @@ func queueCodex(ctx context.Context, binary, socket, thread, text string, meta m
 func RunCodex(c config.Config, o Options) error {
 	o.Runtime = c.RuntimeDir
 	o.Hostname = c.Hostname
+	o.UpdateNotice = c.AutoUpdate.NotifySessions
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, LogOptions(c.Debug))))
 	resolved, err := exec.LookPath(c.Codex.Bin)
 	if err != nil {

@@ -101,3 +101,61 @@ func TestUpdatePolicyRejectsInvalidValues(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateNotifySessions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cases := []struct {
+		name, body string
+		env, flags map[string]string
+		want       bool
+		source     string
+	}{
+		{"omitted defaults on", "", nil, nil, true, "default"},
+		{"empty table", "[update]\n", nil, nil, true, "default"},
+		{"file disables", "[update]\nnotify_sessions = false\n", nil, nil, false, "file"},
+		{"file explicit on", "[update]\nnotify_sessions = true\n", nil, nil, true, "file"},
+		{"dotted key", "update.notify_sessions = false\n", nil, nil, false, "file"},
+		{"independent of enabled", "[update]\nenabled = false\n", nil, nil, true, "default"},
+		{"updates env does not touch it", "[update]\nnotify_sessions = false\n", map[string]string{"RHIZOME_UPDATE": "1", "RHIZOME_UPDATE_NOTIFY_SESSIONS": "1"}, map[string]string{"update": "true"}, false, "file"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			flags := map[string]string{"config": fixture(t, tc.body)}
+			for k, v := range tc.flags {
+				flags[k] = v
+			}
+			c, err := Resolve(flags, func(k string) string { return tc.env[k] })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.AutoUpdate.NotifySessions != tc.want || c.Sources["update.notify_sessions"] != tc.source {
+				t.Fatalf("notify_sessions %t source %s", c.AutoUpdate.NotifySessions, c.Sources["update.notify_sessions"])
+			}
+			var out bytes.Buffer
+			if err := c.Write(&out); err != nil {
+				t.Fatal(err)
+			}
+			want := "update.notify_sessions = " + map[bool]string{true: "true", false: "false"}[tc.want] + " # source: " + tc.source
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("config output lacks %q:\n%s", want, out.String())
+			}
+		})
+	}
+	for _, body := range []string{
+		"[update]\nnotify_sessions = \"false\"",
+		"[update]\nnotify_sessions = 0",
+		"[update]\nnotify_session = false",
+		"[update]\nNotify_Sessions = false",
+		"[update]\nnotify = false",
+		"[claude]\nnotify_sessions = false",
+		"[codex]\nnotify_sessions = false",
+		"[opencode]\nnotify_sessions = false",
+		"[update.claude]\nnotify_sessions = false",
+		"[sessions]\nnotify_sessions = false",
+		"notify_sessions = false",
+	} {
+		if _, err := Resolve(map[string]string{"config": fixture(t, body)}, noenv); err == nil {
+			t.Errorf("accepted %q", body)
+		}
+	}
+}
