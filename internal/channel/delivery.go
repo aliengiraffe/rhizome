@@ -71,12 +71,15 @@ func (n *Node) deliver(ctx context.Context) {
 	defer ticker.Stop()
 	due := map[string]time.Time{}
 	var generation uint64
+	notice := newUpdateNotice(n.opts, n.noticeRefresh)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+		// A local, bounded read of the observer's health file; never the network.
+		notice.poll(n.runtime, time.Now())
 		// Trust snapshots fence queued gateway events after revocation. Read outside locks.
 		n.mu.Lock()
 		gatewayEvents := map[*pb.Event]bool{}
@@ -110,6 +113,16 @@ func (n *Node) deliver(ctx context.Context) {
 		}
 		if !n.ready || n.notify == nil || n.identity.SessionId == "" || (n.external && !n.deliveryReady) {
 			n.mu.Unlock()
+			n.gate.Unlock()
+			continue
+		}
+		// The restart notice is Rhizome's own, not a peer feed: pause, batching
+		// and the notification rate limit do not apply, and nothing is queued.
+		if notice.pending != "" && !n.identity.ObservationOnly {
+			text, meta := notice.message()
+			notify := n.notify
+			n.mu.Unlock()
+			notice.finish(notify(ctx, text, meta))
 			n.gate.Unlock()
 			continue
 		}

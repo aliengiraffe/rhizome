@@ -10,8 +10,13 @@ Claude's MCP protocol pin.
 
 ## Install
 
-Build this checkout with `task build`, then run `./rhizome setup --agents codex`.
-It writes `[mcp_servers.rhizome]` into `<CODEX_HOME>/config.toml` (absolute
+With `rhizome` installed on `PATH` ([npm recommended](reference.md#install)), run:
+
+```sh
+rhizome setup --agents codex
+```
+
+Setup writes `[mcp_servers.rhizome]` into `<CODEX_HOME>/config.toml` (absolute
 Rhizome path, `mcp --agent codex`, `--codex-bin` with the absolute Codex
 executable found on PATH, `--config` only for an explicitly selected Rhizome
 file, and `env.CODEX_HOME` for a non-default home), merges the hook groups of
@@ -20,6 +25,9 @@ skill. Other tables, servers, hooks and comments are kept, changed files are
 backed up as `<file>.bak-<timestamp>`, and re-running setup repairs a stale entry
 without duplicating hooks. See the
 [setup reference](reference.md#installing-into-agents) for the full contract.
+
+For a source build instead, follow the [source instructions](../README.md#1-install)
+and run `./rhizome setup --agents codex` from the checkout.
 
 To install by hand instead, merge `examples/codex/config.toml` into
 `~/.codex/config.toml`, replacing both executable paths with absolute paths, and
