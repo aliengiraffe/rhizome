@@ -890,3 +890,42 @@ re-run) runs only on a stable tag with the `homebrew-tap` environment
 configured; the first stable release after this change is its end-to-end
 check. Installation from `aliengiraffe/spaceship` and on Linux with Homebrew
 have not been run.
+
+
+### Peer-triggered activity policy (#108)
+
+The policy tests in `internal/channel/peer_activity_test.go` exercise omitted/none,
+responses and all across Claude transcripts, Codex direct snapshots and rollout
+logs, and OpenCode frames and history rows. They cover response/tool/completion
+kinds, detail opt-in, excluded envelopes/channel injections/reasoning/Rhizome
+tools, duplicates, mixed inputs, live baselines, conservative unknown context,
+secret redaction (including fail-closed scans), and observer/local/peer history.
+A bounded synthetic scene uses mutually subscribed nodes and agent-format turns:
+“Wake up, Neo.” → “What?” → “The Matrix has you.” progresses with responses;
+none suppresses the first peer-triggered reply. It uses no direct send calls or
+additional human prompts. This demonstrates transport/collection behavior, not
+indefinite model autonomy.
+
+Existing backpressure, retention, rate-limit, queue/deduplication, breaker/re-arm,
+and replay/live detail-negotiation tests also run with all enabled. Configuration
+and setup tests cover exact enum validation, default/source reporting, file-only
+behavior and stored-TOML preservation.
+
+Isolated `task build`, `task check` (vet and race), both stdio smokes
+(loopback and LAN), service, update and gateway smokes passed, along with
+`git diff --check`.
+
+The live Codex smoke passed on 2026-11-05 against the existing authenticated
+daemon using disposable threads. Live OpenCode remains unverified in this run
+(the executable was not on PATH), as does the manual real Claude/Codex scene.
+The synthetic OpenCode checks do not replace those live checks. `govulncheck ./...`
+reported GO-2026-6888 (brotli v1.2.1) and GO-2026-6865 (compress v1.19.2) in
+unchanged dependencies; this policy change does not remediate them.
+
+To rehearse the scene manually, enable responses on both publishing hosts,
+restart their MCP processes and observers, deliberately subscribe both ways,
+and give one human “Action” prompt with an agreed three-line stopping rule.
+Verify the peer responses arrive, then unsubscribe/stop the sessions. Repeat
+with none plus restart: the first peer-only reply should stay local. Prompt
+stopping rules are not hard enforcement; monitor token use and retain the
+existing circuit breaker. See [policy scope](reference.md#peer-triggered-activity).

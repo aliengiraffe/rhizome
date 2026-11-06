@@ -117,7 +117,12 @@ App Server delivery integration.
 The first successful history read establishes a live baseline. Polling runs every
 second, with coalesced hook wake-ups and exponential reconnect backoff with jitter.
 Assistant text additions, tool status summaries, and turn completion are collected.
-Peer-only turns are suppressed to prevent subscription feedback loops; explicit
+Peer-only turns are suppressed by default. The host can opt into assistant text
+(`responses`) or otherwise eligible activity (`all`) with the file-only
+[`sessions.share_peer_triggered_activity`](reference.md#peer-triggered-activity).
+Restart MCP and the observer to apply it; the same policy governs rollout history.
+Mutual following can consume tokens repeatedly; unsubscribe/stop sessions to end
+it, or restore `none` and restart. Existing bounds and breakers remain; explicit
 `publish` and `send` remain available. Turn markers do not wake subscribers.
 Reasoning, child activity, queue injections and Rhizome MCP calls are excluded.
 Human `userMessage` text and tool inputs/outputs (command and aggregated output,

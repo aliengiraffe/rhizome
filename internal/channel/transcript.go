@@ -33,6 +33,8 @@ type collector struct {
 	tools        map[string]string
 	toolOrder    []string
 	anchor       []byte
+	codexHuman   bool // human event in the current rollout turn
+	unknownTurn  bool // baseline/handoff lacks input context; policy must not bypass it
 	peerResponse bool
 	baseline     int64 // bytes present at binding; scanned once for title records only
 	titled       bool
@@ -131,7 +133,8 @@ func (c *collector) scan(n activitySink, gen uint64) {
 		c.offset = st.Size()
 		c.tail = nil
 		c.dropping = true
-		c.peerResponse = true
+		c.unknownTurn = true
+		c.codexHuman = false
 		c.info = st
 		c.setAnchor(f)
 		n.activity(gen, "gap", "Observed log replaced or truncated; resumed at current EOF")
@@ -140,6 +143,8 @@ func (c *collector) scan(n activitySink, gen uint64) {
 	if changed {
 		c.offset = 0
 		c.peerResponse = false
+		c.unknownTurn = false
+		c.codexHuman = false
 		c.tail = nil
 		c.dropping = false
 		c.anchor = nil
@@ -356,20 +361,29 @@ func (c *collector) normalize(line []byte, n activitySink, gen uint64) {
 	// Meta channel records must be inspected before ignoring them: their
 	// assistant responses otherwise look like fresh locally authored activity.
 	if r.Type == "user" {
+		peer, human := false, false
 		for _, b := range blocks {
 			if b.Type != "text" || strings.TrimSpace(b.Text) == "" {
 				continue
 			}
 			if isPeerInput(b.Text) {
-				c.peerResponse = true
-			} else if !r.IsMeta {
-				c.peerResponse = false
+				peer = true
+			} else if !r.IsMeta && !strings.Contains(b.Text, "<channel ") {
+				human = true
 			}
 		}
+		if human {
+			c.peerResponse, c.unknownTurn = false, false
+		} else if peer {
+			c.peerResponse = true
+		}
 	}
-	if r.IsMeta || (r.Type == "assistant" && c.peerResponse) {
+
+	if r.IsMeta {
 		return
 	}
+	toolSink := n // results retain the eligibility of their recorded tool start
+	n = peerSink{activitySink: n, peer: c.peerResponse, unknown: c.unknownTurn}
 	// A human prompt is the user record's own text blocks as one event. Channel
 	// injections and peer envelopes are never prompts, and user text is never
 	// published as assistant activity, even if it resembles assistant output.
@@ -387,11 +401,11 @@ func (c *collector) normalize(line []byte, n activitySink, gen uint64) {
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
-			if r.Type == "assistant" && strings.TrimSpace(b.Text) != "" && !strings.Contains(b.Text, "<channel ") {
+			if r.Type == "assistant" && strings.TrimSpace(b.Text) != "" && !strings.Contains(b.Text, "<channel ") && !isPeerInput(b.Text) {
 				n.activity(gen, "activity", b.Text)
 			}
 		case "tool_use":
-			if r.Type != "assistant" {
+			if r.Type != "assistant" || c.unknownTurn || !n.peerActivityPolicy().Allows(c.peerResponse, "tool") {
 				continue
 			}
 			if b.ID == "" {
@@ -427,8 +441,8 @@ func (c *collector) normalize(line []byte, n activitySink, gen uint64) {
 			if b.IsError {
 				result = "failed"
 			}
-			n.activity(gen, "tool", "Tool "+result+": "+name)
-			toolDetail(n, gen, "tool_output", name, payloadText(b.Content))
+			toolSink.activity(gen, "tool", "Tool "+result+": "+name)
+			toolDetail(toolSink, gen, "tool_output", name, payloadText(b.Content))
 		case "thinking", "redacted_thinking":
 		default:
 			c.skip(n, "unknown content block")

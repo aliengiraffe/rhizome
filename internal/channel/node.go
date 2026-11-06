@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"rhizome/internal/config"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +83,8 @@ type counters struct {
 	Redacted, RedactionFailures uint64
 }
 type Node struct {
-	bridge *gatewayProxy // immutable; only service-owned remote proxies
+	peerActivity config.PeerActivityPolicy
+	bridge       *gatewayProxy // immutable; only service-owned remote proxies
 
 	collectionLease  *os.File
 	archive          *historyService // read-only history catalog client; nil in parser tests
@@ -164,6 +166,7 @@ func cloneIdentity(i *pb.Identity) *pb.Identity { return proto.Clone(i).(*pb.Ide
 // live collection; historical reads use an in-memory sink so both paths apply
 // exactly the same content policy.
 type activitySink interface {
+	peerActivityPolicy() config.PeerActivityPolicy
 	activity(gen uint64, kind, text string)
 	setNativeTitle(gen uint64, custom bool, title string)
 	local() *pb.Identity

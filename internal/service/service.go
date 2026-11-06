@@ -36,7 +36,7 @@ type Config struct {
 // FromConfig adapts resolved configuration for the observer. The observer
 // reports the build identity set by SetBuild in its health file.
 func FromConfig(c config.Config) Config {
-	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, RecentWindow: c.RecentWindow, Debug: c.Debug, AutoUpdate: c.AutoUpdate, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, PiRoot: c.Pi.SessionsDir, Details: c.Sessions.SharePromptsAndTools, Version: build.version}}
+	return Config{ConfigPath: c.Path, Gateway: c.Gateway, PeerHistory: c.PeerHistory, RecentWindow: c.RecentWindow, Debug: c.Debug, AutoUpdate: c.AutoUpdate, Observer: channel.ObserverOptions{Hostname: c.Hostname, Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, PiRoot: c.Pi.SessionsDir, Details: c.Sessions.SharePromptsAndTools, PeerActivity: c.Sessions.SharePeerTriggeredActivity, Version: build.version}}
 }
 
 type command struct {
@@ -352,6 +352,7 @@ func (m *manager) manage(ctx context.Context, action string, c Config) error {
 	}
 	return nil
 }
+
 // writeDefinition stores Windows task XML as BOM-prefixed UTF-16LE, the encoding schtasks requires.
 func (m *manager) writeDefinition(s string) error {
 	b := []byte(s)

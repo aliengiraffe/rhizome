@@ -199,3 +199,12 @@ func TestHostnameFromConfig(t *testing.T) {
 		t.Fatalf("hostname %q", got)
 	}
 }
+
+func TestPeerActivityPolicyFromConfig(t *testing.T) {
+	for _, policy := range []config.PeerActivityPolicy{config.PeerActivityNone, config.PeerActivityResponses, config.PeerActivityAll} {
+		c := FromConfig(config.Config{Sessions: config.Sessions{SharePeerTriggeredActivity: policy}})
+		if c.Observer.PeerActivity != policy {
+			t.Fatalf("observer policy: %q", c.Observer.PeerActivity)
+		}
+	}
+}

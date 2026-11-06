@@ -461,3 +461,21 @@ func TestSetupHostnameFlags(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestSetupPreservesPeerActivityPolicy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, value := range []string{"none", "responses", "all"} {
+		a := configAnswers{Stored: map[string]any{"sessions": map[string]any{"share_peer_triggered_activity": value}}, Hostname: "new-host"}
+		body, err := a.render()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(body, `share_peer_triggered_activity = "`+value+`"`) {
+			t.Fatal(body)
+		}
+	}
+	body, err := (configAnswers{Hostname: "new-host"}).render()
+	if err != nil || strings.Contains(body, "share_peer_triggered_activity") {
+		t.Fatalf("default materialized: %s %v", body, err)
+	}
+}
