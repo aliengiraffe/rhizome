@@ -57,6 +57,7 @@ func entry() error {
 		if err != nil {
 			return err
 		}
+		o.Version = buildVersion
 		opts.BoolVar(&o.LAN, "lan", o.LAN, "peer with other devices on the local network (RHIZOME_LAN=1)")
 		opts.BoolVar(&o.Tailscale, "tailscale", o.Tailscale, "peer with devices on this tailnet via the local Tailscale daemon; implies the LAN transport (RHIZOME_TAILSCALE=1)")
 		opts.StringVar(&o.BindAddr, "bind-addr", o.BindAddr, "LAN listen address, default 0.0.0.0, or the Tailscale IP with --tailscale (RHIZOME_BIND_ADDR)")

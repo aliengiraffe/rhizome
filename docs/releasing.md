@@ -2,16 +2,17 @@
 
 Pushing a SemVer tag builds, signs, notarizes, smoke-tests and publishes a
 GitHub Release in `aliengiraffe/rhizome`, then publishes the same binaries to
-npm as [`@aliengiraffe/rhizome`](#npm). The pipeline is adapted from Lander's
+npm as [`@aliengiraffe/rhizome`](#npm). A stable tag also updates the Homebrew
+cask in `aliengiraffe/homebrew-spaceship`. The pipeline is adapted from Lander's
 release pipeline in `aliengiraffe/env-manager`. It uses native `codesign` and
 `notarytool`, gates the build on executing the binary, and requires an explicit
 `Accepted` notarization verdict.
 
 | File | Role |
 | --- | --- |
-| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | Jobs: `meta` → `build` → `smoke` matrix → `publish` → `publish-npm`. |
+| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | Jobs: `meta` → `build` → `smoke` matrix → `publish` → `publish-npm` and `tap` (stable tags only). |
 | [`.goreleaser.yaml`](../.goreleaser.yaml) | Cross-builds, darwin fusion and signing hook, archives. Never publishes. |
-| [`internal/release/`](../internal/release) | Tag validation, asset matrix, checksum manifest, manifest signing and trusted keys, archive smoke, npm package generation, smoke and publishing (`releasetool`). |
+| [`internal/release/`](../internal/release) | Tag validation, asset matrix, checksum manifest, manifest signing and trusted keys, archive smoke, npm package generation, smoke and publishing, Homebrew cask rendering (`releasetool`). |
 | [`internal/update/`](../internal/update) | The auto-updater that consumes these assets ([service.md](service.md#automatic-updates)). |
 | [`scripts/release/`](../scripts/release) | Signing, notarization, `.pkg` build, payload verification, release notes. |
 
@@ -63,9 +64,10 @@ git push origin v1.3.0-rc.1
 
 | Trigger | Signing | Result |
 | --- | --- | --- |
-| SemVer tag push | `RHIZOME_SIGNING=required`, `release` environment | Draft staged, verified, then published |
-| Pull request touching Go, module, release or workflow files | ad-hoc, no environment, no secrets | Artifacts only, no release |
-| `workflow_dispatch` (manual snapshot) | ad-hoc, no environment, no secrets | Artifacts only, no release |
+| Stable SemVer tag push | `RHIZOME_SIGNING=required`, `release` environment | Draft staged, verified, then published; Homebrew cask updated |
+| Prerelease SemVer tag push | `RHIZOME_SIGNING=required`, `release` environment | Draft staged, verified, then published as a prerelease; tap untouched |
+| Pull request touching Go, module, release or workflow files | ad-hoc, no environment, no secrets | Artifacts only, no release, no tap |
+| `workflow_dispatch` (manual snapshot) | ad-hoc, no environment, no secrets | Artifacts only, no release, no tap |
 
 Snapshots are versioned `0.0.0-snapshot+<12-char commit>`.
 
@@ -109,11 +111,22 @@ Snapshots are versioned `0.0.0-snapshot+<12-char commit>`.
    the built commit. It stages a **draft** with every asset, downloads the
    draft's assets and re-verifies them (manifest, signature and byte-identical
    signature file), then publishes. A run that fails at any point
-   leaves no public release.
+   before this leaves no public release.
 5. **publish-npm** (`contents: read`, `id-token: write`, `release`
    environment, no secrets) runs only for tags and only after **publish**
    succeeds. It re-verifies the assets and manifest signature, generates the
    [npm packages](#npm) and publishes them through trusted publishing.
+6. **tap** (`contents: read`, `homebrew-tap` environment, no signing secrets)
+   runs only for stable tags, only after `publish` succeeds. It confirms the
+   release is published and not a prerelease, downloads its assets and
+   re-verifies them exactly against the manifest and its signature. It then
+   mints a short-lived GitHub App token scoped to `homebrew-spaceship`
+   contents and runs `releasetool cask`, which renders `Casks/rhizome.rb` from
+   the manifest's digests. It never rebuilds anything. The cask is written
+   through the contents API only when it changed, so a re-run makes no empty
+   commit. A tap that already holds a newer release is kept rather than
+   downgraded, and a cask the pipeline did not generate is refused rather
+   than replaced.
 
 Notarization fails unless `notarytool` exits zero **and** its JSON response is
 an object with a submission id and `"status": "Accepted"`. `Invalid`,
@@ -135,6 +148,39 @@ so nothing is published. Replace the runner label or record the gap rather than
 removing the job silently. Smoke runs check only that the binary starts and
 reports its identity. Native service behavior is covered by
 [verification.md](verification.md).
+
+## Homebrew cask
+
+The tap job keeps GoReleaser's `release: disable: true`. GoReleaser's own
+`homebrew_casks` would publish from the build job, which holds the signing
+secrets and runs before the release is verified and public. Instead,
+`releasetool cask` renders the cask from the published, re-verified assets.
+The generated `Casks/rhizome.rb` starts with a "DO NOT EDIT" header; never
+edit it in the tap by hand, because the next release refuses to replace a
+cask without that header.
+
+- **macOS** (arm64 and Intel): `on_macos` installs the universal
+  `rhizome_<v>_darwin_all.tar.gz`, the same signed and notarized binary as the
+  archive and the `.pkg`.
+- **Linux** (amd64 and arm64, Homebrew on Linux): `on_linux` installs the
+  unsigned Linux archives. Windows has no Homebrew.
+- URLs interpolate `#{version}`. For a build-metadata tag the asset part stays
+  literal, because asset names replace `+` with `.`.
+- `binary "rhizome"` is the only artifact. There is no `postflight` and no
+  `zap`: Homebrew never installs, starts, restarts or removes the observer
+  service and never touches `~/.rhizome`. A caveat prints the restart steps.
+
+Dry run, from a checkout, without pushing anything:
+
+```sh
+gh release download v0.9.1 -R aliengiraffe/rhizome -D /tmp/rz
+go run ./internal/release/releasetool cask -tag v0.9.1 -dir /tmp/rz > /tmp/rhizome.rb
+brew tap-new --no-git rhizomescratch/test
+cp /tmp/rhizome.rb "$(brew --repository rhizomescratch/test)/Casks/rhizome.rb"
+brew style rhizomescratch/test/rhizome
+brew audit --cask --strict --online rhizomescratch/test/rhizome
+brew untap rhizomescratch/test
+```
 
 ## One-time setup
 
@@ -166,6 +212,14 @@ to this repository. Never paste their values into source, issues or logs.
    first matching identity in the temporary keychain.
 4. Recommended: enable GitHub **immutable releases** so a published release's
    assets and tag cannot change.
+5. For the Homebrew cask, create a second environment named
+   **`homebrew-tap`**, also restricted to tags matching `v*` and `[0-9]*`. Add
+   two environment secrets for the GitHub App installed on
+   `aliengiraffe/homebrew-spaceship` with *Contents: read and write* (the app
+   Vigilante's release uses): `APP_ID` (its app id) and `APP_PRIVATE_KEY` (its
+   PEM private key). Never add them to `release`, which would give the signing
+   jobs tap access, or as repository secrets. The tap job fails with the names
+   of any that are missing; the release itself stays published.
 
 Encode files with `base64 -i cert.p12 | pbcopy`. The build job checks every
 secret before using any of them, and fails with the names of any that are
@@ -336,6 +390,20 @@ of the `aliengiraffe` npm organization (2FA enforced). CI never does it.
 
 ## Installing and upgrading
 
+- **Homebrew** (macOS, or Linux with Homebrew):
+  `brew install --cask aliengiraffe/spaceship/rhizome`. Stable releases
+  only. The cask links the binary into Homebrew's `bin` (for example
+  `/opt/homebrew/bin/rhizome`). Upgrade with `brew upgrade --cask rhizome`
+  and remove it with `brew uninstall --cask rhizome`. Neither touches
+  `~/.rhizome` or the observer service. On macOS, setup and the service
+  record the stable `bin/rhizome` link, so after an upgrade only the restart
+  below is needed. On Linux they record the resolved, versioned Caskroom path,
+  which an upgrade removes: run `rhizome service uninstall`,
+  `rhizome service install` and `rhizome setup --agents` after each upgrade.
+  Run `rhizome service uninstall` before `brew uninstall` if you installed the
+  service. The observer's auto-updater follows the link and replaces the
+  binary inside the Caskroom without Homebrew knowing; set
+  `[update] enabled = false` if you want `brew upgrade` to own upgrades.
 - **macOS installer**: open the `.pkg` or run
   `sudo installer -pkg rhizome_<v>_macos.pkg -target /`. It installs only
   `/usr/local/bin/rhizome`, runs no scripts, and never creates or changes
@@ -393,6 +461,10 @@ of the `aliengiraffe` npm organization (2FA enforced). CI never does it.
   failed `publish-npm` job. Versions already published from the tag are
   skipped. An expired or missing trusted publisher configuration fails with
   an authentication error; fix it on npmjs.com and re-run.
+- **Tap failed** (missing app secrets, token, API or conflict errors): the
+  GitHub Release stays published and the run fails visibly. Fix the cause and
+  re-run only the failed `tap` job; it is idempotent. A conflict from a
+  concurrent tap update is safe to re-run.
 - **Already published**: the publish job refuses to replace a published
   release or its assets. Never use `--clobber` on a published release. To
   correct one, publish a new version and, if needed, mark the bad release as a
@@ -405,7 +477,7 @@ of the `aliengiraffe` npm organization (2FA enforced). CI never does it.
 ## Not included
 
 There is no Windows Authenticode signing or MSI, no Linux packages (deb/rpm),
-no Homebrew tap and no public mirror besides npm. The auto-updater updates the `rhizome`
+no nightly or prerelease Homebrew cask and no public mirror besides npm. The auto-updater updates the `rhizome`
 binary only, never agent clients, skills, hooks or plugins (`rhizome setup`
 owns those), with no delta updates and no rollback beyond the single previous
 binary kept for one cycle. The macOS package is CLI-only, with no menu-bar app

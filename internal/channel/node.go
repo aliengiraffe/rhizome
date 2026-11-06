@@ -139,6 +139,8 @@ type Node struct {
 	registrationRefresh time.Duration
 	// nameRefresh overrides defaultNameRefresh in tests.
 	nameRefresh time.Duration
+	// noticeRefresh overrides defaultNoticeRefresh in tests.
+	noticeRefresh time.Duration
 	// opts, mode, bind, advertiseAddr, gossipAddr, beaconPort, ts and cert are
 	// fixed by start before any goroutine reads them.
 	opts                            Options

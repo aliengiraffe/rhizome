@@ -70,35 +70,42 @@ func WriteManifest(dir, assetVersion string) error {
 // dir must contain nothing besides those assets, the manifest and its optional
 // signature, which is how downloaded release assets are checked for strays.
 func VerifyManifest(dir, assetVersion string, exact bool) error {
+	_, err := verifiedSums(dir, assetVersion, exact)
+	return err
+}
+
+// verifiedSums verifies dir like VerifyManifest and returns the manifest's
+// digests by asset name.
+func verifiedSums(dir, assetVersion string, exact bool) (map[string]string, error) {
 	data, err := readBounded(filepath.Join(dir, ManifestName(assetVersion)), maxManifest)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	seen, err := ParseManifest(data, assetVersion)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, name := range Assets(assetVersion) {
 		got, err := fileSHA256(filepath.Join(dir, name))
 		if err != nil {
-			return fmt.Errorf("checksum %s: %w", name, err)
+			return nil, fmt.Errorf("checksum %s: %w", name, err)
 		}
 		if got != seen[name] {
-			return fmt.Errorf("%s: digest %s does not match manifest %s", name, got, seen[name])
+			return nil, fmt.Errorf("%s: digest %s does not match manifest %s", name, got, seen[name])
 		}
 	}
 	if exact {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, e := range entries {
 			if e.Name() != ManifestName(assetVersion) && e.Name() != SignatureName(assetVersion) && !slices.Contains(Assets(assetVersion), e.Name()) {
-				return fmt.Errorf("unexpected file %s alongside release assets", e.Name())
+				return nil, fmt.Errorf("unexpected file %s alongside release assets", e.Name())
 			}
 		}
 	}
-	return nil
+	return seen, nil
 }
 
 func fileSHA256(path string) (string, error) {

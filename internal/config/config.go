@@ -517,6 +517,9 @@ func (c Config) Write(w io.Writer) error {
 	if _, err := fmt.Fprintf(w, "update.check_interval = %q # source: %s\n", c.AutoUpdate.CheckInterval.String(), c.Sources["update.check_interval"]); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(w, "update.notify_sessions = %t # source: %s\n", c.AutoUpdate.NotifySessions, c.Sources["update.notify_sessions"]); err != nil {
+		return err
+	}
 	// Peer history shows the effective, inherited policy, not only file values.
 	if _, err := fmt.Fprintf(w, "gateway.history.enabled = %t # source: %s\n", c.PeerHistory.Enabled, c.Sources["gateway.history.enabled"]); err != nil {
 		return err
