@@ -34,7 +34,11 @@ func newHistoryHarness(t *testing.T) *historyHarness {
 	if err := os.MkdirAll(o.opts.OpenCodeRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
-	scope := historyScope{Runtime: o.opts.Runtime, ClaudeRoot: o.opts.ClaudeRoot, CodexRoot: o.opts.CodexRoot, OpenCodeRoot: o.opts.OpenCodeRoot}
+	o.opts.PiRoot = filepath.Join(filepath.Dir(o.opts.Runtime), "pi-sessions")
+	if err := os.MkdirAll(o.opts.PiRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	scope := historyScope{Runtime: o.opts.Runtime, ClaudeRoot: o.opts.ClaudeRoot, CodexRoot: o.opts.CodexRoot, OpenCodeRoot: o.opts.OpenCodeRoot, PiRoot: o.opts.PiRoot}
 	o.index = newHistoryIndex(scope, func() bool { return o.retry })
 	n := newNode(context.Background())
 	t.Cleanup(n.close)

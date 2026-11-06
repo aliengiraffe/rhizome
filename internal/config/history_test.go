@@ -42,7 +42,10 @@ func TestPeerHistoryPolicy(t *testing.T) {
 			if p.Agent("opencode").Enabled != tc.want.enabled && tc.want.enabled {
 				t.Fatalf("opencode inherits the global policy: %+v", p.OpenCode)
 			}
-			if p.Agent("pi").Enabled {
+			if p.Agent("pi").Enabled != tc.want.enabled && tc.want.enabled {
+				t.Fatalf("pi inherits the global policy: %+v", p.Pi)
+			}
+			if p.Agent("cursor").Enabled {
 				t.Fatal("unsupported agent enabled")
 			}
 		})

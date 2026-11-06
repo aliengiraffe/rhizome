@@ -29,6 +29,7 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `codex.home` | `CODEX_HOME` | — | `~/.codex` |
 | `codex.sessions_dir` | — | service `--codex-root` | effective `codex.home` + `/sessions` |
 | `opencode.data_dir` | — | service `--opencode-root` | `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode` |
+| `pi.sessions_dir` | — (default follows `PI_CODING_AGENT_DIR` where the process has it) | service `--pi-root` | `$PI_CODING_AGENT_DIR/sessions`, else `~/.pi/agent/sessions`; set it explicitly when the service runs without Pi's environment |
 | `network.mode` | `RHIZOME_LAN`, `RHIZOME_TAILSCALE` | mcp `--lan`, `--tailscale` | `local` |
 | `network.bind_addr` | `RHIZOME_BIND_ADDR` | mcp `--bind-addr` | LAN: all interfaces; Tailscale: the Tailscale IP |
 | `network.advertise_addr` | `RHIZOME_ADVERTISE_ADDR` | mcp `--advertise-addr` | first private interface; Tailscale: the Tailscale IP |
@@ -43,8 +44,8 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `update.notify_sessions` | — | — | `true`: MCP processes tell their session to restart once the observer runs a newer release ([Automatic updates](service.md#automatic-updates)) |
 | `gateway.history.enabled` | — | — | `false`: paired hosts cannot search or read history |
 | `gateway.history.lookback` | — | — | `30d`; positive whole days or `all` |
-| `claude.peer_history.enabled`, `codex.peer_history.enabled` | — | — | inherit `gateway.history.enabled`; can only narrow it |
-| `claude.peer_history.lookback`, `codex.peer_history.lookback` | — | — | inherit `gateway.history.lookback` |
+| `claude.peer_history.enabled`, `codex.peer_history.enabled`, `opencode.peer_history.enabled`, `pi.peer_history.enabled` | — | — | inherit `gateway.history.enabled`; can only narrow it |
+| `claude.peer_history.lookback`, `codex.peer_history.lookback`, `opencode.peer_history.lookback`, `pi.peer_history.lookback` | — | — | inherit `gateway.history.lookback` |
 
 ```toml
 runtime_dir = "~/.rhizome/run"
