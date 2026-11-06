@@ -51,7 +51,7 @@ The extension relays raw events of its own session over the private socket and
 Go decides what is published (`internal/channel/opencode_collect.go`, shared with
 OpenCode): `message_end` (user and assistant text), `tool_execution_start|end`
 (top-level calls only; nested calls from codemode are skipped), and `agent_end`.
-Rhizome's own tools (`mcp__rhizome__*`) never feed back. A delivery marks the next
+Rhizome's own tools (`mcp__rhizome__*`) never feed back. A delivery, once Pi feeds it to the agent, marks the
 turn as a reaction to a peer, so it is not republished until the next human prompt.
 Events that happen before the bind is written wait in a 256-entry queue; overflow
 and reconnects are reported to subscribers as visible `gap` events.
