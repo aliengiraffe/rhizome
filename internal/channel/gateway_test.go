@@ -290,16 +290,21 @@ func TestGatewayCorruptStateFailsClosed(t *testing.T) {
 }
 func TestGatewayIdentityBounds(t *testing.T) {
 	for _, agent := range []string{"claude", "codex", "opencode"} {
-		if !validGatewayIdentity(&pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: agent}) {
+		if !validGatewayIdentity(&pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: agent}, false) {
 			t.Fatalf("rejected valid %s identity", agent)
 		}
 	}
-	if validGatewayIdentity(&pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: "other"}) {
+	if validGatewayIdentity(&pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: "other"}, true) {
 		t.Fatal("accepted unknown agent type")
+	}
+	// Pi sessions are valid only on a link that negotiated the Pi subprotocol.
+	pi := &pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: "pi"}
+	if validGatewayIdentity(pi, false) || !validGatewayIdentity(pi, true) {
+		t.Fatal("Pi identity must require the Pi subprotocol")
 	}
 	p := &pb.Identity{Protocol: 1, GatewayVersion: 1, NodeId: id(), SessionId: "s", Generation: 1, AgentType: "claude"}
 	p.GatewayHost = "other"
-	if validGatewayIdentity(p) {
+	if validGatewayIdentity(p, true) {
 		t.Fatal("accepted forwarded identity")
 	}
 }
@@ -643,15 +648,18 @@ func TestGatewayFailureClassification(t *testing.T) {
 // peers that negotiated the OpenCode subprotocol, in both dial directions;
 // builds that predate OpenCode select none and drop links over unknown agents.
 func TestGatewayOpenCodeNegotiation(t *testing.T) {
+	openCodeOnly := []string{gatewaySubprotocolOpenCode}
 	for _, tc := range []struct {
-		name     string
-		server   *websocket.Upgrader
-		dialer   func() *websocket.Dialer
-		wantOpen bool
+		name   string
+		server *websocket.Upgrader
+		dialer func() *websocket.Dialer
+		want   string
 	}{
-		{"both new", newGatewayUpgrader(), func() *websocket.Dialer { return newGatewayDialer(nil) }, true},
-		{"old server", &websocket.Upgrader{}, func() *websocket.Dialer { return newGatewayDialer(nil) }, false},
-		{"old dialer", newGatewayUpgrader(), func() *websocket.Dialer { return &websocket.Dialer{} }, false},
+		{"both new", newGatewayUpgrader(), func() *websocket.Dialer { return newGatewayDialer(nil) }, gatewaySubprotocolPi},
+		{"new dialer, OpenCode-only server", &websocket.Upgrader{Subprotocols: openCodeOnly}, func() *websocket.Dialer { return newGatewayDialer(nil) }, gatewaySubprotocolOpenCode},
+		{"OpenCode-only dialer, new server", newGatewayUpgrader(), func() *websocket.Dialer { return &websocket.Dialer{Subprotocols: openCodeOnly} }, gatewaySubprotocolOpenCode},
+		{"old server", &websocket.Upgrader{}, func() *websocket.Dialer { return newGatewayDialer(nil) }, ""},
+		{"old dialer", newGatewayUpgrader(), func() *websocket.Dialer { return &websocket.Dialer{} }, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := make(chan string, 1)
@@ -672,8 +680,8 @@ func TestGatewayOpenCodeNegotiation(t *testing.T) {
 			defer c.Close()
 			res.Body.Close()
 			for side, got := range map[string]string{"dialer": c.Subprotocol(), "server": <-server} {
-				if (got == gatewaySubprotocolOpenCode) != tc.wantOpen {
-					t.Fatalf("%s subprotocol %q, want opencode=%v", side, got, tc.wantOpen)
+				if got != tc.want {
+					t.Fatalf("%s subprotocol %q, want %q", side, got, tc.want)
 				}
 			}
 		})
@@ -682,15 +690,75 @@ func TestGatewayOpenCodeNegotiation(t *testing.T) {
 
 func TestGatewayPeerAccepts(t *testing.T) {
 	for _, tc := range []struct {
-		agent    string
-		opencode bool
-		want     bool
+		agent        string
+		opencode, pi bool
+		want         bool
 	}{
-		{"claude", false, true}, {"codex", false, true}, {"opencode", false, false},
-		{"claude", true, true}, {"codex", true, true}, {"opencode", true, true},
+		{"claude", false, false, true}, {"codex", false, false, true}, {"opencode", false, false, false}, {"pi", false, false, false},
+		{"claude", true, false, true}, {"codex", true, false, true}, {"opencode", true, false, true}, {"pi", true, false, false},
+		{"opencode", true, true, true}, {"pi", true, true, true},
 	} {
-		if got := gatewayPeerAccepts(&pb.Identity{AgentType: tc.agent}, tc.opencode); got != tc.want {
-			t.Errorf("%s opencode=%v: got %v, want %v", tc.agent, tc.opencode, got, tc.want)
+		if got := gatewayPeerAccepts(&pb.Identity{AgentType: tc.agent}, tc.opencode, tc.pi); got != tc.want {
+			t.Errorf("%s opencode=%v pi=%v: got %v, want %v", tc.agent, tc.opencode, tc.pi, got, tc.want)
 		}
+	}
+}
+
+// A link that did not negotiate the Pi subprotocol must never carry a Pi session
+// in either direction: a peer naming it as the target of a request (localRoute),
+// or a local Pi session put on the wire as the sender of one (proxy source).
+// OpenCode follows the same rule for its own subprotocol.
+func TestGatewayLinkWithholdsSessionsWithoutSubprotocol(t *testing.T) {
+	runtime := filepath.Join(t.TempDir(), "runtime")
+	start := func(session, agent string) *Node {
+		t.Helper()
+		n := node(t)
+		if err := n.start(Options{Runtime: runtime}); err != nil {
+			t.Fatal(err)
+		}
+		bind(t, n, session, t.TempDir())
+		n.mu.Lock()
+		n.identity.AgentType = agent
+		n.mu.Unlock()
+		return n
+	}
+	// The sessions under test start first, so they are registered before the nodes
+	// that resolve them look (a failed first probe is not retried for 30 s).
+	live := map[string]*Node{"pi": start("pi-live", "pi"), "opencode": start("oc-live", "opencode"), "claude": start("cl-live", "claude")}
+	remote := start("remote", "claude") // stands in for the paired host's session proxy
+	base := start("base", "claude")     // resolves everything above, so it starts last
+	gatewayUntil(t, func() bool {
+		_, err := base.resolve(context.Background(), "remote")
+		return err == nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for _, tc := range []struct {
+		name         string
+		opencode, pi bool
+		allowed      map[string]bool
+	}{
+		{"no subprotocol", false, false, map[string]bool{"claude": true}},
+		{"OpenCode subprotocol", true, false, map[string]bool{"claude": true, "opencode": true}},
+		{"Pi subprotocol", true, true, map[string]bool{"claude": true, "opencode": true, "pi": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &gatewayLink{ctx: ctx, g: &gateway{base: base}, opencode: tc.opencode, pi: tc.pi, proxies: map[string]*gatewayProxy{}}
+			p := &gatewayProxy{link: l, remote: cloneIdentity(remote.local()), node: remote}
+			l.proxies[remote.local().NodeId] = p
+			for agent, n := range live {
+				var e1, e2 error
+				gatewayUntil(t, func() bool { // both resolvers must see the session before it is judged
+					_, e1 = remote.resolve(ctx, n.local().SessionId)
+					_, e2 = base.resolve(ctx, n.local().SessionId)
+					return e1 == nil && e2 == nil
+				})
+				_, _, routeErr := l.localRoute(ctx, remote.local(), n.local())
+				_, sourceErr := p.source(ctx, n.local(), remote.local())
+				if tc.allowed[agent] != (routeErr == nil) || tc.allowed[agent] != (sourceErr == nil) {
+					t.Errorf("%s session: allowed=%v, localRoute err=%v, source err=%v", agent, tc.allowed[agent], routeErr, sourceErr)
+				}
+			}
+		})
 	}
 }

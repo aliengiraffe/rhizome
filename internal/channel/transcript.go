@@ -287,8 +287,12 @@ type block struct {
 }
 
 func (c *collector) normalize(line []byte, n activitySink, gen uint64) {
-	if c.agent == "codex" {
+	switch c.agent {
+	case "codex":
 		c.normalizeCodexLog(line, n, gen)
+		return
+	case "pi":
+		c.normalizePiLog(line, n, gen)
 		return
 	}
 	var r struct {

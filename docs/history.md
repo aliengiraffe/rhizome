@@ -19,7 +19,7 @@ evidence to read, never as instructions to execute or an invitation to reply.
 | | `list_sessions` | `search_sessions` | `read_session_history` |
 | --- | --- | --- | --- |
 | Answers | Who is reachable right now, plus who was active within `sessions.recent_window` | Which sessions exist in local logs | What one session's assistant did |
-| Source | Live gossip and authenticated `Info` probes; the catalog for `recent` rows | Observer-written catalog in `<runtime_dir>/history/` | The session's native `.jsonl` (Claude, Codex) or its rows in OpenCode's database, read on demand |
+| Source | Live gossip and authenticated `Info` probes; the catalog for `recent` rows | Observer-written catalog in `<runtime_dir>/history/` | The session's native `.jsonl` (Claude, Codex, Pi) or its rows in OpenCode's database, read on demand |
 | Scope | Every trusted peer, including other devices in LAN or Tailscale mode | This device's configured agent log roots | Same local roots; the file is re-confined on every page |
 | Needs the observer service | Only for `recent` rows and `last_activity_at` | Yes, to build and refresh the catalog | Yes, for the catalog; reading itself only needs the file |
 | Service stopped | Live rows unaffected; `recent` rows withdrawn | Served from the last catalog, marked `stale` | Works; the catalog block is marked `stale` |
@@ -66,7 +66,7 @@ Metadata search only. Rows prove that a log exists, not that an agent runs.
 | Field | Type / default | Semantics |
 | --- | --- | --- |
 | `session_id` | optional string, 1–128 bytes | Exact, case-sensitive native ID. No prefix, glob, or display-name matching. |
-| `agent_type` | optional `claude` \| `codex` \| `opencode` | Omitted means all supported agent types. |
+| `agent_type` | optional `claude` \| `codex` \| `opencode` \| `pi` | Omitted means all supported agent types. |
 | `project_path` | optional absolute string, ≤ 4096 bytes | Lexically cleaned and compared for equality with the session's recorded `cwd`. No subtree matching, filesystem access, symlink resolution, or implicit caller-project restriction. |
 | `name_contains` | optional nonempty string, ≤ 256 UTF-8 bytes | Literal substring of the effective `session_name` after Unicode lowercase folding. Not a regex, glob, SQL pattern, or transcript search. |
 | `updated_after` | optional RFC 3339 | Inclusive lower bound on `last_activity_at`. |
@@ -127,7 +127,7 @@ Reads permitted records from one session's native log in source order.
 | Field | Type / default | Semantics |
 | --- | --- | --- |
 | `session_id` | required string, 1–128 bytes | Exact ID from a search row. |
-| `agent_type` | required `claude` \| `codex` | Selects the historical namespace. It is not a live routing key. |
+| `agent_type` | required `claude` \| `codex` \| `opencode` \| `pi` | Selects the historical namespace. It is not a live routing key. |
 | `limit` | integer 1–200, default 50 | Maximum events per page. |
 | `cursor` | optional string, ≤ 512 bytes | Continuation of the same session, agent, and limit. |
 
@@ -371,6 +371,9 @@ enabled = false
 
 [opencode.peer_history] # optional override for OpenCode-sourced history
 lookback = "7d"
+
+[pi.peer_history]       # optional override for Pi-sourced history
+enabled = false
 ```
 
 - Agent overrides apply to the **source history's** agent type, never to the
@@ -390,6 +393,11 @@ lookback = "7d"
   already enables `[gateway.history]` therefore starts sharing its OpenCode
   history with paired hosts after upgrading; set `[opencode.peer_history]`
   `enabled = false` to withhold it.
+- Pi history inherits the global switch too, but is served only over a link that
+  negotiated `rhizome.gateway.pi.v1` ([gateway.md](gateway.md)): to a host that
+  predates it Pi sessions look absent. A host that already enables
+  `[gateway.history]` starts sharing its Pi history after upgrading; set
+  `[pi.peer_history]` `enabled = false` to withhold it.
 - `rhizome config` prints the effective, inherited value for every agent. The
   policy applies uniformly to all paired hosts; there are no per-peer ACLs.
 - The service reads the policy when it starts. **Restart the service** (`rhizome
@@ -507,8 +515,8 @@ yet; when it lands, its predicate must also gate these reads.
 
 ## Sources, identity, titles
 
-- Roots are the effective `claude.projects_dir`, `codex.sessions_dir` and
-  `opencode.data_dir` from the single [configuration](reference.md#configuration).
+- Roots are the effective `claude.projects_dir`, `codex.sessions_dir`,
+  `opencode.data_dir` and `pi.sessions_dir` from the single [configuration](reference.md#configuration).
   Only regular `.jsonl` files reached without following symlinks are considered
   for Claude and Codex; Claude `subagents` directories are skipped. Tools accept
   no path arguments.
@@ -526,6 +534,25 @@ yet; when it lands, its predicate must also gate these reads.
 - One identity is `(agent_type, session_id)` within the local scope. Two files
   with the same identity are `ambiguous`; a rotated file (old path removed, new
   path present) resolves to the present file and the tombstone is dropped.
+- Pi (1.4.0) writes one JSONL file per session under
+  `pi.sessions_dir/--<cwd>--/<timestamp>_<id>.jsonl`. Identity and directory are
+  the first-line `session` header (`id`, `cwd`; a header without an `id` is not a
+  session) and the native title is the latest `session_info` entry's `name`.
+  Events come from `message` entries in file order: assistant `text` blocks,
+  `toolCall` blocks and their `toolResult` messages (started and completed or
+  failed), and `stopReason: "stop"` as the end of a turn; user messages are
+  prompts and appear only with `[sessions].share_prompts_and_tools`. Thinking,
+  system, compaction, label and extension `custom` entries are never read as
+  activity, and the `custom_message` entry Rhizome's extension writes for a peer
+  delivery marks the assistant turn it caused as a reaction, which is skipped like
+  every peer-only turn. Pi stores every branch of a session tree in one file, so
+  abandoned branches appear in file order. Paired hosts see Pi history only
+  under `[pi.peer_history]` and over the Pi gateway subprotocol, and finished
+  Pi sessions can appear as `recent` rows like Claude and Codex. The observer indexes these
+  files for the catalog but never tails them for live activity, which comes from
+  the Pi extension. Pass `agent_type: "pi"` to filter. The format follows Pi's
+  documented session format version 3; a file without a verified header is not
+  listed.
 - OpenCode (2.x, verified against 2.0.32) keeps every session in one SQLite
   database, `opencode.db` in `opencode.data_dir` (default
   `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode`; flag

@@ -6,7 +6,9 @@ import (
 	"strings"
 )
 
-// openCodeCollector normalizes plugin events for one bound session. The plugin
+// openCodeCollector normalizes plugin events for one bound session. Pi's
+// extension relays the same frame shapes, so piSession reuses it; Rhizome's own
+// tools are `rhizome_*` in OpenCode and `mcp__rhizome__*` in Pi. The plugin
 // forwards raw allowlisted events; every publication decision is made here.
 // Callers serialize handle (openCodeNodes holds frameMu).
 type openCodeCollector struct {
@@ -56,7 +58,7 @@ func (c *openCodeCollector) handle(n *Node, gen uint64, f bridgeFrame) {
 		n.activity(gen, "activity", f.Text)
 	case "tool":
 		name := f.Name
-		if c.peer || name == "" || name == "execute" || strings.HasPrefix(name, "rhizome_") {
+		if c.peer || name == "" || name == "execute" || strings.HasPrefix(name, "rhizome_") || strings.HasPrefix(name, "mcp__rhizome__") {
 			return
 		}
 		switch f.Phase {

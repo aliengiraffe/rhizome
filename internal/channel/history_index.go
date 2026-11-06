@@ -291,6 +291,8 @@ type indexRecord struct {
 	Cwd         string `json:"cwd"`
 	Sidechain   bool   `json:"isSidechain"`
 	AITitle     string `json:"aiTitle"`
+	ID          string `json:"id"`   // Pi session header
+	Name        string `json:"name"` // Pi session_info entry
 	CustomTitle string `json:"customTitle"`
 	Payload     struct {
 		ID           string          `json:"id"`
@@ -315,6 +317,22 @@ func (h *historyIndex) indexLine(f *indexedFile, line []byte) {
 	}
 	timed := false
 	switch f.Agent {
+	case "pi":
+		// The first line is the header: identity and directory. Entries of every
+		// branch are timestamped records; a session_info entry carries the name.
+		switch r.Type {
+		case "session":
+			if f.Session == "" && r.ID != "" && len(r.ID) <= 128 {
+				f.Session = r.ID
+				if filepath.IsAbs(r.Cwd) {
+					f.Cwd = filepath.Clean(r.Cwd)
+				}
+			}
+		case "message", "custom_message":
+			timed = true
+		case "session_info":
+			f.CustomTitle = cleanName(r.Name)
+		}
 	case "codex":
 		if r.Type == "session_meta" {
 			if f.Session == "" {
@@ -436,7 +454,7 @@ func (h *historyIndex) flush() {
 	now := time.Now().UTC()
 	h.generation++
 	h.indexedAt = &now
-	c := catalogFile{Version: catalogVersion, Scope: h.scope.hash(), Roots: map[string]string{"claude": h.scope.ClaudeRoot, "codex": h.scope.CodexRoot, "opencode": h.scope.OpenCodeRoot}, Generation: h.generation, IndexedAt: &now, Inventory: h.walked && len(h.queue) == 0 && !h.ocDirty, Pending: len(h.queue) + h.openCodePending(), Degraded: h.degraded != nil && h.degraded(), Warnings: h.warnings(), Files: files}
+	c := catalogFile{Version: catalogVersion, Scope: h.scope.hash(), Roots: map[string]string{"claude": h.scope.ClaudeRoot, "codex": h.scope.CodexRoot, "opencode": h.scope.OpenCodeRoot, "pi": h.scope.PiRoot}, Generation: h.generation, IndexedAt: &now, Inventory: h.walked && len(h.queue) == 0 && !h.ocDirty, Pending: len(h.queue) + h.openCodePending(), Degraded: h.degraded != nil && h.degraded(), Warnings: h.warnings(), Files: files}
 	if c.Warnings == nil {
 		c.Warnings = []catalogWarning{}
 	}

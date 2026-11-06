@@ -60,14 +60,18 @@ type piSession struct {
 	debug   bool
 	window  time.Duration // recent-session window applied to the node
 	bridge  *bridge
-	mu      sync.Mutex // guards node, up, closed
-	node    *Node
-	up      bool
-	closed  bool
+	// frameMu serializes frames with the collector and gaps, so activity keeps the
+	// order the extension relayed it in; it is taken before mu, never the reverse.
+	frameMu   sync.Mutex
+	collector *openCodeCollector
+	mu        sync.Mutex // guards node, up, closed
+	node      *Node
+	up        bool
+	closed    bool
 }
 
 func newPiSession(ctx context.Context, runtime, nonce string) *piSession {
-	return &piSession{ctx: ctx, runtime: runtime, nonce: nonce}
+	return &piSession{ctx: ctx, runtime: runtime, nonce: nonce, collector: newOpenCodeCollector()}
 }
 
 // resolve returns the bound session's node, or an unbound error. The caller is
@@ -81,8 +85,31 @@ func (s *piSession) resolve(*mcp.CallToolRequest) (*Node, error) {
 	return s.node, nil
 }
 
-func (s *piSession) connected(bool) { s.setReady(true) }
-func (s *piSession) disconnected()  { s.setReady(false) }
+func (s *piSession) connected(reconnect bool) {
+	s.setReady(true)
+	if reconnect {
+		s.frameMu.Lock()
+		s.gap("extension reconnected")
+		s.frameMu.Unlock()
+	}
+}
+
+func (s *piSession) disconnected() { s.setReady(false) }
+
+// gap tells subscribers that Pi activity may have been missed. frameMu is held.
+func (s *piSession) gap(reason string) {
+	s.mu.Lock()
+	n := s.node
+	s.mu.Unlock()
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	n.stats.CollectionGaps++
+	gen := n.identity.Generation
+	n.mu.Unlock()
+	n.activity(gen, "gap", "Pi activity discontinuity: "+reason)
+}
 
 func (s *piSession) setReady(up bool) {
 	s.mu.Lock()
@@ -95,9 +122,12 @@ func (s *piSession) setReady(up bool) {
 	}
 }
 
-// frame implements bridgeHandler. Only bind and title are meaningful; every
-// other frame type is ignored until collection lands.
+// frame implements bridgeHandler: bind and title, and the relayed events the
+// shared collector normalizes (input, text, tool, turn). The extension relays
+// raw events of its own session; every publication decision is made here.
 func (s *piSession) frame(f bridgeFrame) {
+	s.frameMu.Lock()
+	defer s.frameMu.Unlock()
 	switch f.Type {
 	case "bind":
 		if err := s.bind(f); err != nil {
@@ -110,6 +140,16 @@ func (s *piSession) frame(f bridgeFrame) {
 		if n != nil && f.SessionID == n.local().SessionId {
 			n.setNativeTitle(n.local().Generation, true, f.Title)
 		}
+	case "input", "text", "tool", "turn":
+		s.mu.Lock()
+		n := s.node
+		s.mu.Unlock()
+		if n == nil || f.SessionID != n.local().SessionId {
+			return
+		}
+		s.collector.handle(n, n.local().Generation, f)
+	case "overflow":
+		s.gap(fmt.Sprintf("extension dropped %d events", f.Dropped))
 	default:
 		slog.Debug("pi_frame_ignored", "type", clip(f.Type, 32))
 	}
@@ -245,7 +285,7 @@ func RunPi(c config.Config, o Options) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
+	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, PiRoot: c.Pi.SessionsDir})
 	sess := newPiSession(ctx, runtime, nonce)
 	sess.history = history
 	sess.debug = c.Debug
