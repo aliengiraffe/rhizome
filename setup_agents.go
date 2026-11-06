@@ -612,8 +612,11 @@ func (in agentInstaller) install(a agent) error {
 		return fmt.Errorf("%s: skill: %w", a.Label, err)
 	}
 	fmt.Fprintf(in.out, "  skill: %s %s\n", status, filepath.Join(a.Skills, skillName))
-	if a.Name == "opencode" {
+	switch a.Name {
+	case "opencode":
 		return in.installOpenCode(a)
+	case "pi":
+		return in.installPi(a)
 	}
 	server, err := rhizomeServer(in.exe, a.Name, in.c, in.explicit, in.home, in.lookPath)
 	if err != nil {
@@ -659,6 +662,47 @@ func (in agentInstaller) installOpenCode(a agent) error {
 	return nil
 }
 
+// piLaunch is the content of the generated rhizome.json next to the Pi
+// extension: the absolute executable and, only for an explicit configuration
+// file, its path. It never carries a token.
+type piLaunch struct {
+	Command string `json:"command"`
+	Config  string `json:"config,omitempty"`
+}
+
+// installPi installs the Pi extension and its launch settings after the skill.
+// Pi has no hooks and no user-scope MCP entry for Rhizome: the extension
+// registers `rhizome mcp --agent pi` for every session with a fresh nonce, so
+// nothing in Pi's own configuration is edited.
+func (in agentInstaller) installPi(a agent) error {
+	launch := piLaunch{Command: in.exe}
+	if in.explicit {
+		if st, err := os.Stat(in.c.Path); err != nil || !st.Mode().IsRegular() {
+			return fmt.Errorf("%s: config: configuration %s does not exist; run setup with --network to create it first", a.Label, in.c.Path)
+		}
+		launch.Config = in.c.Path
+	}
+	settings, err := json.MarshalIndent(launch, "", "  ")
+	if err != nil {
+		return fmt.Errorf("%s: config: %w", a.Label, err)
+	}
+	for _, p := range a.plugins() {
+		content := p.Content
+		if p.Label == "config" {
+			content = append(settings, '\n')
+		}
+		status, err := installPlugin(p.Dest, content)
+		if err != nil {
+			return fmt.Errorf("%s: %s: %w", a.Label, p.Label, err)
+		}
+		fmt.Fprintf(in.out, "  %-10s %s %s\n", p.Label+":", status, p.Dest)
+	}
+	for _, note := range agentNotes(a.Name) {
+		fmt.Fprintf(in.out, "  next:  %s\n", note)
+	}
+	return nil
+}
+
 // describe renders "<status> <what><path> (backup: ...)".
 func (r fileResult) describe(what string) string {
 	s := r.Status + " " + what + r.Path
@@ -683,6 +727,10 @@ func agentNotes(agentName string) []string {
 	case "opencode":
 		return []string{
 			"add the rhizome MCP entry to your OpenCode config as described in docs/opencode.md (setup does not edit it), then restart OpenCode so the plugins load; sessions bind on their first prompt.",
+		}
+	case "pi":
+		return []string{
+			"restart Pi (or run /reload) so the extension loads; each session registers its own Rhizome server and binds at start. Pi 1.4.0 is the tested version, and nothing in Pi's own settings or mcp.json was edited.",
 		}
 	}
 	return nil

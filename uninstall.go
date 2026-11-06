@@ -136,7 +136,7 @@ func (u agentUninstaller) remove(a agent) []removal {
 			out = append(out, u.removeTree("skill", filepath.Join(a.Skills, name)))
 		}
 	}
-	if a.Name == "opencode" {
+	if a.Name == "opencode" || a.Name == "pi" {
 		if u.only[componentPlugins] {
 			for _, p := range a.plugins() {
 				out = append(out, u.removeFile(p.Label, p.Dest))
@@ -216,7 +216,7 @@ func (u agentUninstaller) removeFile(label, path string) removal {
 		r.Status, r.Err = removalError, err
 		return r
 	}
-	if label == "tui" {
+	if label == "tui" || label == "config" {
 		dir := filepath.Dir(path)
 		if st, err := os.Lstat(dir); err == nil && st.IsDir() {
 			_ = os.Remove(dir) // only succeeds when empty
@@ -270,6 +270,10 @@ func uninstallNotes(agentName string) []string {
 	case "codex":
 		return []string{
 			"start a fresh Codex session so the removed hooks and server are no longer offered; remove any Rhizome hooks or [mcp_servers.rhizome] you keep at project scope yourself.",
+		}
+	case "pi":
+		return []string{
+			"restart Pi so the removed extension unloads; its per-session MCP registrations end with the sessions. Pi's own settings and mcp.json were never edited.",
 		}
 	case "opencode":
 		return []string{
@@ -437,7 +441,7 @@ func (u uninstaller) present(a agent) bool {
 
 func uninstall(args []string) error {
 	opts := flag.NewFlagSet("uninstall", flag.ContinueOnError)
-	agentsFlag := opts.String("agents", "", "comma-separated agents to remove Rhizome from (claude, codex, opencode) or \"all\"; omit for an interactive picker")
+	agentsFlag := opts.String("agents", "", "comma-separated agents to remove Rhizome from (claude, codex, opencode, pi) or \"all\"; omit for an interactive picker")
 	svc := opts.Bool("service", false, "stop the background observer and remove its startup definition")
 	all := opts.Bool("all", false, "shorthand for --agents all --service")
 	only := opts.String("only", "", "comma-separated components to remove: "+strings.Join(allComponents, ", ")+" (default: every component)")
@@ -498,7 +502,7 @@ func uninstall(args []string) error {
 			return err
 		}
 	default:
-		return errors.New("stdin is not a terminal; pass --agents claude,codex,opencode, --agents all, --all or --service")
+		return errors.New("stdin is not a terminal; pass --agents claude,codex,opencode,pi, --agents all, --all or --service")
 	}
 	if !tty && !*yes && !*dryRun {
 		return errors.New("stdin is not a terminal; pass --yes to remove without confirmation, or --dry-run")

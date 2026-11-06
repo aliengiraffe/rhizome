@@ -30,11 +30,11 @@ const (
 // policy, the recent window it advertises to paired hosts, and the device's
 // display label. All of it is read once at service start.
 type GatewayHistory struct {
-	ClaudeRoot, CodexRoot, OpenCodeRoot string
-	Policy                              config.HistoryPolicy
-	RecentWindow                        time.Duration
-	Hostname                            string
-	Details                             bool // [sessions].share_prompts_and_tools for served history
+	ClaudeRoot, CodexRoot, OpenCodeRoot, PiRoot string
+	Policy                                      config.HistoryPolicy
+	RecentWindow                                time.Duration
+	Hostname                                    string
+	Details                                     bool // [sessions].share_prompts_and_tools for served history
 }
 
 // historyAccess narrows one request from an authenticated paired host. now is
@@ -188,6 +188,9 @@ func (g *gateway) historyHTTP(w http.ResponseWriter, r *http.Request) {
 	stop := context.AfterFunc(l.ctx, cancel)
 	defer stop()
 	access := &historyAccess{host: host, grant: l.grant, policy: g.historyPolicy, now: g.history.clock().UTC()}
+	if !l.pi {
+		access.policy.Pi = config.AgentHistory{} // peers that predate the Pi subprotocol never see Pi sessions
+	}
 	var value any
 	var e *historyError
 	if in.Tool == "search" {

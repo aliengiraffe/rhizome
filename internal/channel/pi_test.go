@@ -83,8 +83,8 @@ func TestPiBindAndList(t *testing.T) {
 	if id.Project != dir || id.DisplayName != filepath.Base(dir) {
 		t.Fatalf("project %q display %q", id.Project, id.DisplayName)
 	}
-	if gatewayExportable(id) {
-		t.Fatal("pi sessions must not be exported to paired hosts yet")
+	if !gatewayExportable(id) || gatewayPeerAccepts(id, true, false) || !gatewayPeerAccepts(id, true, true) {
+		t.Fatal("pi sessions are exportable, but only over the Pi subprotocol")
 	}
 	if _, ok := n.listSessions()["sessions"]; !ok {
 		t.Fatal("list_sessions has no sessions key")
@@ -179,5 +179,71 @@ func TestPiRunRequiresNonce(t *testing.T) {
 	t.Setenv(piNonceEnv, "")
 	if err := RunPi(config.Config{RuntimeDir: shortDir(t)}, Options{}); err == nil || !strings.Contains(err.Error(), piNonceEnv) {
 		t.Fatalf("RunPi without nonce: %v", err)
+	}
+}
+
+// piHistory returns the node's published activity as "kind:text" once it has n entries.
+func piHistory(t *testing.T, node *Node, n int) []string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		node.mu.Lock()
+		var got []string
+		for _, e := range node.history {
+			got = append(got, e.Kind+":"+e.Text)
+		}
+		node.mu.Unlock()
+		if len(got) >= n || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestPiCollection(t *testing.T) {
+	s, path := startPi(t)
+	p := dialPlugin(t, path, true)
+	const sid = "sess-1"
+	p.send(t, bridgeFrame{Type: "bind", Nonce: testPiNonce, SessionID: sid, Directory: shortDir(t)})
+	n := waitBound(t, s)
+	send := func(f bridgeFrame) {
+		f.SessionID = sid
+		p.send(t, f)
+	}
+	send(bridgeFrame{Type: "input", Kind: "user", Text: "fix the login"})
+	send(bridgeFrame{Type: "text", MessageID: "m1", Text: "looking"})
+	send(bridgeFrame{Type: "tool", CallID: "c1", Name: "read", Phase: "start", Text: `{"path":"a"}`})
+	send(bridgeFrame{Type: "tool", CallID: "c1", Name: "read", Phase: "completed", Text: "contents"})
+	// Rhizome's own tools never feed back into collection.
+	send(bridgeFrame{Type: "tool", CallID: "c2", Name: "mcp__rhizome__send", Phase: "start"})
+	// Another session's frames are ignored.
+	p.send(t, bridgeFrame{Type: "text", SessionID: "other", MessageID: "m9", Text: "stranger"})
+	send(bridgeFrame{Type: "turn"})
+	want := []string{"activity:looking", "tool:Tool started: read", "tool:Tool completed: read", "turn:Turn completed"}
+	if got := piHistory(t, n, len(want)); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	// A peer delivery marks the turn it causes as a reaction: nothing is published
+	// until the next human prompt.
+	send(bridgeFrame{Type: "input", Kind: "custom", Rhizome: true})
+	send(bridgeFrame{Type: "text", MessageID: "m2", Text: "reacting"})
+	send(bridgeFrame{Type: "turn"})
+	send(bridgeFrame{Type: "input", Kind: "user", Text: "thanks"})
+	send(bridgeFrame{Type: "text", MessageID: "m3", Text: "back to work"})
+	want = append(want, "activity:back to work")
+	if got := piHistory(t, n, len(want)); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("after peer turn got %v want %v", got, want)
+	}
+	// An extension overflow becomes a visible gap and is counted.
+	send(bridgeFrame{Type: "overflow", Dropped: 7})
+	got := piHistory(t, n, len(want)+1)
+	if last := got[len(got)-1]; !strings.HasPrefix(last, "gap:") || !strings.Contains(last, "dropped 7 events") {
+		t.Fatalf("overflow gap missing: %v", got)
+	}
+	n.mu.Lock()
+	gaps := n.stats.CollectionGaps
+	n.mu.Unlock()
+	if gaps != 1 {
+		t.Fatalf("collection gaps %d", gaps)
 	}
 }

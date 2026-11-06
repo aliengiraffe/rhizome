@@ -22,7 +22,7 @@ import (
 // version, reported in observer-health.json so a restart onto a new binary
 // can be confirmed; it is never used for routing.
 type ObserverOptions struct {
-	Runtime, ClaudeRoot, CodexRoot, OpenCodeRoot, Hostname, Version string
+	Runtime, ClaudeRoot, CodexRoot, OpenCodeRoot, PiRoot, Hostname, Version string
 	// Details is [sessions].share_prompts_and_tools: observer publishers and
 	// the gateway's history service publish prompts and tool inputs/outputs.
 	Details bool
@@ -50,7 +50,7 @@ type observer struct {
 // may run in a runtime scope. It never starts or modifies an agent.
 func RunObserver(ctx context.Context, opts ObserverOptions) error {
 	var err error
-	for _, root := range []*string{&opts.ClaudeRoot, &opts.CodexRoot, &opts.OpenCodeRoot} {
+	for _, root := range []*string{&opts.ClaudeRoot, &opts.CodexRoot, &opts.OpenCodeRoot, &opts.PiRoot} {
 		if *root != "" {
 			*root, err = filepath.Abs(*root)
 			if err != nil {
@@ -58,8 +58,12 @@ func RunObserver(ctx context.Context, opts ObserverOptions) error {
 			}
 		}
 	}
-	if opts.ClaudeRoot != "" && opts.CodexRoot != "" && (opts.ClaudeRoot == opts.CodexRoot || strings.HasPrefix(opts.ClaudeRoot, opts.CodexRoot+string(os.PathSeparator)) || strings.HasPrefix(opts.CodexRoot, opts.ClaudeRoot+string(os.PathSeparator))) {
-		return errors.New("agent log roots must not overlap")
+	for i, a := range []string{opts.ClaudeRoot, opts.CodexRoot, opts.PiRoot} {
+		for _, b := range []string{opts.ClaudeRoot, opts.CodexRoot, opts.PiRoot}[i+1:] {
+			if a != "" && b != "" && (a == b || strings.HasPrefix(a, b+string(os.PathSeparator)) || strings.HasPrefix(b, a+string(os.PathSeparator))) {
+				return errors.New("agent log roots must not overlap")
+			}
+		}
 	}
 	opts.Runtime, err = localstate.Runtime(opts.Runtime)
 	if err != nil {
@@ -79,7 +83,7 @@ func RunObserver(ctx context.Context, opts ObserverOptions) error {
 	}
 	defer w.Close()
 	o := &observer{ctx: ctx, opts: opts, watch: w, files: map[string]*observedFile{}, dirs: map[string]bool{}}
-	o.index = newHistoryIndex(historyScope{Runtime: opts.Runtime, ClaudeRoot: opts.ClaudeRoot, CodexRoot: opts.CodexRoot, OpenCodeRoot: opts.OpenCodeRoot}, func() bool { return o.retry })
+	o.index = newHistoryIndex(historyScope{Runtime: opts.Runtime, ClaudeRoot: opts.ClaudeRoot, CodexRoot: opts.CodexRoot, OpenCodeRoot: opts.OpenCodeRoot, PiRoot: opts.PiRoot}, func() bool { return o.retry })
 	defer func() {
 		for _, f := range o.files {
 			if f.n != nil {
@@ -132,7 +136,7 @@ func RunObserver(ctx context.Context, opts ObserverOptions) error {
 			if event.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename|fsnotify.Remove) != 0 {
 				// Inventory only the affected subtree, never the whole tree on a timer.
 				o.visit(event.Name, false)
-				for _, root := range []string{opts.ClaudeRoot, opts.CodexRoot} {
+				for _, root := range []string{opts.ClaudeRoot, opts.CodexRoot, opts.PiRoot} {
 					if root != "" && (event.Name == root || strings.HasPrefix(root, event.Name+string(os.PathSeparator))) {
 						o.addRoot(root, false)
 					}
@@ -202,7 +206,7 @@ func (o *observer) health() {
 	}
 }
 func (o *observer) inventory(initial bool) {
-	for _, root := range []string{o.opts.ClaudeRoot, o.opts.CodexRoot} {
+	for _, root := range []string{o.opts.ClaudeRoot, o.opts.CodexRoot, o.opts.PiRoot} {
 		if root != "" {
 			o.addRoot(root, initial)
 		}
@@ -289,7 +293,7 @@ func (o *observer) problem(reason string) {
 	o.retry = true
 }
 func (o *observer) agent(path string) string {
-	for _, item := range []struct{ root, agent string }{{o.opts.ClaudeRoot, "claude"}, {o.opts.CodexRoot, "codex"}} {
+	for _, item := range []struct{ root, agent string }{{o.opts.ClaudeRoot, "claude"}, {o.opts.CodexRoot, "codex"}, {o.opts.PiRoot, "pi"}} {
 		if item.root != "" && (path == item.root || strings.HasPrefix(path, item.root+string(os.PathSeparator))) {
 			return item.agent
 		}
@@ -328,6 +332,11 @@ func (o *observer) visit(path string, initial bool) {
 		}
 		if o.index != nil {
 			o.index.enqueue(path)
+		}
+		if o.agent(path) == "pi" {
+			// Pi sessions are bound directly by the extension; their logs feed the
+			// history catalog only, never passive collection.
+			return nil
 		}
 		if f := o.files[path]; f != nil {
 			if !initial {
