@@ -565,9 +565,6 @@ func (h *historyService) readWith(ctx context.Context, live func() *liveView, ac
 
 // validHistoryAgent reports whether agent has a history source.
 func validHistoryAgent(agent string) bool {
-	if agent == "pi" {
-		return true // local history only: peer-history policy has no Pi key yet
-	}
 	for _, a := range config.HistoryAgents {
 		if a == agent {
 			return true

@@ -44,8 +44,8 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `update.notify_sessions` | — | — | `true`: MCP processes tell their session to restart once the observer runs a newer release ([Automatic updates](service.md#automatic-updates)) |
 | `gateway.history.enabled` | — | — | `false`: paired hosts cannot search or read history |
 | `gateway.history.lookback` | — | — | `30d`; positive whole days or `all` |
-| `claude.peer_history.enabled`, `codex.peer_history.enabled` | — | — | inherit `gateway.history.enabled`; can only narrow it |
-| `claude.peer_history.lookback`, `codex.peer_history.lookback` | — | — | inherit `gateway.history.lookback` |
+| `claude.peer_history.enabled`, `codex.peer_history.enabled`, `opencode.peer_history.enabled`, `pi.peer_history.enabled` | — | — | inherit `gateway.history.enabled`; can only narrow it |
+| `claude.peer_history.lookback`, `codex.peer_history.lookback`, `opencode.peer_history.lookback`, `pi.peer_history.lookback` | — | — | inherit `gateway.history.lookback` |
 
 ```toml
 runtime_dir = "~/.rhizome/run"

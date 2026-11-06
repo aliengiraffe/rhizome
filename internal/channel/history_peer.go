@@ -188,6 +188,9 @@ func (g *gateway) historyHTTP(w http.ResponseWriter, r *http.Request) {
 	stop := context.AfterFunc(l.ctx, cancel)
 	defer stop()
 	access := &historyAccess{host: host, grant: l.grant, policy: g.historyPolicy, now: g.history.clock().UTC()}
+	if !l.pi {
+		access.policy.Pi = config.AgentHistory{} // peers that predate the Pi subprotocol never see Pi sessions
+	}
 	var value any
 	var e *historyError
 	if in.Tool == "search" {

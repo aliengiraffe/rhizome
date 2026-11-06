@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Isolated services with distinct tokens: pairing, routing, reconnect and revocation."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import subprocess
 import tempfile
 from datetime import datetime, timedelta, timezone
 
-from smoke_stdio import Client, ROOT, until
+from smoke_stdio import Client, FakePlugin, ROOT, until
 
 
 def stamp(age):
@@ -16,13 +17,19 @@ def stamp(age):
 
 
 def history_logs(directory):
-    """Host A's pre-existing logs: one Claude session spanning its 15-day window, one Codex session."""
+    """Host A's pre-existing logs: one Claude session spanning its 15-day window, one Codex session, one Pi session."""
     claude = directory / 'claude' / '-work-hist'
     claude.mkdir(parents=True)
     with (claude / 'hist-a.jsonl').open('w') as f:
         for uid, age, text in (('h1', timedelta(days=40), 'history too old to share'), ('h2', timedelta(hours=1), 'history shared with peers')):
             f.write(json.dumps({'type': 'assistant', 'uuid': uid, 'sessionId': 'hist-a', 'timestamp': stamp(age), 'cwd': '/work/hist',
                                 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': text}]}}) + '\n')
+    pi = directory / 'pi' / '--work-pihist--'
+    pi.mkdir(parents=True)
+    with (pi / '2026-11-01T10-00-00-000Z_pi-hist.jsonl').open('w') as f:
+        f.write(json.dumps({'type': 'session', 'version': 3, 'id': 'pi-hist', 'timestamp': stamp(timedelta(hours=1)), 'cwd': '/work/pihist'}) + '\n')
+        f.write(json.dumps({'type': 'message', 'id': 'p1', 'parentId': None, 'timestamp': stamp(timedelta(minutes=50)),
+                            'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'pi history shared'}], 'stopReason': 'stop'}}) + '\n')
     codex = directory / 'codex' / '2026'
     codex.mkdir(parents=True)
     with (codex / 'rollout-hist.jsonl').open('w') as f:
@@ -74,10 +81,10 @@ def main():
                 run = directory / 'run'
                 # Every root is isolated: a default OpenCode root would serve this machine's sessions.
                 config.write_text('network.mode = "local"\nruntime_dir = %s\nclaude.projects_dir = %s\ncodex.sessions_dir = %s\n'
-                                  'opencode.data_dir = %s\n'
+                                  'opencode.data_dir = %s\npi.sessions_dir = %s\n'
                                   'gateway.mode = "lan"\ngateway.listen = "127.0.0.1:%d"\n' %
                                   (json.dumps(str(run)), json.dumps(str(directory / 'claude')),
-                                   json.dumps(str(directory / 'codex')), json.dumps(str(directory / 'opencode')), port()))
+                                   json.dumps(str(directory / 'codex')), json.dumps(str(directory / 'opencode')), json.dumps(str(directory / 'pi')), port()))
                 if name == 'a':
                     # Only host A opts in: Claude history for 15 days, Codex history withheld.
                     history_logs(directory)
@@ -101,11 +108,13 @@ def main():
             host_a = paired['host_id']
             # A's sessions that ended an hour ago are advertised to B as recent metadata
             # stamped with A's authenticated host; they are never a delivery destination.
-            until(lambda: row(cb, 'hist-a') is not None and row(cb, 'hist-codex') is not None)
+            until(lambda: row(cb, 'hist-a') is not None and row(cb, 'hist-codex') is not None and row(cb, 'pi-hist') is not None)
             recent = row(cb, 'hist-a')
             assert recent['status'] == 'recent' and recent['delivery_capable'] is False and recent['host_id'] == host_a, recent
             assert recent['identity']['gateway_host'] == host_a and 'node_id' not in recent['identity'], recent
             assert row(cb, 'hist-codex')['identity']['agent_type'] == 'codex'
+            pi_recent = row(cb, 'pi-hist')  # Pi rows travel only because both builds negotiated the Pi subprotocol
+            assert pi_recent['status'] == 'recent' and pi_recent['delivery_capable'] is False and pi_recent['host_id'] == host_a and pi_recent['identity']['agent_type'] == 'pi', pi_recent
             local = row(ca, 'hist-a')
             assert local['status'] == 'recent' and 'host_id' not in local, local
             refused = cb.call('tools/call', {'name': 'send', 'arguments': {'session_id': 'hist-a', 'text': 'nobody home'}})
@@ -133,17 +142,42 @@ def main():
             # Opt-in history: B reads A's catalog within A's policy; A cannot read B's.
             until(lambda: 'hist-a' in cb.call('tools/call', {'name': 'search_sessions', 'arguments': {'host_id': host_a}})['content'][0]['text'])
             found = cb.tool('search_sessions', {'host_id': host_a})
-            assert [r['session_id'] for r in found['sessions']] == ['hist-a'], found
+            assert sorted(r['session_id'] for r in found['sessions']) == ['hist-a', 'pi-hist'], found
             assert found['sessions'][0]['host_id'] == host_a and found['sessions'][0]['live_status'] == 'not_reported'
             assert found['origin']['host_id'] == host_a and not found['policy']['agents']['codex']['enabled']
             page = cb.tool('read_session_history', {'host_id': host_a, 'agent_type': 'claude', 'session_id': 'hist-a'})
             assert [e['text'] for e in page['events']] == ['history shared with peers'], page
             assert {g['code'] for g in page['coverage']['gaps']} == {'outside_lookback'}
             assert cb.error('read_session_history', {'host_id': host_a, 'agent_type': 'codex', 'session_id': 'hist-codex'})['code'] == 'POLICY_DENIED'
+            pi_page = cb.tool('read_session_history', {'host_id': host_a, 'agent_type': 'pi', 'session_id': 'pi-hist'})
+            assert [e['text'] for e in pi_page['events'] if e.get('text')] == ['pi history shared'], pi_page
             local = cb.call('tools/call', {'name': 'search_sessions', 'arguments': {}})
             assert 'hist-a' not in local['content'][0]['text'], local  # never replicated into B's catalog
             assert ca.error('search_sessions', {'host_id': json.loads(command(a, 'peers', 'list'))[0]['host_id']})['code'] == 'REMOTE_HISTORY_DISABLED'
             assert 'history shared' not in json.dumps(cb.events) and 'history shared' not in json.dumps(ca.events)
+            # A live Pi session on A: the extension bridge is played by a fake, the Rhizome process is real.
+            nonce = os.urandom(16).hex()
+            pi_proc = Client(base / 'a', run=a['run'], agent='pi', cwd=base / 'a',
+                             env={**{k: '' for k in os.environ if k.startswith('RHIZOME_')}, 'RHIZOME_CONFIG': str(a['config']),
+                                  'RHIZOME_RUNTIME_DIR': str(a['run']), 'RHIZOME_PI_NONCE': nonce})
+            plugin = FakePlugin(a['run'] / ('pi-%d-%s.sock' % (os.getpid(), hashlib.sha256(nonce.encode()).hexdigest()[:12])))
+            plugin.send({'type': 'bind', 'nonce': nonce, 'sessionID': 'pi-live', 'directory': str(base / 'a'), 'title': 'Live Pi'})
+            until(lambda: (row(cb, 'pi-live') or {}).get('delivery_capable') is True)
+            live = row(cb, 'pi-live')
+            assert live['status'] == 'live' and live['identity']['agent_type'] == 'pi' and live['identity']['gateway_host'] == host_a, live
+            cb.tool('send', {'session_id': 'pi-live', 'text': 'hello live pi'})
+            frame = plugin.expect('deliver')
+            assert frame['sessionID'] == 'pi-live' and 'hello live pi' in frame['text'] and '<rhizome-peer-event>' in frame['text'], frame
+            plugin.send({'type': 'ack', 'id': frame['id']})
+            cb.tool('subscribe', {'session_id': 'pi-live'})
+            until(lambda: cb.tool('list_sessions')['subscriptions']['pi-live']['state'] == 'following')
+            plugin.send({'type': 'input', 'sessionID': 'pi-live', 'kind': 'user'})
+            plugin.send({'type': 'text', 'sessionID': 'pi-live', 'messageID': 'm1', 'text': 'pi activity through paired hosts'})
+            cb.event('pi activity through paired hosts')
+            cb.tool('unsubscribe', {'session_id': 'pi-live'})
+            plugin.close()
+            pi_proc.close()
+            until(lambda: 'pi-live' not in sessions(cb))
             ca.tool('send', {'session_id': 'gateway-b', 'text': 'gateway forward'})
             cb.event('gateway forward')
             cb.tool('send', {'session_id': 'gateway-a', 'text': 'gateway reverse'})
@@ -180,7 +214,7 @@ def main():
             until(lambda: 'gateway-a' not in sessions(cb) and 'hist-a' not in sessions(cb))
             assert cb.call('tools/call', {'name': 'send', 'arguments': {'session_id': 'gateway-a', 'text': 'must fail'}}).get('isError')
             assert [(h['run'] / 'token').read_bytes() for h in hosts] == tokens
-            print('gateway smoke: PASS (pairing, distinct tokens, bidirectional routing, file transfers, opt-in history, recent-only advertisements, activity, restart, non-transitivity, revocation)')
+            print('gateway smoke: PASS (pairing, distinct tokens, bidirectional routing, file transfers, opt-in history, recent-only advertisements, Pi over its subprotocol, activity, restart, non-transitivity, revocation)')
         finally:
             for client in clients:
                 client.close()
