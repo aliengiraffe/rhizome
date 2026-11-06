@@ -43,6 +43,10 @@ type Config struct {
 		DataDir     string      `toml:"data_dir"`     // Directory holding opencode.db; default $XDG_DATA_HOME/opencode or ~/.local/share/opencode.
 		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for OpenCode-sourced history.
 	} `toml:"opencode"`
+	Pi struct {
+		SessionsDir string      `toml:"sessions_dir"` // Session log root the observer indexes; default $PI_CODING_AGENT_DIR/sessions or ~/.pi/agent/sessions.
+		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for Pi-sourced history.
+	} `toml:"pi"`
 	Gateway      Gateway           `toml:"gateway"`
 	Network      Network           `toml:"network"`
 	Sessions     Sessions          `toml:"sessions"`
@@ -123,6 +127,7 @@ func (c *Config) settings() []setting {
 		{"codex.home", "CODEX_HOME", "", &c.Codex.Home, true},
 		{"codex.sessions_dir", "", "codex-root", &c.Codex.SessionsDir, true},
 		{"opencode.data_dir", "", "opencode-root", &c.OpenCode.DataDir, true},
+		{"pi.sessions_dir", "", "pi-root", &c.Pi.SessionsDir, true},
 	}
 }
 
@@ -237,7 +242,7 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	}
 	// TOML keys are case-sensitive even though the decoder can match Go fields
 	// case-insensitively. Reject alternate spellings instead of losing their source.
-	known := map[string]bool{"debug": true, "claude": true, "codex": true, "opencode": true, "network": true, "gateway": true, "sessions": true, "update": true}
+	known := map[string]bool{"debug": true, "claude": true, "codex": true, "opencode": true, "pi": true, "network": true, "gateway": true, "sessions": true, "update": true}
 	for _, k := range networkKeys {
 		known["network."+k] = true
 	}
@@ -247,7 +252,7 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	for _, k := range updateKeys {
 		known["update."+k] = true
 	}
-	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history"} {
+	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history", "pi.peer_history"} {
 		known[table] = true
 		for _, k := range peerHistoryKeys {
 			known[table+"."+k] = true
@@ -275,14 +280,14 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	if err := raw.Gateway.Validate(); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
-	c.PeerHistory, err = historyPolicy(raw.Gateway.History, map[string]PeerHistory{"claude": raw.Claude.PeerHistory, "codex": raw.Codex.PeerHistory, "opencode": raw.OpenCode.PeerHistory}, func(table, key string) bool {
+	c.PeerHistory, err = historyPolicy(raw.Gateway.History, map[string]PeerHistory{"claude": raw.Claude.PeerHistory, "codex": raw.Codex.PeerHistory, "opencode": raw.OpenCode.PeerHistory, "pi": raw.Pi.PeerHistory}, func(table, key string) bool {
 		return md.IsDefined(append(strings.Split(table, "."), key)...)
 	})
 	if err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
-	c.Gateway.History, c.Claude.PeerHistory, c.Codex.PeerHistory, c.OpenCode.PeerHistory = raw.Gateway.History, raw.Claude.PeerHistory, raw.Codex.PeerHistory, raw.OpenCode.PeerHistory
-	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history"} {
+	c.Gateway.History, c.Claude.PeerHistory, c.Codex.PeerHistory, c.OpenCode.PeerHistory, c.Pi.PeerHistory = raw.Gateway.History, raw.Claude.PeerHistory, raw.Codex.PeerHistory, raw.OpenCode.PeerHistory, raw.Pi.PeerHistory
+	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history", "pi.peer_history"} {
 		for _, k := range peerHistoryKeys {
 			source := "default"
 			if md.IsDefined(append(strings.Split(table, "."), k)...) {
@@ -345,6 +350,11 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 		dataHome = filepath.Join(home, ".local", "share")
 	}
 	c.OpenCode.DataDir = filepath.Join(dataHome, "opencode")
+	piDir := getenv("PI_CODING_AGENT_DIR")
+	if !filepath.IsAbs(piDir) {
+		piDir = filepath.Join(home, ".pi", "agent")
+	}
+	c.Pi.SessionsDir = filepath.Join(piDir, "sessions")
 	rawSettings := raw.settings()
 	for i, s := range c.settings() {
 		source := "default"
@@ -365,8 +375,8 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 				*s.value = filepath.Join(c.Claude.ConfigDir, "projects")
 			case "codex.sessions_dir":
 				*s.value = filepath.Join(c.Codex.Home, "sessions")
-			case "opencode.data_dir":
-				// The default was computed above from XDG_DATA_HOME.
+			case "opencode.data_dir", "pi.sessions_dir":
+				// The defaults were computed above from XDG_DATA_HOME and PI_CODING_AGENT_DIR.
 			}
 		}
 		if s.key == "hostname" {
@@ -398,6 +408,9 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	}
 	if c.Claude.ProjectsDir == c.Codex.SessionsDir {
 		return c, fmt.Errorf("config %s: claude.projects_dir and codex.sessions_dir must differ", path)
+	}
+	if c.Pi.SessionsDir == c.Claude.ProjectsDir || c.Pi.SessionsDir == c.Codex.SessionsDir {
+		return c, fmt.Errorf("config %s: pi.sessions_dir must differ from the Claude and Codex log roots", path)
 	}
 	return c, nil
 }

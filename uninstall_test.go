@@ -284,7 +284,7 @@ func TestUninstallAgentsFullAndRepeat(t *testing.T) {
 	if err := u.run(false); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(out.String(), "would remove") != 9 || strings.Contains(out.String(), "backup") || strings.Contains(out.String(), "next:") {
+	if strings.Count(out.String(), "would remove") != 12 || strings.Contains(out.String(), "backup") || strings.Contains(out.String(), "next:") {
 		t.Fatalf("plan:\n%s", out.String())
 	}
 	if !reflect.DeepEqual(snapshot(t, claudeJSON, claudeSettings, codexTOML, codexHooks), before) || len(backups(t, home)) != 0 {
@@ -303,7 +303,9 @@ func TestUninstallAgentsFullAndRepeat(t *testing.T) {
 		"hooks: removed rhizome hooks in " + codexHooks,
 		"plugin: removed " + filepath.Join(openCodeDir, "plugins", "rhizome.js"),
 		"tui:   removed " + filepath.Join(openCodeDir, "plugins", "rhizome-tui", "tui.js"),
-		"next:  restart Claude Code", "project-scope", "fresh Codex session", "hand-added rhizome MCP entry", "~/.rhizome (configuration, identity, pairings, history) is kept",
+		"extension: removed " + filepath.Join(home, ".pi", "agent", "extensions", "rhizome", "index.js"),
+		"config: removed " + filepath.Join(home, ".pi", "agent", "extensions", "rhizome", piConfigName),
+		"next:  restart Claude Code", "restart Pi so the removed extension", "project-scope", "fresh Codex session", "hand-added rhizome MCP entry", "~/.rhizome (configuration, identity, pairings, history) is kept",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output lacks %q:\n%s", want, out.String())
@@ -337,6 +339,9 @@ func TestUninstallAgentsFullAndRepeat(t *testing.T) {
 			t.Fatalf("%s kept: %v", p, err)
 		}
 	}
+	if _, err := os.Lstat(filepath.Join(home, ".pi", "agent", "extensions", "rhizome")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pi extension directory kept: %v", err)
+	}
 	if st, _ := os.Stat(claudeJSON); st.Mode().Perm() != 0o640 {
 		t.Fatalf("mode not preserved: %v", st.Mode())
 	}
@@ -353,7 +358,7 @@ func TestUninstallAgentsFullAndRepeat(t *testing.T) {
 	if err := u.run(true); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(out.String(), "absent") != 5 || strings.Count(out.String(), "unchanged") != 4 || strings.Contains(out.String(), "backup") || strings.Contains(out.String(), "next:") {
+	if strings.Count(out.String(), "absent") != 8 || strings.Count(out.String(), "unchanged") != 4 || strings.Contains(out.String(), "backup") || strings.Contains(out.String(), "next:") {
 		t.Fatalf("repeat:\n%s", out.String())
 	}
 	if again := backups(t, home); !reflect.DeepEqual(again, got) {
@@ -367,7 +372,7 @@ func TestUninstallAgentsFullAndRepeat(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if strings.Count(out.String(), "skill: installed") != 3 || !strings.Contains(out.String(), "plugin: installed") || !strings.Contains(out.String(), "updated rhizome server in "+claudeJSON) {
+	if strings.Count(out.String(), "skill: installed") != 4 || !strings.Contains(out.String(), "plugin: installed") || !strings.Contains(out.String(), "updated rhizome server in "+claudeJSON) {
 		t.Fatalf("reinstall:\n%s", out.String())
 	}
 }
@@ -568,7 +573,7 @@ func TestUninstallCLI(t *testing.T) {
 	rhizomeConfig := filepath.Join(home, ".rhizome", "config.toml")
 	skills := func() []string {
 		var present []string
-		for _, dir := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".codex"), filepath.Join(home, ".config", "opencode")} {
+		for _, dir := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".codex"), filepath.Join(home, ".config", "opencode"), filepath.Join(home, ".pi", "agent")} {
 			if _, err := os.Stat(filepath.Join(dir, "skills", skillName, "SKILL.md")); err == nil {
 				present = append(present, filepath.Base(dir))
 			}
@@ -591,7 +596,7 @@ func TestUninstallCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(skills()) != 3 || !hasClaudeServer() || !hasCodexServer() {
+	if len(skills()) != 4 || !hasClaudeServer() || !hasCodexServer() {
 		t.Fatal("setup did not install everything")
 	}
 	// Without a terminal, a selection and --yes are required before anything happens.
@@ -605,22 +610,22 @@ func TestUninstallCLI(t *testing.T) {
 		t.Fatalf("conflicting selection:\n%s", out)
 	}
 	out := run(true, "uninstall", "--all", "--dry-run")
-	if strings.Count(out, "would remove") != 9 || !strings.Contains(out, "service: not installed") || strings.Contains(out, "backup") {
+	if strings.Count(out, "would remove") != 12 || !strings.Contains(out, "service: not installed") || strings.Contains(out, "backup") {
 		t.Fatalf("dry run:\n%s", out)
 	}
-	if len(skills()) != 3 || !hasClaudeServer() || !hasCodexServer() || len(backups(t, home)) != 0 {
+	if len(skills()) != 4 || !hasClaudeServer() || !hasCodexServer() || len(backups(t, home)) != 0 {
 		t.Fatal("dry run changed files")
 	}
 	// Service only: nothing installed in this home, agents untouched.
 	if out := run(true, "uninstall", "--service", "--yes"); !strings.Contains(out, "service: not installed") || strings.Contains(out, "Claude Code:") {
 		t.Fatalf("service only:\n%s", out)
 	}
-	if len(skills()) != 3 || !hasClaudeServer() {
+	if len(skills()) != 4 || !hasClaudeServer() {
 		t.Fatal("--service touched agents")
 	}
 	// One agent only.
 	out = run(true, "uninstall", "--agents", "codex", "--yes")
-	if strings.Contains(out, "Claude Code:") || !reflect.DeepEqual(skills(), []string{".claude", "opencode"}) || !hasClaudeServer() || hasCodexServer() {
+	if strings.Contains(out, "Claude Code:") || !reflect.DeepEqual(skills(), []string{".claude", "opencode", "agent"}) || !hasClaudeServer() || hasCodexServer() {
 		t.Fatalf("codex only:\n%s", out)
 	}
 	// Skills only.
@@ -652,7 +657,7 @@ func TestUninstallCLI(t *testing.T) {
 	if count == 0 {
 		t.Fatal("no backups written")
 	}
-	if out := run(true, "uninstall", "--list"); strings.Contains(out, "installed") || strings.Count(out, "absent") != 9 {
+	if out := run(true, "uninstall", "--list"); strings.Contains(out, "installed") || strings.Count(out, "absent") != 12 {
 		t.Fatalf("list:\n%s", out)
 	}
 	// Idempotent: no new backups.
@@ -664,7 +669,7 @@ func TestUninstallCLI(t *testing.T) {
 	}
 	// Setup reinstalls cleanly.
 	out = run(true, "setup", "--agents", "all")
-	if strings.Count(out, "skill: installed") != 3 || !hasClaudeServer() || !hasCodexServer() {
+	if strings.Count(out, "skill: installed") != 4 || !hasClaudeServer() || !hasCodexServer() {
 		t.Fatalf("reinstall:\n%s", out)
 	}
 }

@@ -36,6 +36,6 @@ tasks:
       - 'if command -v node >/dev/null 2>&1; then node --test internal/release/npm/rhizome.test.cjs; else echo "node not found; skipping launcher tests"; fi'
 
   test-plugin:
-    desc: Run OpenCode plugin tests (Node 20+; skipped when node is absent)
+    desc: Run OpenCode plugin and Pi extension tests (Node 20+; skipped when node is absent)
     cmds:
-      - 'if command -v node >/dev/null 2>&1; then node --test plugins/opencode/*.test.mjs; else echo "node not found; skipping plugin tests"; fi'
+      - 'if command -v node >/dev/null 2>&1; then node --test plugins/opencode/*.test.mjs plugins/pi/*.test.mjs; else echo "node not found; skipping plugin tests"; fi'

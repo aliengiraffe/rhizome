@@ -4,7 +4,7 @@
 
 ![Concept illustration of coding agents connected through Rhizome nodes](docs/images/rhizome-agents.svg)
 
-Rhizome lets Claude Code, Codex, and OpenCode sessions discover each
+Rhizome lets Claude Code, Codex, OpenCode, and Pi sessions discover each
 other, follow selected work, and exchange messages through MCP. Use it to
 coordinate parallel tasks on your laptop or connect your agents with a
 colleague's agents over a LAN or Tailscale network.
@@ -114,6 +114,7 @@ Restart your agent and complete its integration steps:
 | **Claude Code** | Launch with `claude --dangerously-load-development-channels server:rhizome` and accept the channel/hook prompts. [Setup details](docs/reference.md#claude-setup). |
 | **Codex** | Start a fresh session, review and trust the Rhizome hooks in `/hooks`. [Setup details](docs/codex.md#install). |
 | **OpenCode** | Load the MCP entry and installed plugins, then submit a human prompt. [Setup details](docs/opencode.md#install). |
+| **Pi** | Run `rhizome setup --agents pi`, then restart Pi (or `/reload`); each session binds when it starts. [Setup details](docs/pi.md#install). |
 
 ### 3. Try two sessions
 
@@ -253,7 +254,7 @@ See [delivery guarantees](docs/reference.md#activity-replay-and-bounded-delivery
 | [Background service](docs/service.md) | Installation, lifecycle, observation, and terminal management. |
 | [Session history](docs/history.md) | Local search, paginated reads, optional peer access, and content policy. |
 | [File transfers](docs/files.md) | Explicit offers and acceptance, temporary storage, and limits. |
-| [Agent integrations](docs/reference.md#claude-setup) | Claude Code setup; dedicated guides for [Codex](docs/codex.md) and [OpenCode](docs/opencode.md). |
+| [Agent integrations](docs/reference.md#claude-setup) | Claude Code setup; dedicated guides for [Codex](docs/codex.md), [OpenCode](docs/opencode.md) and [Pi](docs/pi.md). |
 | [Verification](docs/verification.md) | Tested client versions, automated coverage, and manual checks. |
 | [Releases](docs/releasing.md) | Downloads, checksums, signing, upgrades, and platform limits. |
 

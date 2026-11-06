@@ -184,6 +184,7 @@ const (
 	agentClaude agentKind = iota
 	agentCodex
 	agentOpenCode
+	agentPi
 )
 
 // makeServer registers the shared tool set. history is optional: without it
@@ -211,8 +212,8 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 			}
 			return result(map[string]any{}, n.observeCodex(ctx, in.hook()))
 		})
-	case agentOpenCode:
-		// Binding comes only from the trusted plugin bridge; the model cannot bind.
+	case agentOpenCode, agentPi:
+		// Binding comes only from the trusted plugin/extension bridge; the model cannot bind.
 	}
 
 	addFileTools(s, resolve)
@@ -280,7 +281,7 @@ func Run(c config.Config, o Options) error {
 	defer cancel()
 	n := newNode(ctx)
 	defer n.close()
-	n.archive = newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir})
+	n.archive = newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, PiRoot: c.Pi.SessionsDir})
 	n.archive.details = c.Sessions.SharePromptsAndTools
 	n.details = c.Sessions.SharePromptsAndTools
 	n.recentWindow = c.RecentWindow
