@@ -87,7 +87,7 @@ that session gets one Rhizome notice asking you to restart it; turn this off
 with `[update] notify_sessions = false`. See
 [automatic updates](docs/service.md#automatic-updates). For older npm builds
 without the updater, run `npm i -g @aliengiraffe/rhizome@latest`, then
-`rhizome service stop` and `rhizome service start` if the service is installed,
+`rhizome service restart` if the service is installed,
 and restart your agents.
 
 ### 2. Connect your agents
@@ -151,12 +151,11 @@ For Tailscale, run on each machine:
 ```sh
 rhizome setup --network local --gateway-mode tailscale --replace-config
 rhizome service install
-rhizome service stop
-rhizome service start
+rhizome service restart
 ```
 
 `setup` saves the configuration and backs up an existing file. Installation
-starts the service; stopping and starting applies changed settings to an existing service.
+starts the service; `rhizome service restart` applies changed settings to an existing service.
 Restart your agents' MCP processes too. For a LAN, use `--gateway-mode lan`;
 see the [pairing guide](docs/gateway.md#configure-and-run) for explicit addresses
 and connectivity requirements. Tailscale must already be running on both hosts.

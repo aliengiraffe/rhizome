@@ -401,7 +401,7 @@ enabled = false
 - `rhizome config` prints the effective, inherited value for every agent. The
   policy applies uniformly to all paired hosts; there are no per-peer ACLs.
 - The service reads the policy when it starts. **Restart the service** (`rhizome
-  service stop` then `start`, or restart `service run`) after changing it. The
+  service restart`, or restart `service run`) after changing it. The
   restart invalidates every outstanding remote cursor, so narrowing the policy
   cannot be bypassed by a cursor issued earlier. Changing the policy never
   deletes or rewrites local history; it is an access policy, not retention.

@@ -15,6 +15,5 @@ installer places only `/usr/local/bin/rhizome`; it never changes `~/.rhizome`
 configuration, tokens or state and never installs or restarts the observer.
 A running observer with `[update] enabled = true` (the default) installs
 later releases itself and restarts; otherwise run `rhizome update --apply`,
-or replace the binary and run `rhizome service stop` and
-`rhizome service start`. See `docs/releasing.md` for verification and
+or replace the binary and run `rhizome service restart`. See `docs/releasing.md` for verification and
 platform notes.

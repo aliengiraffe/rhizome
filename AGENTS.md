@@ -133,7 +133,11 @@ definition from a running observer on failure, and is never run by `--list` or
 by `--network` without the interactive questions. Use `config.Preview`
 for resolver-backed validation without disk writes. Filter network fields by the
 selected mode. Bare terminal `service` manages lifecycle (confirm stop/uninstall),
-`service status --tui` is read-only, and `peers list --tui` browses paired hosts
+`service restart` is explicit and noninteractive: require an installed definition
+and matching runtime, stop and confirm lock release before start, then confirm
+the replacement lock with bounded cancellable waits. Preserve the pinned definition;
+never restart MCP or invoke updates. `service status --tui` is read-only, and
+`peers list --tui` browses paired hosts
 with exact host IDs. Plain peers stays JSON; explicit service commands, help/list,
 redirected streams, `TERM=dumb`, and `service run` never auto-start a UI.
 Keep models (`tui*.go`) separate from operations; bound/cancel requests, join

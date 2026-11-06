@@ -182,8 +182,8 @@ manifest (`rhizome_<version>_checksums.txt`). Verify downloads with
 `shasum -a 256 -c rhizome_<version>_checksums.txt`, then check the build with
 `rhizome --version`. The installer never touches `~/.rhizome` and never installs
 or restarts the observer. Run `rhizome setup` and `rhizome service install`
-yourself, and after an upgrade run `rhizome service stop` and then
-`rhizome service start`. Tag conventions, prereleases, verification, upgrades,
+yourself, and after an upgrade run `rhizome service restart`. Tag conventions,
+prereleases, verification, upgrades,
 package removal and platform limits are in [docs/releasing.md](releasing.md);
 removing Rhizome from the agents and the service is
 [`rhizome uninstall`](#uninstalling).
