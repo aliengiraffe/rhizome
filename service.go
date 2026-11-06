@@ -14,7 +14,7 @@ import (
 
 func serviceCommand(args []string) error {
 	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Println("usage: rhizome service [install|start|stop|status|uninstall|run] [flags]\nBare service opens terminal management; status --tui is read-only.")
+		fmt.Println("usage: rhizome service [install|start|stop|restart|status|uninstall|run] [flags]\nBare service opens terminal management; status --tui is read-only.")
 		return nil
 	}
 	if len(args) == 0 && usableTerminal() {
@@ -25,7 +25,7 @@ func serviceCommand(args []string) error {
 		return runPanel(servicePanel(resolved, false))
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("usage: rhizome service install|start|stop|status|uninstall|run [flags]")
+		return fmt.Errorf("usage: rhizome service install|start|stop|restart|status|uninstall|run [flags]")
 	}
 	fs := flag.NewFlagSet("service "+args[0], flag.ContinueOnError)
 	if args[0] == "install" || args[0] == "run" {

@@ -433,8 +433,8 @@ of the `aliengiraffe` npm organization (2FA enforced). CI never does it.
   package yourself. Releases before the updater existed must be upgraded by
   hand once.
 - **Upgrading a running observer by hand**: the service keeps running the old
-  binary until restarted. Run `rhizome service stop` and then
-  `rhizome service start`, and restart MCP clients so they launch the new
+  binary until restarted. Run `rhizome service restart`, and restart MCP clients
+  so they launch the new
   binary. The service definition records the binary's absolute path. If the
   path changes (for example when moving from a source build to the package),
   run `rhizome service uninstall` with the old binary, then

@@ -46,6 +46,8 @@ type command struct {
 type manager struct {
 	platform, home, configPath, definition, binary string
 	run                                            func(context.Context, string, ...string) error
+	probe                                          func(context.Context, string, ...string) error
+	waitTimeout                                    time.Duration
 }
 
 func newManager(configPath string) (*manager, error) {
@@ -230,9 +232,15 @@ func Manage(ctx context.Context, action string, c Config) error {
 
 func (m *manager) manage(ctx context.Context, action string, c Config) error {
 	switch action {
-	case "install", "start", "stop", "status", "uninstall":
+	case "install", "start", "stop", "restart", "status", "uninstall":
 	default:
 		return fmt.Errorf("unknown service action %q", action)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if action == "restart" {
+		return m.restart(ctx, c)
 	}
 	if action == "install" {
 		if err := validate(&c); err != nil {
@@ -293,16 +301,22 @@ func (m *manager) manage(ctx context.Context, action string, c Config) error {
 	}
 	if m.platform == "darwin" && (action == "start" || action == "install") {
 		target := fmt.Sprintf("gui/%d/com.rhizome.observer", os.Getuid())
-		probe := exec.CommandContext(ctx, "launchctl", "print", target)
-		if probe.Run() == nil {
+		err := m.probeLoaded(ctx, target)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		if err == nil {
 			action = "start"
 		} else {
 			action = "install"
 		}
 	}
 	if action == "stop" && m.platform == "darwin" {
-		probe := exec.CommandContext(ctx, "launchctl", "print", fmt.Sprintf("gui/%d/com.rhizome.observer", os.Getuid()))
-		if probe.Run() != nil {
+		err := m.probeLoaded(ctx, fmt.Sprintf("gui/%d/com.rhizome.observer", os.Getuid()))
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		if err != nil {
 			return nil
 		}
 	}
@@ -326,18 +340,8 @@ func (m *manager) manage(ctx context.Context, action string, c Config) error {
 		}
 	}
 	if action == "install" || action == "start" {
-		deadline := time.NewTimer(15 * time.Second)
-		defer deadline.Stop()
-		tick := time.NewTicker(100 * time.Millisecond)
-		defer tick.Stop()
-		for !running(c.Observer.Runtime) {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-deadline.C:
-				return errors.New("service manager accepted startup but observer did not acquire its runtime lock; inspect service logs")
-			case <-tick.C:
-			}
+		if err := m.waitRunning(ctx, c.Observer.Runtime, true); err != nil {
+			return fmt.Errorf("service manager accepted startup but observer did not acquire its runtime lock; inspect service logs: %w", err)
 		}
 	}
 	if action == "uninstall" {
@@ -352,6 +356,7 @@ func (m *manager) manage(ctx context.Context, action string, c Config) error {
 	}
 	return nil
 }
+
 // writeDefinition stores Windows task XML as BOM-prefixed UTF-16LE, the encoding schtasks requires.
 func (m *manager) writeDefinition(s string) error {
 	b := []byte(s)
@@ -389,4 +394,69 @@ func running(dir string) bool {
 		f.Close()
 	}
 	return errors.Is(err, localstate.ErrBusy)
+}
+
+// probeLoaded suppresses launchctl output and bounds the loaded-job probe.
+func (m *manager) probeLoaded(ctx context.Context, target string) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if m.probe != nil {
+		return m.probe(ctx, "launchctl", "print", target)
+	}
+	err := exec.CommandContext(ctx, "launchctl", "print", target).Run()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+func (m *manager) restart(ctx context.Context, c Config) error {
+	definition, err := m.readDefinition()
+	if os.IsNotExist(err) {
+		return errors.New("service is not installed; run rhizome service install first")
+	}
+	if err != nil {
+		return fmt.Errorf("read installed service: %w", err)
+	}
+	dir, err := installedRuntime(definition)
+	if err != nil {
+		return err
+	}
+	if dir != c.Observer.Runtime {
+		return errors.New("installed service runtime differs from selected configuration; use the installed --config and remove runtime overrides; stop/uninstall before changing runtime directories")
+	}
+	if err := m.manage(ctx, "stop", c); err != nil {
+		return fmt.Errorf("restart shutdown: %w", err)
+	}
+	if err := m.waitRunning(ctx, dir, false); err != nil {
+		return fmt.Errorf("restart shutdown: observer did not release its runtime lock: %w", err)
+	}
+	if err := m.manage(ctx, "start", c); err != nil {
+		return fmt.Errorf("restart startup: %w", err)
+	}
+	return nil
+}
+
+func (m *manager) waitRunning(ctx context.Context, dir string, want bool) error {
+	timeout := m.waitTimeout
+	if timeout == 0 {
+		timeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if running(dir) == want {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
 }

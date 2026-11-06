@@ -15,6 +15,7 @@ While the service is stopped those rows are withdrawn, not fabricated.
 ```sh
 rhizome service install
 rhizome service status
+rhizome service restart
 rhizome service stop
 rhizome service start
 rhizome service uninstall
@@ -71,7 +72,19 @@ once per process; edits take effect on the next start. The shared `hostname`
 setting also labels observer sessions; blank uses the OS short hostname.
 Reinstalling the same running definition is idempotent. Stop/uninstall before replacing a definition;
 installation refuses to switch away from a running observer's runtime. The
-definition includes runtime metadata solely for this check, not for resolution.
+definition includes runtime metadata for lifecycle safeguards, not for resolution.
+
+Use `rhizome service restart` after configuration changes. It is noninteractive,
+starts an installed but stopped observer (including an unloaded macOS job), and
+fails with an installation hint if no definition exists. It preserves the installed
+definition and its pinned configuration path; use the same `--config` and runtime
+as the installation. Changing runtime directories requires stop/uninstall first.
+Restart waits up to 15 seconds for the old observer to release its runtime lock
+before starting its replacement, then up to 15 seconds for the replacement to
+acquire the lock. Native commands/probes are bounded to 20 seconds each;
+cancellation and shutdown/startup failures return errors. Collection briefly
+pauses. Coding-agent MCP processes are not restarted, configuration and agent
+data are not rewritten, and the command does not invoke the updater.
 
 For foreground diagnostics or a custom service manager, use
 `rhizome service run --runtime-dir ... --claude-root ... --codex-root ... --opencode-root ... --pi-root ...`.
@@ -110,7 +123,7 @@ Rhizome process that contacts a remote host: every `check_interval` (default
 `24h`, minimum `1h`) it asks the GitHub Releases API for `aliengiraffe/rhizome`
 whether a newer release exists and, when one does, installs it over its own
 executable and restarts onto it. `mcp`, `config`, `setup`, `--version` and
-`service install|start|stop|status` never check. Set `enabled = false`, or
+`service install|start|stop|restart|status` never check. Set `enabled = false`, or
 `RHIZOME_UPDATE=0`, and the observer makes no update request at all; the
 explicit `rhizome update` command still works, because it is a user action
 (`--check`, the default, only reports; `--apply` installs). `rhizome config`
