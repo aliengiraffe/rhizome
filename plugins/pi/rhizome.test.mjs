@@ -120,9 +120,10 @@ test("a delivery becomes a custom message, marks the next turn as a peer turn an
   await srv.until((f) => f.some((x) => x.type === "ack"))
   assert.deepEqual(pi.sent[0].opts, { deliverAs: "followUp", triggerTurn: true })
   assert.equal(pi.sent[0].msg.customType, "rhizome")
-  const marker = srv.frames.find((f) => f.type === "input")
-  assert.equal(marker.rhizome, true)
-  assert.equal(srv.frames.findIndex((f) => f.type === "input") < srv.frames.findIndex((f) => f.type === "ack"), true)
+  // Queued is not delivered: no marker until Pi feeds the message to the agent.
+  assert.equal(srv.frames.some((f) => f.type === "input"), false)
+  await pi.handlers.message_end({ message: { role: "custom", customType: "rhizome", content: "x" } })
+  await srv.until((f) => f.some((x) => x.type === "input" && x.rhizome === true))
   // A delivery for another session is refused, never executed.
   srv.send({ type: "deliver", id: "d2", sessionID: "other", text: "x" })
   await srv.until((f) => f.some((x) => x.type === "fail" && x.id === "d2"))
@@ -140,4 +141,44 @@ test("an oversized text is cut to fit one frame", async () => {
   assert.ok(JSON.stringify(srv.frames.find((f) => f.type === "text")).length < 64 * 1024)
   srv.close()
   await pi.handlers.session_shutdown({})
+})
+
+test("peerView unwraps the envelope for display", async () => {
+  const { peerView } = await import("./rhizome.js")
+  const env = 'Rhizome peer activity.\n<rhizome-peer-event>\n{"content":"[activity] Sent: “Hi”","origin":{"session_id":"abcdef123","kind":"activity","sequence":"3"}}\n</rhizome-peer-event>'
+  const v = peerView(env)
+  assert.equal(v.body, "[activity] Sent: “Hi”")
+  assert.equal(v.origin.kind, "activity")
+  assert.equal(peerView("plain").body, "plain")
+})
+
+test("the rhizome renderer is registered and draws an arrow line", () => {
+  let renderer
+  const pi = { on() {}, registerMcpServer() {}, unregisterMcpServer() {}, sendMessage() {},
+    registerMessageRenderer: (t, fn) => { if (t === "rhizome") renderer = fn } }
+  extension(pi)
+  const theme = { fg: (_c, t) => t }
+  const c = renderer({ content: '<rhizome-peer-event>{"content":"[direct] hi","origin":{}}</rhizome-peer-event>' }, { expanded: false }, theme)
+  assert.deepEqual(c.render(80), ["", "← rhizome: [direct] hi"])
+})
+
+test("the renderer sanitizes peer text and never exceeds the width", async () => {
+  const { cellWidth } = await import("./rhizome.js")
+  let renderer
+  const pi = { on() {}, registerMcpServer() {}, unregisterMcpServer() {}, sendMessage() {},
+    registerMessageRenderer: (t, fn) => { if (t === "rhizome") renderer = fn } }
+  extension(pi)
+  const theme = { fg: (_c, t) => t }
+  const env = (body, origin = {}) => "<rhizome-peer-event>" + JSON.stringify({ content: body, origin }) + "</rhizome-peer-event>"
+  const cols = (l) => [...l].reduce((n, ch) => n + cellWidth(ch), 0)
+  for (const width of [80, 20, 8, 3]) {
+    for (const body of ["界".repeat(50), "😀 ok ".repeat(30), "plain ".repeat(40)]) {
+      const c = renderer({ content: env(body, { session_id: "abcdef1234", kind: "k", sequence: "1" }) }, { expanded: true }, theme)
+      for (const l of c.render(width)) assert.ok(cols(l) <= width, `width ${width}: ${cols(l)} in ${JSON.stringify(l)}`)
+    }
+  }
+  const c = renderer({ content: env("\u001b[2J\u001b[31mspoof\rhidden\u001b]0;t\u0007x") }, {}, theme)
+  const out = c.render(80).join("\n")
+  assert.ok(!/[\u0000-\u0009\u000b-\u001f\u007f]/.test(out), JSON.stringify(out))
+  assert.ok(out.includes("spoof"))
 })

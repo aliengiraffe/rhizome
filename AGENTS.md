@@ -476,7 +476,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   256-entry queue (overflow becomes a `gap`), and `piSession` feeds them to the
   shared collector (`opencode_collect.go`; Pi's own tools are `mcp__rhizome__*`),
   so redaction, opt-in prompt/tool kinds and peer-turn suppression are identical;
-  a delivery emits an `input` marker with `rhizome: true`. Implemented: bind,
+  the `input` marker with `rhizome: true` is emitted when Pi feeds the delivery to the agent (custom `message_end`), never at queue time. Implemented: bind,
   titles, delivery ack, collection, node, `list_sessions`, and `rhizome
   setup|uninstall --agents pi`, and local-only history (below). Not implemented:
   `recent` rows, peer history,

@@ -52,6 +52,90 @@ function jsonText(v) {
   try { return typeof v === "string" ? v : JSON.stringify(v) ?? ""; } catch { return ""; }
 }
 
+// Display only: the model still sees the full peerEnvelope. The renderer shows
+// the origin's one-line content the way Claude Code does ("← rhizome: ...").
+export function peerView(content) {
+  const text = typeof content === "string" ? content : Array.isArray(content)
+    ? content.map((c) => (c && c.type === "text" ? c.text : "")).join("") : "";
+  const m = /<rhizome-peer-event>\s*([\s\S]*?)\s*<\/rhizome-peer-event>/.exec(text);
+  if (m) {
+    try {
+      const ev = JSON.parse(m[1]);
+      if (typeof ev.content === "string") return { body: ev.content, origin: ev.origin ?? {} };
+    } catch {}
+  }
+  return { body: text, origin: {} };
+}
+
+// Peer text is untrusted: drop terminal escapes and control characters before
+// anything is drawn, so a peer cannot clear the screen, recolor or spoof lines.
+export function cleanText(text) {
+  return String(text ?? "")
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[@-Z\\-_]?/g, "")
+    .replace(/\t/g, " ")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, "");
+}
+
+// Terminal columns of one code point: combining marks 0, wide/emoji 2.
+export function cellWidth(ch) {
+  if (/^\p{M}$/u.test(ch)) return 0;
+  const c = ch.codePointAt(0);
+  if (
+    (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) ||
+    (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe6f) || (c >= 0xff00 && c <= 0xff60) ||
+    (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1faff) || (c >= 0x20000 && c <= 0x3fffd) ||
+    /^\p{Extended_Pictographic}$/u.test(ch)
+  ) return 2;
+  return 1;
+}
+
+export function wrap(text, width) {
+  const w = Math.max(1, width);
+  const out = [];
+  for (const line of text.split("\n")) {
+    let cur = "";
+    let n = 0;
+    for (const ch of line) {
+      const cw = cellWidth(ch);
+      if (n + cw > w && cur) { out.push(cur); cur = ""; n = 0; }
+      if (cw > w) continue; // a glyph wider than the terminal cannot be drawn
+      cur += ch;
+      n += cw;
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
+function renderPeer(message, options, theme) {
+  const view = peerView(message.content);
+  const body = cleanText(view.body);
+  const origin = view.origin ?? {};
+  return {
+    invalidate() {},
+    render(width) {
+      const w = Math.max(1, width - 2);
+      // Narrow terminals drop the label so every line still fits.
+      const label = w >= 24;
+      const pad = label ? 11 : 2;
+      const lines = wrap(body, Math.max(1, width - pad));
+      const max = options?.expanded ? lines.length : 6;
+      const head = label ? theme.fg("accent", "←") + " " + theme.fg("dim", "rhizome:") + " " : theme.fg("accent", "←") + " ";
+      const shown = lines.slice(0, max).map((l, i) => (i === 0 ? head : " ".repeat(pad)) + l);
+      const extra = [];
+      if (lines.length > max) extra.push(`… ${lines.length - max} more lines`);
+      if (options?.expanded && origin.session_id) {
+        extra.push(`from ${String(origin.session_id).slice(0, 8)} · ${origin.kind ?? "?"} · #${origin.sequence ?? "?"}`);
+      }
+      for (const e of extra) for (const l of wrap(cleanText(e), w)) shown.push(theme.fg("dim", "  " + l));
+      return ["", ...shown];
+    },
+  };
+}
+
 export default function (pi) {
   let current = null; // { sessionId, nonce, cwd, title, socket, closed, queue, dropped }
 
@@ -110,8 +194,9 @@ export default function (pi) {
         { customType: "rhizome", content: f.text.slice(0, MAX_TEXT), display: true },
         { deliverAs: "followUp", triggerTurn: true },
       );
-      // Marks the next turn as a reaction to a peer; the next human prompt clears it.
-      emit(s, { type: "input", kind: "custom", rhizome: true });
+      // The peer-turn marker is emitted when Pi actually feeds the message to the
+      // agent (message_end below), not here: a followUp queued behind a running
+      // human turn must not suppress that turn's remaining activity.
       frame(socket, { type: "ack", id: f.id });
     } catch (err) {
       frame(socket, { type: "fail", id: f.id, reason: String(err?.message ?? err).slice(0, 200) });
@@ -150,6 +235,8 @@ export default function (pi) {
     s.socket = null;
   }
 
+  pi.registerMessageRenderer?.("rhizome", renderPeer);
+
   pi.on("session_start", async (_event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
     // Pi can emit session_start twice for one session (RPC mode): same ID is a
@@ -172,7 +259,10 @@ export default function (pi) {
   pi.on("message_end", async (event) => {
     const m = event?.message;
     if (!m) return;
-    if (m.role === "user") {
+    if (m.role === "custom" && m.customType === "rhizome") {
+      // Marks the turn as a reaction to a peer; the next human prompt clears it.
+      emit(current, { type: "input", kind: "custom", rhizome: true });
+    } else if (m.role === "user") {
       emit(current, { type: "input", kind: "user", text: textOf(m.content) });
     } else if (m.role === "assistant") {
       const text = textOf((m.content ?? []).filter((b) => b?.type === "text"));
