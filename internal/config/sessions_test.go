@@ -116,7 +116,7 @@ func TestPeerActivityPolicyConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	for _, value := range []string{"", "none", "responses", "all"} {
 		t.Run("value="+value, func(t *testing.T) {
-			body, source, want := "", "default", PeerActivityNone
+			body, source, want := "", "default", PeerActivityResponses
 			if value != "" {
 				body = fmt.Sprintf("[sessions]\nshare_peer_triggered_activity = %q\n", value)
 				source = "file"

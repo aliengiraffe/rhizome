@@ -218,9 +218,9 @@ calls and child sessions are never returned, and a `synthetic` row carrying the
 Rhizome peer envelope makes the following turn peer-only until the next human
 `user` row, mirroring the live collector.
 
-**Peer-triggered activity (separate opt-in).** The serving host's file-only
-`[sessions].share_peer_triggered_activity` is `none` by default (suppress peer-only
-turns), `responses` (only `assistant_text`), or `all` (otherwise eligible events).
+**Peer-triggered activity (host policy).** The serving host's file-only
+`[sessions].share_peer_triggered_activity` is `responses` by default (only
+`assistant_text`), `none` (suppress peer-only turns), or `all` (otherwise eligible events).
 Tool bodies still require `share_prompts_and_tools`; envelopes, channel injections,
 reasoning and Rhizome tools stay excluded. The policy applies to all three agents,
 local reads and paired-host reads without a new request/wire field. A remote

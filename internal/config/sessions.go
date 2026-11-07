@@ -10,7 +10,7 @@ import (
 // last recorded activity. share_prompts_and_tools (default false) lets this
 // host publish human prompts and tool inputs/outputs, after secret redaction,
 // in live activity and in the history it serves. SharePeerTriggeredActivity
-// separately controls responses to peer input (default none).
+// separately controls responses to peer input (default responses).
 type Sessions struct {
 	SharePeerTriggeredActivity PeerActivityPolicy `toml:"share_peer_triggered_activity"`
 	RecentWindow               string             `toml:"recent_window"`

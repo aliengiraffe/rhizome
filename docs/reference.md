@@ -38,7 +38,7 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `network.gossip_port` | `RHIZOME_GOSSIP_PORT` | mcp `--gossip-port` | `7946` (Tailscale only) |
 | `network.discovery_interval` | `RHIZOME_DISCOVERY_INTERVAL` | mcp `--discovery-interval` | `20s` (Tailscale only) |
 | `sessions.recent_window` | — | — | `24h`; `0s` disables recent-only rows ([Session status](../README.md#session-status)) |
-| `sessions.share_peer_triggered_activity` | — | — | `"none"`; `"responses"` or `"all"` opt in ([policy](#peer-triggered-activity)) |
+| `sessions.share_peer_triggered_activity` | — | — | `"responses"`; `"none"` suppresses, `"all"` adds other eligible activity ([policy](#peer-triggered-activity)) |
 | `sessions.share_prompts_and_tools` | — | — | `false`: no prompts or tool inputs/outputs ([Activity](#activity-replay-and-bounded-delivery)) |
 | `update.enabled` | `RHIZOME_UPDATE` | service `--update`, setup `--auto-update` (writes file) | `true`: the observer installs verified releases ([Automatic updates](service.md#automatic-updates)) |
 | `update.check_interval` | `RHIZOME_UPDATE_CHECK_INTERVAL` | service `--update-check-interval` | `24h`; between `1h` and `720h` |
@@ -558,8 +558,8 @@ sooner. Subscribers advertise support with `FollowRequest.details`; publishers
 withhold the new kinds from older subscribers and gateway peers, which would
 otherwise reject an unknown kind. Summaries
 are deterministic; no additional model is called. Automatic output from peer-only
-turns is suppressed by default; the [peer-triggered policy](#peer-triggered-activity)
-can opt in. Intentional responses can still use `publish` or `send`. Turn completion
+turns shares assistant text by default; the [peer-triggered policy](#peer-triggered-activity)
+can suppress it or include other eligible activity. Intentional responses can still use `publish` or `send`. Turn completion
 remains in publisher history but does not wake subscribers.
 
 Every collected text is scanned for secrets before it enters publisher
@@ -600,22 +600,23 @@ this publishing/serving host shares from turns triggered solely by Rhizome input
 
 | Value | Eligible output from a peer-only turn |
 | --- | --- |
-| `none` (default) | No automatic activity. |
-| `responses` | Only ordinary assistant response text (`activity`). No newly enabled prompts, tool metadata/bodies, or turn markers. |
+| `none` | No automatic activity. |
+| `responses` (default) | Only ordinary assistant response text (`activity`). No newly enabled prompts, tool metadata/bodies, or turn markers. |
 | `all` | All otherwise eligible activity, including tool metadata and completion. Tool bodies still require `share_prompts_and_tools = true` and subscriber detail support. |
 
-For example, add to `~/.rhizome/config.toml`:
+To suppress peer-triggered activity, add to `~/.rhizome/config.toml`:
 
 ```toml
 [sessions]
-share_peer_triggered_activity = "responses"
+share_peer_triggered_activity = "none"
 ```
 
 Values must be exactly as shown; empty strings, unknown strings and other types
 are errors. There are no flags, environment variables, per-agent overrides or
 subscriber overrides. `rhizome config` reports the effective value and source;
 setup preserves stored values. Restart affected MCP processes and the observer
-service after editing. Opting in does not replay suppressed live history.
+service after editing. Removing the key restores `responses`. Enabling sharing
+does not replay suppressed live history.
 
 The policy applies to Claude Code, Codex and OpenCode, direct and passive
 collection, and normalized history. Remote history uses the serving host's policy
@@ -624,8 +625,8 @@ eligibility. Received envelopes, channel injections, reasoning and excluded
 Rhizome tools never become publishable. Unknown input context at observer startup
 or handoff stays suppressed until human input establishes context.
 
-Mutual autonomous following requires **both publishers** to opt in and deliberate
-subscriptions. Agents may generate repeated turns and consume tokens without
+Mutual autonomous following requires **both publishers** to permit responses
+(the default) and deliberate subscriptions. Agents may generate repeated turns and consume tokens without
 human input; `responses` limits shared kinds, not turns or cost. Stopping rules
 in prompts are not hard enforcement. Unsubscribe or stop sessions to end the
 workflow; set `none` and restart to restore suppression. Existing batching, rate

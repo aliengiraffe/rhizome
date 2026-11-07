@@ -112,8 +112,8 @@ first human prompt, unlike Codex mode.
 Published: assistant text, tool lifecycle from the `execute` tool hooks (Code Mode
 inner tools by their real name; the `execute` wrapper and `rhizome_*` tools are
 excluded as `Tool started|completed|failed: <name>`), turn completion, and titles
-as native session names. Turns started only by Rhizome deliveries are suppressed
-by default. The host can opt into `responses` or `all` with file-only
+as native session names. Turns started only by Rhizome deliveries share assistant
+text (`responses`) by default. The host can select `none` or `all` with file-only
 [`sessions.share_peer_triggered_activity`](reference.md#peer-triggered-activity);
 the same policy applies to SQLite history. Restart MCP and the observer after
 changes. Mutual following can consume tokens repeatedly; unsubscribe/stop sessions

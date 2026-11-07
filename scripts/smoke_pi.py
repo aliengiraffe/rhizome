@@ -2,7 +2,7 @@
 """Live Pi check: `rhizome setup --agents pi` installs the embedded extension and a real
 `pi --mode rpc` loads it. Rhizome must bind exactly the Pi session (and rebind on /new),
 publish the session's activity to a peer, and deliver a peer's `send` into the session,
-which runs a turn that is not republished. Finally the observer indexes Pi's own session
+which runs a turn whose assistant response is shared under the default responses policy. Finally the observer indexes Pi's own session
 file and the peer reads the history back through `search_sessions`/`read_session_history`.
 
 Models are served by a loopback OpenAI-compatible stub registered through models.json in
@@ -197,22 +197,16 @@ try:
     print('human turn published to the peer')
 
     # A peer message is delivered into the session and runs a turn: the model sees it
-    # framed as untrusted peer activity, and the reaction is not republished.
+    # framed as untrusted peer activity, and the default policy shares its response.
     peer.tool('send', {'session_id': second, 'text': 'smoke ping from peer'})
     until(lambda: len(requests) >= 2 and 'smoke ping from peer' in requests[-1])
     if '<rhizome-peer-event>' not in requests[-1]:
         fail('peer text reached the model without the peer envelope')
     until(lambda: len(agent_ends) >= 2)
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:  # drain what the peer receives for a while
-        try:
-            peer.events.append(peer.messages.get(timeout=0.2))
-        except Exception:
-            pass
-    leaked = [m for m in peer.events if 'stub reply #2' in json.dumps(m)]
-    if leaked:
-        fail(f'a peer-only turn was republished: {leaked}')
-    print('peer message delivered, model saw the envelope, reaction not republished')
+    ev = peer.event('stub reply #2')
+    if ev['meta']['session_id'] != second:
+        fail(f'peer-triggered response from the wrong session: {ev}')
+    print('peer message delivered, model saw the envelope, response shared by default')
 
     # History: the observer indexes the file Pi wrote (never tailing it) and the peer reads it.
     sessions = list((agent / 'sessions').rglob('*.jsonl'))

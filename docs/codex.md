@@ -117,8 +117,8 @@ App Server delivery integration.
 The first successful history read establishes a live baseline. Polling runs every
 second, with coalesced hook wake-ups and exponential reconnect backoff with jitter.
 Assistant text additions, tool status summaries, and turn completion are collected.
-Peer-only turns are suppressed by default. The host can opt into assistant text
-(`responses`) or otherwise eligible activity (`all`) with the file-only
+Peer-only turns share assistant text (`responses`) by default. The host can
+suppress them (`none`) or share otherwise eligible activity (`all`) with the file-only
 [`sessions.share_peer_triggered_activity`](reference.md#peer-triggered-activity).
 Restart MCP and the observer to apply it; the same policy governs rollout history.
 Mutual following can consume tokens repeatedly; unsubscribe/stop sessions to end

@@ -239,7 +239,7 @@ locally inspected Claude 2.1.302 and Codex 0.163.0 JSONL structures. Unknown sch
 are not guessed. Thinking/reasoning, received peer envelopes and Rhizome tool calls
 are excluded. Peer-only reactions follow the file-only
 [`sessions.share_peer_triggered_activity`](reference.md#peer-triggered-activity)
-policy (`none` by default, `responses` for assistant text, `all` for otherwise
+policy (`responses` by default for assistant text, `none` to suppress, `all` for otherwise
 eligible activity), including the history this service serves to paired hosts.
 Restart the observer and affected MCP processes after policy changes. Mutual
 following may consume tokens repeatedly; unsubscribe/stop sessions to end it, or

@@ -308,7 +308,7 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	if md.IsDefined("sessions", "share_prompts_and_tools") {
 		c.Sources["sessions.share_prompts_and_tools"] = "file"
 	}
-	c.Sessions.SharePeerTriggeredActivity = PeerActivityNone
+	c.Sessions.SharePeerTriggeredActivity = PeerActivityResponses
 	c.Sources["sessions.share_peer_triggered_activity"] = "default"
 	if md.IsDefined("sessions", "share_peer_triggered_activity") {
 		if c.Sessions.SharePeerTriggeredActivity, err = parsePeerActivity(raw.Sessions.SharePeerTriggeredActivity); err != nil {

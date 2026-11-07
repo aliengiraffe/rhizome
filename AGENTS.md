@@ -457,9 +457,9 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   `internal/channel/codex_collect.go`, `internal/channel/opencode_collect.go`,
   `internal/channel/opencode.go`, `internal/channel/name.go`,
   `plugins/opencode/rhizome.js`, `plugins/opencode/rhizome-tui.js`).
-- **Peer-only activity is host-controlled and opt-in.** File-only
-  `[sessions].share_peer_triggered_activity` is exactly `none` (default),
-  `responses` (only `activity` assistant text), or `all` (otherwise eligible
+- **Peer-only activity is host-controlled.** File-only
+  `[sessions].share_peer_triggered_activity` is exactly `none` (suppress),
+  `responses` (default; only `activity` assistant text), or `all` (otherwise eligible
   kinds; prompt/tool bodies still need `share_prompts_and_tools` and subscriber
   negotiation). Apply the shared typed policy in direct/observer collection and
   serving-host history, never from caller arguments or wire fields. Restart MCP
