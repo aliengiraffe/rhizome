@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"rhizome/internal/config"
@@ -64,6 +65,72 @@ func TestHookTemplateMatchesExamples(t *testing.T) {
 		if got := templateAsJSON(t, agentName); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s hook template differs from %s:\n got %v\nwant %v", agentName, path, got, want)
 		}
+	}
+}
+
+func TestSessionStartMatcher(t *testing.T) {
+	for _, agent := range []string{"claude", "codex"} {
+		groups := hookTemplate(agent)["SessionStart"]
+		if len(groups) != 1 {
+			t.Fatalf("%s: expected one SessionStart group, got %v", agent, groups)
+		}
+		matcher, present := groups[0].(map[string]any)["matcher"]
+		if agent == "codex" {
+			if present {
+				t.Fatalf("Codex source matcher added: %v", matcher)
+			}
+		} else if matcher != "^(?!startup$).*$" {
+			t.Fatalf("Claude source matcher: %v", matcher)
+		}
+	}
+	// Claude evaluates matchers with JavaScript RegExp, not Go's RE2 engine.
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable; JavaScript matcher behavior not checked")
+	}
+	matcher := hookTemplate("claude")["SessionStart"][0].(map[string]any)["matcher"].(string)
+	cmd := exec.Command(node, "-e", `
+const assert = require("node:assert/strict");
+const matcher = new RegExp(process.argv[1]);
+assert.equal(matcher.test("startup"), false);
+for (const source of ["resume", "clear", "compact", "fork", "future-source"]) {
+  assert.equal(matcher.test(source), true, source);
+}
+`, matcher)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("JavaScript matcher: %v\n%s", err, out)
+	}
+}
+
+func TestMergeHooksUpgradesSessionStart(t *testing.T) {
+	const original = `{"theme":"dark","hooks":{"SessionStart":[
+		{"hooks":[{"type":"mcp_tool","server":"rhizome","tool":"observe_session"}]},
+		{"matcher":"startup","hooks":[{"type":"command","command":"echo keep"}]}
+	]}}`
+	doc, err := decodeJSON([]byte(original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := doc["hooks"].(map[string]any)["SessionStart"].([]any)[1]
+	for i := 0; i < 2; i++ {
+		if err := mergeHooks(doc, hookTemplate("claude")); err != nil {
+			t.Fatal(err)
+		}
+		groups := doc["hooks"].(map[string]any)["SessionStart"].([]any)
+		want := []any{other, hookTemplate("claude")["SessionStart"][0]}
+		if !reflect.DeepEqual(groups, want) || doc["theme"] != "dark" {
+			t.Fatalf("upgrade %d: %v", i, doc)
+		}
+	}
+	// Uninstall removes the new matched group without touching the user's hook.
+	if _, err := stripHooks(doc); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := decodeJSON([]byte(`{"theme":"dark","hooks":{"SessionStart":[
+		{"matcher":"startup","hooks":[{"type":"command","command":"echo keep"}]}
+	]}}`))
+	if !reflect.DeepEqual(doc, want) {
+		t.Fatalf("uninstall changed unrelated settings: %v", doc)
 	}
 }
 

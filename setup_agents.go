@@ -131,6 +131,10 @@ func hookTemplate(agentName string) map[string][]any {
 		if event == "PreToolUse" {
 			group["matcher"] = matcher
 		}
+		if agentName == "claude" && event == "SessionStart" {
+			// Startup runs before Claude has an MCP client; later sources rebind.
+			group["matcher"] = "^(?!startup$).*$"
+		}
 		out[event] = []any{group}
 	}
 	return out
