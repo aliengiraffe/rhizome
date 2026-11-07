@@ -509,7 +509,9 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   `message_end`, top-level `tool_execution_*` and `agent_end` events through a
   256-entry queue (overflow becomes a `gap`), and `piSession` feeds them to the
   shared collector (`opencode_collect.go`; Pi's own tools are `mcp__rhizome__*`),
-  so redaction, opt-in prompt/tool kinds and peer-turn suppression are identical;
+  with the host's `share_peer_triggered_activity` policy passed from `RunPi`
+  through `piSession` to each node (covered by `TestPiPeerActivityPolicy`),
+  so redaction and peer-turn suppression use the shared collector;
   the `input` marker with `rhizome: true` is emitted when Pi feeds the delivery to the agent (custom `message_end`), never at queue time. Implemented: bind,
   titles, delivery ack, collection, node, `list_sessions`, and `rhizome
   setup|uninstall --agents pi`, history (below), and the paired-host

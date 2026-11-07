@@ -52,14 +52,15 @@ func piSocketPath(runtime string, pid int, nonce string) (string, error) {
 // server (a new process) for every session, so a second, different session ID
 // on the same bridge fails closed instead of rebinding.
 type piSession struct {
-	ctx     context.Context
-	runtime string
-	nonce   string
-	history *historyService
-	opts    Options
-	debug   bool
-	window  time.Duration // recent-session window applied to the node
-	bridge  *bridge
+	ctx          context.Context
+	runtime      string
+	nonce        string
+	history      *historyService
+	opts         Options
+	debug        bool
+	window       time.Duration // recent-session window applied to the node
+	bridge       *bridge
+	peerActivity config.PeerActivityPolicy
 	// frameMu serializes frames with the collector and gaps, so activity keeps the
 	// order the extension relayed it in; it is taken before mu, never the reverse.
 	frameMu   sync.Mutex
@@ -70,8 +71,8 @@ type piSession struct {
 	closed    bool
 }
 
-func newPiSession(ctx context.Context, runtime, nonce string) *piSession {
-	return &piSession{ctx: ctx, runtime: runtime, nonce: nonce, collector: newOpenCodeCollector()}
+func newPiSession(ctx context.Context, runtime, nonce string, policy config.PeerActivityPolicy) *piSession {
+	return &piSession{ctx: ctx, runtime: runtime, nonce: nonce, peerActivity: policy, collector: newOpenCodeCollector()}
 }
 
 // resolve returns the bound session's node, or an unbound error. The caller is
@@ -216,6 +217,7 @@ func (s *piSession) refresh(n *Node, f bridgeFrame) {
 func (s *piSession) newNode(sid string) (*Node, error) {
 	n := newNode(s.ctx)
 	n.archive = s.history
+	n.peerActivity = s.peerActivity
 	n.recentWindow = s.window
 	n.debug = s.debug
 	n.identity.AgentType = "pi"
@@ -286,7 +288,7 @@ func RunPi(c config.Config, o Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, PiRoot: c.Pi.SessionsDir})
-	sess := newPiSession(ctx, runtime, nonce)
+	sess := newPiSession(ctx, runtime, nonce, c.Sessions.SharePeerTriggeredActivity)
 	sess.history = history
 	sess.debug = c.Debug
 	sess.window = c.RecentWindow
