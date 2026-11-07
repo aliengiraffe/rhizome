@@ -245,12 +245,15 @@ one, and project hooks run in addition to user hooks, so keep the Rhizome hooks
 in one place. Do not change the server key unless you also update the hook server
 name, tool exclusions and channel flag.
 
-The process starts **UNBOUND**. Initial `SessionStart` is skipped by Claude because
-its MCP clients are not yet available; Claude 2.1.302 displays a non-blocking hook
-notice. Submit a prompt to bind. Later `SessionStart`, `UserPromptSubmit`,
-`PreToolUse` and `Stop` hooks refresh the binding. The negative-lookahead matcher
-excludes `mcp__rhizome__*`; hooks do not ingest activity themselves. See
+The process starts **UNBOUND**. The Claude `SessionStart` source matcher excludes
+`startup`, when MCP clients are not yet available, avoiding the startup hook
+notice. Submit the first prompt to bind. Other `SessionStart` sources (including
+`resume`, `clear` and `compact`), `UserPromptSubmit`, `PreToolUse` and `Stop` hooks
+refresh the binding. The `PreToolUse` negative-lookahead matcher excludes
+`mcp__rhizome__*`; hooks do not ingest activity themselves. See
 [MCP tool hook timing](https://code.claude.com/docs/en/hooks#mcp-tool-hook-fields).
+Existing installations must rerun `rhizome setup --agents claude` to replace the
+old matcher-less hook; setup preserves unrelated hooks.
 Never ask Claude to call `observe_session` manually or invent an ID.
 
 The official Go MCP SDK handles initialization and tools. A transport adapter uses
