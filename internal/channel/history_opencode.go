@@ -360,7 +360,7 @@ func (h *historyService) openOpenCodeSnapshot(ctx context.Context, session, quer
 	}
 	return &snapshot{
 		kind: "read", query: query, agent: "opencode", session: session, path: src.Path, gaps: map[string]int{},
-		sink: &historySink{identity: nil, details: h.details},
+		sink: &historySink{identity: nil, details: h.details, peerActivity: h.peerActivity},
 		oc:   &openCodeCursor{db: dbPath, session: id, maxSeq: maxSeq.Int64},
 	}, nil
 }
@@ -486,18 +486,18 @@ type openCodeRecord struct {
 // normalize turns one session_message row into the event kinds the live
 // collector publishes, under the same content policy: assistant text, tool
 // names with a phase, turn completion and, when the sink allows detail kinds,
-// the human prompt and tool inputs and outputs. Reasoning and peer-only turns
-// never appear.
+// the human prompt and tool inputs and outputs. Peer-only turns follow the
+// serving host policy; reasoning and received envelopes never appear.
 func (c *openCodeCursor) normalize(typ, data string, sink *historySink) {
 	switch typ {
 	case "user":
-		c.peer = false
 		var r openCodeRecord
 		if err := json.Unmarshal([]byte(data), &r); err != nil {
 			sink.countSkip()
 			return
 		}
-		if strings.TrimSpace(r.Text) != "" && !strings.Contains(r.Text, openCodePeerMarker) {
+		c.peer = isPeerInput(r.Text)
+		if strings.TrimSpace(r.Text) != "" && !isPeerInput(r.Text) && !strings.Contains(r.Text, "<channel ") {
 			sink.activity(1, "prompt", r.Text)
 		}
 		return
@@ -512,7 +512,7 @@ func (c *openCodeCursor) normalize(typ, data string, sink *historySink) {
 		}
 		return
 	case "idle":
-		if !c.peer {
+		if sink.peerActivity.Allows(c.peer, "turn") {
 			sink.activity(1, "turn", "")
 		}
 		return
@@ -537,13 +537,13 @@ func (c *openCodeCursor) normalize(typ, data string, sink *historySink) {
 	for _, p := range r.Content {
 		switch p.Type {
 		case "text":
-			if c.peer || strings.TrimSpace(p.Text) == "" || strings.Contains(p.Text, openCodePeerMarker) {
+			if !sink.peerActivity.Allows(c.peer, "activity") || strings.TrimSpace(p.Text) == "" || isPeerInput(p.Text) || strings.Contains(p.Text, "<channel ") {
 				continue
 			}
 			at(0)
 			sink.activity(1, "activity", p.Text)
 		case "tool":
-			if c.peer || p.Name == "" || p.Name == "execute" || strings.HasPrefix(p.Name, "rhizome_") {
+			if !sink.peerActivity.Allows(c.peer, "tool") || p.Name == "" || p.Name == "execute" || strings.HasPrefix(p.Name, "rhizome_") {
 				continue
 			}
 			start := p.Time.Created

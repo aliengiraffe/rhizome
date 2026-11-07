@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"rhizome/internal/config"
 	"strings"
 	"sync"
 	"testing"
@@ -328,14 +329,20 @@ func TestTranscriptPartialDedupAndTruncation(t *testing.T) {
 	}
 }
 func TestBackpressureRetentionAndRate(t *testing.T) {
+	for _, policy := range []config.PeerActivityPolicy{config.PeerActivityNone, config.PeerActivityAll} {
+		t.Run(string(policy), func(t *testing.T) { backpressureRetentionAndRate(t, policy) })
+	}
+}
+func backpressureRetentionAndRate(t *testing.T, policy config.PeerActivityPolicy) {
 	n := node(t)
+	n.peerActivity = policy
 	bind(t, n, "local", t.TempDir())
 	n.mu.Lock()
 	slow := &listener{queue: make(chan *pb.Event, 1), done: make(chan struct{})}
 	n.listeners[slow] = true
 	n.mu.Unlock()
 	for i := 0; i < 1010; i++ {
-		n.activity(1, "activity", strings.Repeat("x", maxText))
+		peerSink{activitySink: n, peer: policy == config.PeerActivityAll}.activity(1, "activity", strings.Repeat("x", maxText))
 	}
 	select {
 	case <-slow.done:
@@ -374,7 +381,13 @@ func TestBackpressureRetentionAndRate(t *testing.T) {
 	}
 }
 func TestCircuitBreakerAndRearm(t *testing.T) {
+	for _, policy := range []config.PeerActivityPolicy{config.PeerActivityNone, config.PeerActivityAll} {
+		t.Run(string(policy), func(t *testing.T) { circuitBreakerAndRearm(t, policy) })
+	}
+}
+func circuitBreakerAndRearm(t *testing.T, policy config.PeerActivityPolicy) {
 	n := node(t)
+	n.peerActivity = policy
 	bind(t, n, "local", t.TempDir())
 	var mu sync.Mutex
 	var contents []string

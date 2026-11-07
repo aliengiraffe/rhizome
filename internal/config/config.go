@@ -308,6 +308,14 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	if md.IsDefined("sessions", "share_prompts_and_tools") {
 		c.Sources["sessions.share_prompts_and_tools"] = "file"
 	}
+	c.Sessions.SharePeerTriggeredActivity = PeerActivityNone
+	c.Sources["sessions.share_peer_triggered_activity"] = "default"
+	if md.IsDefined("sessions", "share_peer_triggered_activity") {
+		if c.Sessions.SharePeerTriggeredActivity, err = parsePeerActivity(raw.Sessions.SharePeerTriggeredActivity); err != nil {
+			return c, fmt.Errorf("config %s: %w", path, err)
+		}
+		c.Sources["sessions.share_peer_triggered_activity"] = "file"
+	}
 	c.Debug, c.Sources["debug"] = raw.Debug, "default"
 	if md.IsDefined("debug") {
 		c.Sources["debug"] = "file"
@@ -506,6 +514,9 @@ func (c Config) Write(w io.Writer) error {
 		}
 	}
 	if _, err := fmt.Fprintf(w, "sessions.recent_window = %q # source: %s\n", c.RecentWindow.String(), c.Sources["sessions.recent_window"]); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "sessions.share_peer_triggered_activity = %q # source: %s\n", c.Sessions.SharePeerTriggeredActivity, c.Sources["sessions.share_peer_triggered_activity"]); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "sessions.share_prompts_and_tools = %t # source: %s\n", c.Sessions.SharePromptsAndTools, c.Sources["sessions.share_prompts_and_tools"]); err != nil {

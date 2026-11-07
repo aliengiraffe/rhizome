@@ -34,6 +34,7 @@ type GatewayHistory struct {
 	Policy                                      config.HistoryPolicy
 	RecentWindow                                time.Duration
 	Hostname                                    string
+	PeerActivity                                config.PeerActivityPolicy
 	Details                                     bool // [sessions].share_prompts_and_tools for served history
 }
 

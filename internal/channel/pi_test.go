@@ -17,7 +17,7 @@ func startPi(t *testing.T) (*piSession, string) {
 	runtime := shortDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	s := newPiSession(ctx, runtime, testPiNonce)
+	s := newPiSession(ctx, runtime, testPiNonce, config.PeerActivityNone)
 	path, err := piSocketPath(runtime, 4242, testPiNonce)
 	if err != nil {
 		t.Fatal(err)
@@ -197,6 +197,53 @@ func piHistory(t *testing.T, node *Node, n int) []string {
 			return got
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestPiPeerActivityPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		policy config.PeerActivityPolicy
+		want   string
+	}{
+		{"", "activity:human response"},
+		{config.PeerActivityNone, "activity:human response"},
+		{config.PeerActivityResponses, "activity:peer response|activity:human response"},
+		{config.PeerActivityAll, "activity:peer response|tool:Tool started: read|turn:Turn completed|activity:human response"},
+	} {
+		t.Run(string(tc.policy), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s := newPiSession(ctx, shortDir(t), testPiNonce, tc.policy)
+			defer s.close()
+			const sid = "policy-session"
+			s.frame(bridgeFrame{Type: "bind", Nonce: testPiNonce, SessionID: sid, Directory: shortDir(t)})
+			n, err := s.resolve(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Drive the real Pi frame path synchronously, including the transition
+			// back to a human turn. No sleeps or publication timing assumptions.
+			for _, f := range []bridgeFrame{
+				{Type: "input", Kind: "custom", Rhizome: true},
+				{Type: "text", MessageID: "peer", Text: "peer response"},
+				{Type: "tool", CallID: "read-1", Name: "read", Phase: "start"},
+				{Type: "turn"},
+				{Type: "input", Kind: "user", Text: "continue"},
+				{Type: "text", MessageID: "human", Text: "human response"},
+			} {
+				f.SessionID = sid
+				s.frame(f)
+			}
+			n.mu.Lock()
+			var got []string
+			for _, e := range n.history {
+				got = append(got, e.Kind+":"+e.Text)
+			}
+			n.mu.Unlock()
+			if strings.Join(got, "|") != tc.want {
+				t.Fatalf("got %v, want %s", got, tc.want)
+			}
+		})
 	}
 }
 

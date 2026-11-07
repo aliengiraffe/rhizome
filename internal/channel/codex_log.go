@@ -35,11 +35,20 @@ func (c *collector) normalizeCodexLog(line []byte, n activitySink, gen uint64) {
 		return
 	}
 	p := r.Payload
+	if r.Type == "event_msg" && p.Type == "user_message" && strings.TrimSpace(p.Message) != "" {
+		if isPeerInput(p.Message) {
+			c.peerResponse = !c.codexHuman
+		} else if !strings.Contains(p.Message, "<channel ") {
+			c.peerResponse, c.unknownTurn, c.codexHuman = false, false, true
+		}
+	}
+
 	if r.Type != "response_item" {
 		if r.Type == "event_msg" && p.Type == "task_complete" {
-			n.activity(gen, "turn", "Turn completed")
+			peerSink{activitySink: n, peer: c.peerResponse, unknown: c.unknownTurn}.activity(gen, "turn", "Turn completed")
+			c.codexHuman = false
 		}
-		if r.Type == "event_msg" && p.Type == "user_message" && strings.TrimSpace(p.Message) != "" && !isPeerInput(p.Message) {
+		if r.Type == "event_msg" && p.Type == "user_message" && strings.TrimSpace(p.Message) != "" && !isPeerInput(p.Message) && !strings.Contains(p.Message, "<channel ") {
 			n.activity(gen, "prompt", p.Message)
 		}
 		return
@@ -58,26 +67,39 @@ func (c *collector) normalizeCodexLog(line []byte, n activitySink, gen uint64) {
 			c.order = c.order[1:]
 		}
 	}
+	output := peerSink{activitySink: n, peer: c.peerResponse, unknown: c.unknownTurn}
 	switch p.Type {
 	case "message":
 		if p.Role == "user" {
+			peer, human := false, false
 			for _, b := range p.Content {
-				if strings.TrimSpace(b.Text) != "" {
-					c.peerResponse = isPeerInput(b.Text)
+				if strings.TrimSpace(b.Text) == "" {
+					continue
 				}
+				if isPeerInput(b.Text) {
+					peer = true
+				} else if !strings.Contains(b.Text, "<channel ") {
+					human = true
+				}
+			}
+			if human {
+				c.peerResponse, c.unknownTurn = false, false
+			} else if peer {
+				c.peerResponse = true
 			}
 			return
 		}
-		if p.Role != "assistant" || c.peerResponse {
+
+		if p.Role != "assistant" {
 			return
 		}
 		for _, b := range p.Content {
-			if b.Type == "output_text" && strings.TrimSpace(b.Text) != "" && !isPeerInput(b.Text) {
-				n.activity(gen, "activity", b.Text)
+			if b.Type == "output_text" && strings.TrimSpace(b.Text) != "" && !isPeerInput(b.Text) && !strings.Contains(b.Text, "<channel ") {
+				output.activity(gen, "activity", b.Text)
 			}
 		}
 	case "function_call", "custom_tool_call":
-		if p.CallID == "" || c.peerResponse {
+		if p.CallID == "" || c.unknownTurn || !n.peerActivityPolicy().Allows(c.peerResponse, "tool") {
 			return
 		}
 		if _, ok := c.tools[p.CallID]; ok {
@@ -90,12 +112,12 @@ func (c *collector) normalizeCodexLog(line []byte, n activitySink, gen uint64) {
 			c.toolOrder = c.toolOrder[1:]
 		}
 		if !rhizomeTool(p.Name) {
-			n.activity(gen, "tool", "Tool started: "+p.Name)
+			output.activity(gen, "tool", "Tool started: "+p.Name)
 			input := p.Arguments
 			if p.Type == "custom_tool_call" {
 				input = p.Input
 			}
-			toolDetail(n, gen, "tool_input", p.Name, payloadText(input))
+			toolDetail(output, gen, "tool_input", p.Name, payloadText(input))
 		}
 	case "function_call_output", "custom_tool_call_output":
 		name, known := c.tools[p.CallID]
@@ -103,9 +125,9 @@ func (c *collector) normalizeCodexLog(line []byte, n activitySink, gen uint64) {
 			return
 		}
 		c.tools[p.CallID] = ""
-		if name != "" && !rhizomeTool(name) && !c.peerResponse {
-			n.activity(gen, "tool", "Tool completed: "+name)
-			toolDetail(n, gen, "tool_output", name, payloadText(p.Output))
+		if name != "" && !rhizomeTool(name) {
+			output.activity(gen, "tool", "Tool completed: "+name)
+			toolDetail(output, gen, "tool_output", name, payloadText(p.Output))
 		}
 	case "reasoning":
 	default:

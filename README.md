@@ -227,7 +227,15 @@ subagent transcripts, and received peer traffic. Setting the file-only
 sessions' human prompts (`prompt`) and tool inputs and outputs (`tool_input`,
 `tool_output`), clipped to the usual 7 KiB, in live activity and in the history
 it serves to local agents and paired hosts. Reasoning, peer-delivered input,
-peer-triggered turns and Rhizome's own tools stay excluded either way. Explicit `send` and `publish`
+and Rhizome's own tools stay excluded either way. Peer-triggered turns are
+suppressed by default; the separate file-only
+`[sessions].share_peer_triggered_activity` policy accepts `none`, `responses`
+(assistant text only), or `all` (otherwise eligible activity, still filtered).
+Both publishers must opt in for mutual autonomous following. Restart affected MCP
+processes and the observer after changes. Repeated turns can consume tokens
+without human input: this is not a turn or cost budget. Stop by unsubscribing or
+stopping sessions; restore `none` and restart to restore suppression. See the
+[policy and safeguards](docs/reference.md#peer-triggered-activity). Explicit `send` and `publish`
 calls carry the text the sender chooses. Collected text (streamed activity and
 [session history](docs/history.md#content-policy)) is scanned with
 [Betterleaks](https://github.com/betterleaks/betterleaks) default rules and

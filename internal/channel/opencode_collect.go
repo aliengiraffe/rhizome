@@ -39,16 +39,16 @@ func (c *openCodeCollector) handle(n *Node, gen uint64, f bridgeFrame) {
 	switch f.Type {
 	case "input":
 		// Peer deliveries mark the turn as a reaction until a human prompt arrives.
-		if f.Rhizome {
+		if f.Rhizome || isPeerInput(f.Text) {
 			c.peer = true
 		} else if f.Kind == "user" {
 			c.peer = false
-			if strings.TrimSpace(f.Text) != "" && !strings.Contains(f.Text, "<rhizome-peer-event>") {
+			if strings.TrimSpace(f.Text) != "" && !strings.Contains(f.Text, "<channel ") {
 				n.activity(gen, "prompt", f.Text)
 			}
 		}
 	case "text":
-		if c.peer || strings.TrimSpace(f.Text) == "" || strings.Contains(f.Text, "<rhizome-peer-event>") {
+		if !n.peerActivity.Allows(c.peer, "activity") || strings.TrimSpace(f.Text) == "" || isPeerInput(f.Text) || strings.Contains(f.Text, "<channel ") {
 			return
 		}
 		sum := sha256.Sum256([]byte(f.Text))
@@ -58,7 +58,7 @@ func (c *openCodeCollector) handle(n *Node, gen uint64, f bridgeFrame) {
 		n.activity(gen, "activity", f.Text)
 	case "tool":
 		name := f.Name
-		if c.peer || name == "" || name == "execute" || strings.HasPrefix(name, "rhizome_") || strings.HasPrefix(name, "mcp__rhizome__") {
+		if !n.peerActivity.Allows(c.peer, "tool") || name == "" || name == "execute" || strings.HasPrefix(name, "rhizome_") || strings.HasPrefix(name, "mcp__rhizome__") {
 			return
 		}
 		switch f.Phase {
@@ -74,7 +74,7 @@ func (c *openCodeCollector) handle(n *Node, gen uint64, f bridgeFrame) {
 			}
 		}
 	case "turn":
-		if !c.peer {
+		if n.peerActivity.Allows(c.peer, "turn") {
 			n.activity(gen, "turn", "Turn completed")
 		}
 	}

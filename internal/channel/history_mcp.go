@@ -22,12 +22,13 @@ const maxHistoryArguments = 8 * 1024
 // historyService serves search_sessions and read_session_history for one MCP
 // process. It is a read-only client of the observer's catalog.
 type historyService struct {
-	scope   historyScope
-	catalog *catalogReader
-	snaps   *snapshotStore
-	sem     chan struct{}
-	clock   func() time.Time
-	details bool // [sessions].share_prompts_and_tools: reads include detail kinds
+	scope        historyScope
+	catalog      *catalogReader
+	snaps        *snapshotStore
+	sem          chan struct{}
+	clock        func() time.Time
+	peerActivity config.PeerActivityPolicy
+	details      bool // [sessions].share_prompts_and_tools: reads include detail kinds
 }
 
 func newHistoryService(scope historyScope) *historyService {

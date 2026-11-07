@@ -190,8 +190,7 @@ OpenCode `idle` rows).
 Excluded: user prompts and any user text, thinking/reasoning, tool arguments and
 tool results (only "Tool completed/failed: name" remains), Claude sidechain
 records and `subagents` directories, Codex subagent threads, received peer
-envelopes and channel injections, assistant turns that only react to peer-only
-input, Rhizome tool calls and results (including earlier `search_sessions` and
+envelopes and channel injections, Rhizome tool calls and results (including earlier `search_sessions` and
 `read_session_history` payloads, so histories do not recursively expose
 histories), mirrored Codex `event_msg` assistant text, and records of another
 session ID inside the file. Unknown record formats are counted in
@@ -207,7 +206,7 @@ input; OpenCode tool `state.input`) and `tool_output` (Claude `tool_result`
 content; Codex `*_output` output; OpenCode tool `state.content`, or its error).
 Each is rendered as `<tool>: <payload>` (prompts as their text), cut to 14 KiB
 before the secret scan and clipped to the live 7 KiB afterwards, so a page never
-holds more than live subscribers saw. Peer-only turns, Rhizome tools, reasoning
+holds more than live subscribers saw. Rhizome tools, reasoning
 and the other exclusions above still apply, and paired hosts read under the
 serving host's setting, never their own. The default (`false`) keeps the policy
 above byte for byte.
@@ -218,6 +217,19 @@ lines (see [Sources](#sources-identity-titles)): `user`, `system` and
 calls and child sessions are never returned, and a `synthetic` row carrying the
 Rhizome peer envelope makes the following turn peer-only until the next human
 `user` row, mirroring the live collector.
+
+**Peer-triggered activity (separate opt-in).** The serving host's file-only
+`[sessions].share_peer_triggered_activity` is `none` by default (suppress peer-only
+turns), `responses` (only `assistant_text`), or `all` (otherwise eligible events).
+Tool bodies still require `share_prompts_and_tools`; envelopes, channel injections,
+reasoning and Rhizome tools stay excluded. The policy applies to all three agents,
+local reads and paired-host reads without a new request/wire field. A remote
+caller cannot opt the host in or bypass the existing history access/lookback
+policy. Restart MCP and the observer after changes; historical reads normalize
+under that process's policy, while live collection never replays prior turns.
+See [scope and safeguards](reference.md#peer-triggered-activity): mutual following
+can consume tokens without human input, and this is not a turn/cost budget.
+Unsubscribe/stop sessions to end it, or restore `none` and restart.
 
 **Secret redaction.** Every `text` value passes through the same filter as
 live activity (`internal/channel/redact.go`), so a page shows exactly what a
@@ -315,7 +327,7 @@ The source transcript also held the user's prompt, a `thinking` block, and the
 `"text": null`, then `next_cursor: null` and the same `snapshot.id`.
 
 A page that crosses only filtered records (for example a long run of tool
-results or peer-only reactions) can be `"events": []` with a non-null cursor;
+results or default-suppressed peer-only reactions) can be `"events": []` with a non-null cursor;
 keep following the cursor until it is `null`. A session that contains only user
 messages returns `"events": []`, `"next_cursor": null`, and
 `"coverage": {"state": "complete", …}`: valid and empty, not missing.

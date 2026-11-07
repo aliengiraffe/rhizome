@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"rhizome/internal/config"
 	"sort"
 	"strings"
 	"sync"
@@ -50,14 +51,15 @@ type historyEvent struct {
 // historySink collects the live normalizer's output for one record without
 // clipping, publishing, or touching any node state.
 type historySink struct {
-	identity *pb.Identity
-	ts       *string
-	at       *time.Time
-	offset   int64
-	events   []historyEvent
-	skips    uint64
-	filter   *redactor // test override; nil uses sharedRedactor
-	details  bool      // [sessions].share_prompts_and_tools on the serving host
+	identity     *pb.Identity
+	ts           *string
+	at           *time.Time
+	offset       int64
+	events       []historyEvent
+	skips        uint64
+	filter       *redactor // test override; nil uses sharedRedactor
+	peerActivity config.PeerActivityPolicy
+	details      bool // [sessions].share_prompts_and_tools on the serving host
 }
 
 func (s *historySink) secrets() *redactor {
@@ -317,7 +319,7 @@ func (h *historyService) openSnapshot(ctx context.Context, agent, session, query
 		}
 	}
 	s.c = &collector{path: src.Path, agent: agent, seen: map[string]bool{}, tools: map[string]string{}}
-	s.sink = &historySink{identity: &pb.Identity{SessionId: session, AgentType: agent, Generation: 1}, details: h.details}
+	s.sink = &historySink{identity: &pb.Identity{SessionId: session, AgentType: agent, Generation: 1}, details: h.details, peerActivity: h.peerActivity}
 	return s, nil
 }
 

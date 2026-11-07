@@ -67,7 +67,7 @@ func RunForeground(ctx context.Context, c Config) error {
 	tasks := []func(context.Context) error{func(ctx context.Context) error { return channel.RunObserver(ctx, c.Observer) }}
 	if c.Gateway.Mode != "" && c.Gateway.Mode != "off" {
 		tasks = append(tasks, func(ctx context.Context) error {
-			return channel.RunGateway(ctx, c.Observer.Runtime, c.Gateway, channel.GatewayHistory{ClaudeRoot: c.Observer.ClaudeRoot, CodexRoot: c.Observer.CodexRoot, OpenCodeRoot: c.Observer.OpenCodeRoot, PiRoot: c.Observer.PiRoot, Policy: c.PeerHistory, RecentWindow: c.RecentWindow, Hostname: c.Observer.Hostname, Details: c.Observer.Details})
+			return channel.RunGateway(ctx, c.Observer.Runtime, c.Gateway, channel.GatewayHistory{ClaudeRoot: c.Observer.ClaudeRoot, CodexRoot: c.Observer.CodexRoot, OpenCodeRoot: c.Observer.OpenCodeRoot, PiRoot: c.Observer.PiRoot, Policy: c.PeerHistory, RecentWindow: c.RecentWindow, Hostname: c.Observer.Hostname, Details: c.Observer.Details, PeerActivity: c.Observer.PeerActivity})
 		})
 	}
 	if c.AutoUpdate.Enabled {

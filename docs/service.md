@@ -249,8 +249,15 @@ Codex identity comes from `session_meta` (`id` or `session_id`, `cwd`), rejectin
 subagent sources. Codex `response_item` messages and tool calls/results provide
 summaries; mirrored `event_msg` assistant text is ignored. These fixtures follow
 locally inspected Claude 2.1.302 and Codex 0.163.0 JSONL structures. Unknown schemas
-are not guessed. Thinking/reasoning, received peer envelopes, Rhizome tool calls,
-and peer-only reactions are excluded. User prompts and tool arguments/results are
+are not guessed. Thinking/reasoning, received peer envelopes and Rhizome tool calls
+are excluded. Peer-only reactions follow the file-only
+[`sessions.share_peer_triggered_activity`](reference.md#peer-triggered-activity)
+policy (`none` by default, `responses` for assistant text, `all` for otherwise
+eligible activity), including the history this service serves to paired hosts.
+Restart the observer and affected MCP processes after policy changes. Mutual
+following may consume tokens repeatedly; unsubscribe/stop sessions to end it, or
+restore `none` and restart. Bounds, redaction and feedback controls stay in place.
+User prompts and tool arguments/results are
 excluded unless `[sessions].share_prompts_and_tools` is set, and are never part of
 the `Tool …` summaries. Tool results without a known call
 are ignored. Codex result summaries say completed, without inferring success from
