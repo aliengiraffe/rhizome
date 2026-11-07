@@ -248,6 +248,9 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   plus `hooks.json`. The entry is the absolute executable with `mcp --agent
   <name>`, `--config` only for an explicit existing file, `--codex-bin` when
   resolvable, and the agent home in `env` only when non-default; never a token.
+  Claude `SessionStart` excludes `startup` by source matcher (MCP is not ready);
+  other sources still rebind, and Codex has no source matcher. Existing users
+  rerun `rhizome setup --agents claude` to upgrade their hooks.
   Hook templates in `setup_agents.go` must equal `.claude/settings.json` and
   `examples/codex/hooks.json` (tested). Merges touch only Rhizome entries,
   keep everything else, back up changed files as `<file>.bak-<timestamp>`,
