@@ -111,3 +111,43 @@ func TestSharePromptsAndTools(t *testing.T) {
 		t.Fatal("a non-boolean share_prompts_and_tools was accepted")
 	}
 }
+
+func TestPeerActivityPolicyConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, value := range []string{"", "none", "responses", "all"} {
+		t.Run("value="+value, func(t *testing.T) {
+			body, source, want := "", "default", PeerActivityResponses
+			if value != "" {
+				body = fmt.Sprintf("[sessions]\nshare_peer_triggered_activity = %q\n", value)
+				source = "file"
+				want = PeerActivityPolicy(value)
+			}
+			// Neither a made-up flag nor environment key can override a file-only policy.
+			c, err := Resolve(map[string]string{"config": fixture(t, body), "share-peer-triggered-activity": "all"}, func(key string) string {
+				if key == "RHIZOME_SHARE_PEER_TRIGGERED_ACTIVITY" {
+					return "all"
+				}
+				return ""
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Sessions.SharePeerTriggeredActivity != want {
+				t.Fatal(c.Sessions)
+			}
+			var out bytes.Buffer
+			if err := c.Write(&out); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out.String(), fmt.Sprintf("sessions.share_peer_triggered_activity = %q # source: %s", want, source)) {
+				t.Fatal(out.String())
+			}
+		})
+	}
+	for _, value := range []string{`""`, `"ALL"`, `"responses "`, `"unknown"`, `true`, `42`, `[]`, `{value="all"}`} {
+		_, err := Resolve(map[string]string{"config": fixture(t, "[sessions]\nshare_peer_triggered_activity = "+value)}, noenv)
+		if err == nil || !strings.Contains(err.Error(), "share_peer_triggered_activity") {
+			t.Fatalf("value %s: %v", value, err)
+		}
+	}
+}

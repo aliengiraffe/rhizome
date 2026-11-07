@@ -112,8 +112,12 @@ first human prompt, unlike Codex mode.
 Published: assistant text, tool lifecycle from the `execute` tool hooks (Code Mode
 inner tools by their real name; the `execute` wrapper and `rhizome_*` tools are
 excluded as `Tool started|completed|failed: <name>`), turn completion, and titles
-as native session names. Turns started only by Rhizome deliveries are suppressed
-until a human prompt arrives. Inputs are applied when OpenCode delivers them into
+as native session names. Turns started only by Rhizome deliveries share assistant
+text (`responses`) by default. The host can select `none` or `all` with file-only
+[`sessions.share_peer_triggered_activity`](reference.md#peer-triggered-activity);
+the same policy applies to SQLite history. Restart MCP and the observer after
+changes. Mutual following can consume tokens repeatedly; unsubscribe/stop sessions
+to end it, or restore `none` and restart. Existing bounds and breakers remain. Inputs are applied when OpenCode delivers them into
 the session's agent loop (`session.inbox.delivered`), not when they are queued
 (`session.inbox.enqueued`), so a queued item never flips suppression mid-turn.
 Never published: reasoning. Prompts and tool inputs/outputs are published only
@@ -121,7 +125,8 @@ with `[sessions].share_prompts_and_tools` ([reference](reference.md#activity-rep
 the plugin relays the inbox item's text on `input` frames and the hook's
 `input` and `result`/`output`/`error` as text on `tool` frames, within the same
 16 KiB text and 60 KiB frame bounds, and Go drops peer (`rhizome: true`) input,
-`execute`, `rhizome_*` tools and everything in a peer-triggered turn.
+`execute` and `rhizome_*` tools. Peer-triggered tools require `all`; their
+bodies additionally require the detail setting and subscriber negotiation.
 Text and tool-call IDs are deduplicated in 4,096-entry windows; existing rate
 limits and the circuit breaker apply unchanged.
 

@@ -203,7 +203,7 @@ def notice_scenario(directory, old, new):
         with (sessions / 'stale-session.jsonl').open('a') as transcript:
             transcript.write(json.dumps({'type': 'user', 'uuid': 'n1', 'message': {'role': 'user', 'content':
                 '<channel source="rhizome" kind="update_notice" from="%s" to="%s">%s</channel>' % (OLD, NEW, notice['content'])}}) + '\n')
-            # A genuine prompt ends the peer-only turn, whose reply is suppressed by design.
+            # A genuine prompt starts the next human turn for the marker response.
             transcript.write(json.dumps({'type': 'user', 'uuid': 'n2', 'message': {'role': 'user', 'content': 'next task'}}) + '\n')
             transcript.write(json.dumps({'type': 'assistant', 'uuid': 'n3', 'message': {
                 'content': [{'type': 'text', 'text': 'after-notice-marker'}], 'stop_reason': 'end_turn'}}) + '\n')

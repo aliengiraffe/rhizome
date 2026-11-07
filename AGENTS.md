@@ -175,7 +175,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   never enter configuration. Keys are grouped per agent (`[claude]`, `[codex]`);
   which agent a process serves is the per-launch `rhizome mcp --agent` flag and
   must never become a configuration key. `[sessions].recent_window` and
-  `[sessions].share_prompts_and_tools` are file-only (`internal/config/sessions.go`). `RHIZOME_CONFIG`/`--config` select an
+  `[sessions].share_prompts_and_tools` and `[sessions].share_peer_triggered_activity` are file-only (`internal/config/sessions.go`). `RHIZOME_CONFIG`/`--config` select an
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
@@ -451,8 +451,8 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   cut them to 2×`maxText` before the scan and clip to `maxText` after it (history
   too, as `user_prompt`/`tool_input`/`tool_output` with
   `content_policy: "prompts_and_tools"`). Peer envelopes, `isMeta` and channel
-  injections are never prompts; peer-only turns, Rhizome tools and reasoning stay
-  excluded. The kinds are automatic for delivery, but publishers send them only
+  injections are never prompts; Rhizome tools and reasoning stay excluded.
+  Peer-only turns follow the separate policy below. The kinds are automatic for delivery, but publishers send them only
   to subscribers that set `FollowRequest.details` (older subscribers reject
   unknown kinds), in replay and live; the gateway forwards the field unchanged.
   The OpenCode plugin relays input and tool text but never filters.
@@ -461,8 +461,15 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   `internal/channel/codex_collect.go`, `internal/channel/opencode_collect.go`,
   `internal/channel/opencode.go`, `internal/channel/name.go`,
   `plugins/opencode/rhizome.js`, `plugins/opencode/rhizome-tui.js`).
-- **Peer-only turns must not trigger feedback loops.** Preserve filtering,
-  suppression, rate limits, and circuit breakers; never republish received
+- **Peer-only activity is host-controlled.** File-only
+  `[sessions].share_peer_triggered_activity` is exactly `none` (suppress),
+  `responses` (default; only `activity` assistant text), or `all` (otherwise eligible
+  kinds; prompt/tool bodies still need `share_prompts_and_tools` and subscriber
+  negotiation). Apply the shared typed policy in direct/observer collection and
+  serving-host history, never from caller arguments or wire fields. Restart MCP
+  processes and the observer after changes. Preserve unknown-context suppression,
+  baseline/handoff gates, redaction, rate limits, and circuit breakers; this is
+  not a hard turn/token budget. Never republish received
   envelopes (`internal/channel/transcript.go`, `internal/channel/codex_collect.go`,
   `internal/channel/opencode_collect.go`, `internal/channel/delivery.go`,
   `plugins/opencode/rhizome.js`). OpenCode inputs count when delivered into the
@@ -506,7 +513,9 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   `message_end`, top-level `tool_execution_*` and `agent_end` events through a
   256-entry queue (overflow becomes a `gap`), and `piSession` feeds them to the
   shared collector (`opencode_collect.go`; Pi's own tools are `mcp__rhizome__*`),
-  so redaction, opt-in prompt/tool kinds and peer-turn suppression are identical;
+  with the host's `share_peer_triggered_activity` policy passed from `RunPi`
+  through `piSession` to each node (covered by `TestPiPeerActivityPolicy`),
+  so redaction and peer-turn suppression use the shared collector;
   the `input` marker with `rhizome: true` is emitted when Pi feeds the delivery to the agent (custom `message_end`), never at queue time. Implemented: bind,
   titles, delivery ack, collection, node, `list_sessions`, and `rhizome
   setup|uninstall --agents pi`, history (below), and the paired-host

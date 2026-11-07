@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"rhizome/internal/config"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ import (
 // can be confirmed; it is never used for routing.
 type ObserverOptions struct {
 	Runtime, ClaudeRoot, CodexRoot, OpenCodeRoot, PiRoot, Hostname, Version string
+	// PeerActivity is the host policy for peer-triggered activity and history.
+	PeerActivity config.PeerActivityPolicy
 	// Details is [sessions].share_prompts_and_tools: observer publishers and
 	// the gateway's history service publish prompts and tool inputs/outputs.
 	Details bool
@@ -128,7 +131,7 @@ func RunObserver(ctx context.Context, opts ObserverOptions) error {
 						f.c.offset = 0
 						f.c.anchor = nil
 						f.c.dropping = false
-						f.c.peerResponse = false
+						f.c.unknownTurn = false
 						f.startupBaseline = false
 					}
 				}
@@ -355,7 +358,7 @@ func (o *observer) visit(path string, initial bool) {
 		}
 		c.agent = o.agent(path)
 		c.passive = true
-		c.peerResponse = initial
+		c.unknownTurn = initial
 		// No history is emitted for startup files. New files begin at byte zero,
 		// including bytes written before directory registration completed.
 		if !initial {
@@ -393,7 +396,7 @@ func (o *observer) visit(path string, initial bool) {
 				}
 				fresh.agent = f.agent
 				fresh.passive = true
-				fresh.peerResponse = true
+				fresh.unknownTurn = true
 				f.c = fresh
 			}
 		}
@@ -484,7 +487,7 @@ func (o *observer) scan(path string, f *observedFile) {
 		}
 		fresh.agent = f.agent
 		fresh.passive = true
-		fresh.peerResponse = true
+		fresh.unknownTurn = true
 		f.c = fresh
 		f.session = session
 		f.cwd = cwd
@@ -519,6 +522,7 @@ func (o *observer) scan(path string, f *observedFile) {
 		n.identity.DisplayName = clip(filepath.Base(f.cwd), 40)
 		n.identity.ObservationOnly = true
 		n.details = o.opts.Details
+		n.peerActivity = o.opts.PeerActivity
 		if err := n.start(Options{Runtime: o.opts.Runtime, Hostname: o.opts.Hostname}); err != nil {
 			n.close()
 			o.problem("observer publisher startup failed")
@@ -555,6 +559,8 @@ func (o *observer) scan(path string, f *observedFile) {
 		fresh.agent = f.agent
 		fresh.passive = true
 		fresh.peerResponse = f.c.peerResponse
+		fresh.unknownTurn = f.c.unknownTurn
+		fresh.codexHuman = f.c.codexHuman
 		f.c = fresh
 	} else {
 		f.c.scan(f.n, 1)

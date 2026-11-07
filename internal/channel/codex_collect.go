@@ -319,7 +319,7 @@ func (c *codexCollector) scan(ctx context.Context, n *Node, gen uint64) bool {
 	}
 	for i := len(turns) - 1; i >= 0; i-- {
 		t := turns[i]
-		// A peer-only turn is a reaction, not a new source of automatic activity.
+		// Classify the complete turn before applying the publishing host policy.
 		peer, human := false, false
 		for _, item := range entries[t.ID] {
 			if item.Type == "userMessage" {
@@ -331,12 +331,17 @@ func (c *codexCollector) scan(ctx context.Context, n *Node, gen uint64) bool {
 				}
 			}
 		}
-		emit := c.baseline && !(peer && !human)
+		emit := c.baseline
+		peerOnly := peer && !human
 		for _, item := range entries[t.ID] {
-			c.normalize(n, gen, t.ID, item, emit)
+			kind := "tool"
+			if item.Type == "agentMessage" {
+				kind = "activity"
+			}
+			c.normalize(n, gen, t.ID, item, emit && n.peerActivity.Allows(peerOnly, kind))
 		}
 		previous, seen := c.turns[t.ID]
-		if emit && t.Status != "inProgress" && t.Status != "" && (!seen || previous != t.Status) {
+		if emit && n.peerActivity.Allows(peerOnly, "turn") && t.Status != "inProgress" && t.Status != "" && (!seen || previous != t.Status) {
 			n.activity(gen, "turn", "Turn "+t.Status)
 		}
 		c.turns[t.ID] = t.Status
@@ -388,7 +393,7 @@ func (c *codexCollector) normalize(n *Node, gen uint64, turn string, item codexI
 			}
 			text = text[prev.size:]
 		}
-		if strings.TrimSpace(text) != "" && !strings.Contains(text, "<rhizome-peer-event>") {
+		if strings.TrimSpace(text) != "" && !isPeerInput(text) && !strings.Contains(text, "<channel ") {
 			n.activity(gen, "activity", text)
 		}
 	case "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "imageGeneration":
@@ -419,7 +424,7 @@ func (c *codexCollector) normalize(n *Node, gen uint64, turn string, item codexI
 		}
 	case "userMessage":
 		// A human prompt, once; peer-queue deliveries carry the envelope.
-		if text := item.userText(); !seen && strings.TrimSpace(text) != "" && !isPeerInput(text) {
+		if text := item.userText(); !seen && strings.TrimSpace(text) != "" && !isPeerInput(text) && !strings.Contains(text, "<channel ") {
 			n.activity(gen, "prompt", text)
 		}
 	case "contextCompaction":

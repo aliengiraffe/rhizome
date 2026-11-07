@@ -58,6 +58,7 @@ type openCodeNodes struct {
 	runtime      string
 	history      *historyService
 	recentWindow time.Duration
+	peerActivity config.PeerActivityPolicy
 	details      bool // [sessions].share_prompts_and_tools
 	debug        bool
 	opts         Options // network and hostname settings shared by every session node
@@ -523,6 +524,7 @@ func (m *openCodeNodes) newSessionNode(sid string) (*Node, error) {
 	n.archive = m.history
 	n.recentWindow = m.recentWindow
 	n.details = m.details
+	n.peerActivity = m.peerActivity
 	n.debug = m.debug
 	n.identity.AgentType = "opencode"
 	n.ready = true
@@ -720,9 +722,11 @@ func RunOpenCode(c config.Config, o Options) error {
 	history := newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, PiRoot: c.Pi.SessionsDir})
 	manager := newOpenCodeNodes(ctx, runtime)
 	history.details = c.Sessions.SharePromptsAndTools
+	history.peerActivity = c.Sessions.SharePeerTriggeredActivity
 	manager.history = history
 	manager.recentWindow = c.RecentWindow
 	manager.details = c.Sessions.SharePromptsAndTools
+	manager.peerActivity = c.Sessions.SharePeerTriggeredActivity
 	manager.debug = c.Debug
 	manager.opts = o
 	manager.store = store

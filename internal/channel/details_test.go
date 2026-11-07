@@ -273,8 +273,14 @@ func TestDetailRedactionAndBounds(t *testing.T) {
 // Older subscribers reject unknown kinds, so publishers send detail kinds only
 // to subscribers that set FollowRequest.details, both in replay and live.
 func TestDetailKindsOnlyReachCapableSubscribers(t *testing.T) {
+	for _, policy := range []config.PeerActivityPolicy{config.PeerActivityNone, config.PeerActivityAll} {
+		t.Run(string(policy), func(t *testing.T) { detailKindsOnlyReachCapableSubscribers(t, policy) })
+	}
+}
+func detailKindsOnlyReachCapableSubscribers(t *testing.T, policy config.PeerActivityPolicy) {
 	a, b := pair(t)
 	a.details = true
+	a.peerActivity = policy
 	gen := a.local().Generation
 	a.activity(gen, "prompt", "replayed prompt")
 	a.activity(gen, "activity", "replayed text")
@@ -304,7 +310,7 @@ func TestDetailKindsOnlyReachCapableSubscribers(t *testing.T) {
 			}
 			kinds = append(kinds, e.Kind)
 		}
-		a.activity(gen, "tool_output", "live output")
+		peerSink{activitySink: a, peer: policy == config.PeerActivityAll}.activity(gen, "tool_output", "live output")
 		a.activity(gen, "activity", "live text")
 		for {
 			e, err := stream.Recv()

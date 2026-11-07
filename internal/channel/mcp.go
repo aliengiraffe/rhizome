@@ -283,7 +283,9 @@ func Run(c config.Config, o Options) error {
 	defer n.close()
 	n.archive = newHistoryService(historyScope{Runtime: c.RuntimeDir, ClaudeRoot: c.Claude.ProjectsDir, CodexRoot: c.Codex.SessionsDir, OpenCodeRoot: c.OpenCode.DataDir, PiRoot: c.Pi.SessionsDir})
 	n.archive.details = c.Sessions.SharePromptsAndTools
+	n.archive.peerActivity = c.Sessions.SharePeerTriggeredActivity
 	n.details = c.Sessions.SharePromptsAndTools
+	n.peerActivity = c.Sessions.SharePeerTriggeredActivity
 	n.recentWindow = c.RecentWindow
 	n.debug = c.Debug
 	if err := n.start(o); err != nil {
