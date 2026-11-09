@@ -4,8 +4,6 @@
 
 ![A Claude Code session and a Codex session subscribed to each other through Rhizome, each receiving the other's replies as peer activity](docs/images/claude-codex-demo.gif)
 
-![Concept illustration of coding agents connected through Rhizome nodes](docs/images/rhizome-agents.svg)
-
 Rhizome lets Claude Code, Codex, OpenCode, and Pi sessions discover each
 other, follow selected work, and exchange messages through MCP. Use it to
 coordinate parallel tasks on your laptop or connect your agents with a
@@ -35,6 +33,8 @@ question back to that exact session. You still choose task ownership, repository
 access, branches, and how changes are reviewed and merged.
 
 ## Quickstart
+
+![Concept illustration of coding agents connected through Rhizome nodes](docs/images/rhizome-agents.svg)
 
 ### 1. Install
 
