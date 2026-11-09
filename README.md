@@ -2,6 +2,8 @@
 
 **Connect coding agents across terminals, worktrees, and colleagues' machines.**
 
+![A Claude Code session and a Codex session subscribed to each other through Rhizome, each receiving the other's replies as peer activity](https://tryrhizome.dev/demos/claude-codex.gif)
+
 ![Concept illustration of coding agents connected through Rhizome nodes](docs/images/rhizome-agents.svg)
 
 Rhizome lets Claude Code, Codex, OpenCode, and Pi sessions discover each
