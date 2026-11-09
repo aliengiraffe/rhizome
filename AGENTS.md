@@ -123,14 +123,38 @@ a real tailnet; the two-device Tailscale checklist in
 ## Terminal interfaces
 
 `setup` uses Bubble Tea on usable stdin/stdout terminals when input is needed;
-`--plain` retains legacy prompts. Stage all answers until review/apply; cancellation
+`--plain` retains legacy prompts. Both flows open with a bounded (15 s),
+cancellable, injectable, read-only Tailscale probe (`channel.ProbeTailscale`,
+states `usable|missing_cli|daemon_unavailable|needs_login|no_address|error|timeout`
+with fixed explanations; never raw status JSON, daemon text or peer inventories)
+and the connection question (`setup_connection.go`): `only this device`
+(default; loopback MCP, gateway off), `paired devices` (gateway invite/join
+over `tailscale` or `lan`, `[network].mode` pinned to `local`, endpoints
+automatic unless custom) or `direct network` (shared-token gossip, gateway
+off). A usable tailnet is shown as a recommendation and may only move an
+untouched transport default when the stored file has no pairing; it never
+pre-selects networking. Prompts default to the stored model, the review lists
+the plan and every change from the stored file (`connectionPlan.lines`), and the
+two tables are never combined. Stage all answers until review/apply; cancellation
 before apply must not write skills, config, or service state. The opt-in
 "install and start" service step (`setup_service.go`) follows the configuration
 whether it was created, replaced, or kept; it runs the normal install lifecycle
 through an injectable `serviceInstaller`, reports running only after
-`service.Inspect` confirms the observer lock, distinguishes an installed
+`service.Inspect` confirms the observer lock, records whether the observer
+already ran before the step (`WasRunning`), distinguishes an installed
 definition from a running observer on failure, and is never run by `--list` or
-by `--network` without the interactive questions. Use `config.Preview`
+by `--network` without the interactive questions. Pairing is a separate
+post-apply phase (`setup_pairing.go`, same in the screen and `--plain`): only
+when the saved file enables the gateway, the service step confirmed the
+observer, the service was not already running a rewritten file (then it prints
+`rhizome service restart` and the commands), and the gateway control endpoint
+answers a `peers` query within 10 s, setup offers `invite` / `join` / later
+through an injectable `gatewayAdmin` over the service's own actions and trust
+checks. An invitation is shown once as the `rhizome join …` command and reported
+as "no peer connected yet"; a join reports the host ID with the connection
+state read back from `peers`. Declined, unready or failed pairing prints the
+exact commands and retry path; nothing is rolled back. `--network`,
+`--gateway-mode`, `--list` and help never probe, enroll or start services. Use `config.Preview`
 for resolver-backed validation without disk writes. Filter network fields by the
 selected mode. Bare terminal `service` manages lifecycle (confirm stop/uninstall),
 `service restart` is explicit and noninteractive: require an installed definition

@@ -2,18 +2,21 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"rhizome/internal/channel"
 	"rhizome/internal/config"
 )
 
@@ -40,6 +43,7 @@ func wizard(t *testing.T) *setupModel {
 	}
 	m := newSetupModel(c, filepath.Join(home, "config.toml"), []agent{{Name: "claude", Label: "Claude", Skills: filepath.Join(home, "skills"), Detected: true}, {Name: "codex", Label: "Codex", Skills: filepath.Join(home, "other")}}, nil, nil, false)
 	t.Cleanup(m.work.close)
+	m.width = 400 // assertions match whole phrases; wrapping is covered by the resize test
 	m.installAgent = func(_ config.Config, a agent, out io.Writer) error {
 		status, err := installSkill(a.Skills)
 		fmt.Fprintf(out, "%s:\n  skill: %s\n", a.Label, status)
@@ -63,8 +67,8 @@ func TestWizardDefaultsBackAndCancel(t *testing.T) {
 		t.Fatal("agent defaults")
 	}
 	m.Update(key("enter"))
-	if m.fields()[m.step].key != "mode" {
-		t.Fatal("mode")
+	if m.fields()[m.step].key != "connect" || m.values["connect"] != connectLocal {
+		t.Fatal("connection question missing or not defaulting to this device only")
 	}
 	m.Update(key("enter"))
 	m.Update(key("device"))
@@ -83,6 +87,7 @@ func TestWizardDefaultsBackAndCancel(t *testing.T) {
 }
 func TestWizardBranchesAndValidation(t *testing.T) {
 	m := wizard(t)
+	m.values["connect"] = connectDirect
 	m.values["mode"] = "lan"
 	m.values["bind"] = "192.168.1.2"
 	m.values["mdns"] = "no"
@@ -108,11 +113,10 @@ func TestWizardBranchesAndValidation(t *testing.T) {
 	if m.fields()[m.step].key != "port" {
 		t.Fatal("back navigation trapped")
 	}
-	m.busy = false
 	m.values["port"] = "7946"
-	m.values["mode"] = "local"
+	m.values["connect"] = connectLocal
 	a, err = m.answers()
-	if err != nil || len(a.Network.Join) > 0 || a.Network.GossipPort != 0 || a.Network.BindAddr != "" {
+	if err != nil || len(a.Network.Join) > 0 || a.Network.GossipPort != 0 || a.Network.BindAddr != "" || a.Gateway.Mode != "off" {
 		t.Fatal("stale fields", a, err)
 	}
 	m.values["hostname"] = "bad\x1bname"
@@ -202,19 +206,435 @@ func strconvBool(v bool) string {
 	return "keep"
 }
 func TestWizardTailscaleAdvisory(t *testing.T) {
-	m := wizard(t)
-	m.values["mode"] = "tailscale"
-	m.probe = func(context.Context) error { return errors.New("daemon stopped") }
-	gotoField(t, m, "mode")
-	_, cmd := m.Update(key("enter"))
-	if cmd == nil || !m.busy {
-		t.Fatal("probe not asynchronous")
+	// The probe starts with the screen, never blocks a key, explains every
+	// state in place and only moves an untouched transport default.
+	for _, tc := range []struct {
+		name      string
+		report    channel.TailscaleReport
+		transport string
+	}{
+		{"usable", channel.TailscaleReport{State: channel.TailscaleUsable, Detail: "Tailscale is running", Address: "100.64.0.1"}, "tailscale"},
+		{"missing cli", channel.TailscaleReport{State: channel.TailscaleMissingCLI, Detail: "Tailscale CLI not found; install Tailscale or add its CLI to PATH"}, "lan"},
+		{"daemon stopped", channel.TailscaleReport{State: channel.TailscaleDaemonDown, Detail: "daemon stopped"}, "lan"},
+		{"needs login", channel.TailscaleReport{State: channel.TailscaleNeedsLogin, Detail: "not logged in"}, "lan"},
+		{"no address", channel.TailscaleReport{State: channel.TailscaleNoAddress, Detail: "no Tailscale IPv4 address"}, "lan"},
+		{"timeout", channel.TailscaleReport{State: channel.TailscaleProbeTimeout, Detail: "the Tailscale check timed out"}, "lan"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := wizard(t)
+			started := make(chan struct{})
+			m.probe = func(ctx context.Context) channel.TailscaleReport {
+				close(started)
+				if _, ok := ctx.Deadline(); !ok {
+					t.Error("probe without deadline")
+				}
+				return tc.report
+			}
+			cmd := m.Init()
+			if cmd == nil || m.busy || !m.probing {
+				t.Fatal("probe not started asynchronously")
+			}
+			gotoField(t, m, "connect")
+			if view := m.View(); !strings.Contains(view, "checking (read-only)") || !strings.Contains(view, "no service or pairing is needed") {
+				t.Fatal(view)
+			}
+			m.Update(key("down")) // keys are accepted while the probe runs
+			m.Update(key("up"))
+			m.Update(cmd())
+			<-started
+			if m.probing || m.tailscale == nil || m.values["transport"] != tc.transport || m.values["connect"] != connectLocal {
+				t.Fatalf("%+v %v", m.tailscale, m.values)
+			}
+			view := m.View()
+			if !strings.Contains(view, tc.report.Detail) && !strings.Contains(view, "100.64.0.1") {
+				t.Fatal(view)
+			}
+			if tc.report.Usable() != strings.Contains(view, "Recommended") {
+				t.Fatal(view)
+			}
+			if m.validate() != nil {
+				t.Fatal("probe became mandatory")
+			}
+			if again := m.Init(); again != nil {
+				t.Fatal("probe repeated")
+			}
+		})
 	}
-	m.Update(cmd())
-	if m.busy || !strings.Contains(m.warning, "daemon stopped") || m.validate() != nil {
-		t.Fatal("probe became mandatory")
+	t.Run("touched transport is not moved", func(t *testing.T) {
+		m := wizard(t)
+		m.values["connect"] = connectPaired
+		gotoField(t, m, "transport")
+		m.Update(key("down")) // lan -> tailscale -> ... user picked explicitly
+		picked := m.values["transport"]
+		m.Update(probeResult{channel.TailscaleReport{State: channel.TailscaleUsable, Address: "100.64.0.1"}})
+		if m.values["transport"] != picked {
+			t.Fatal("recommendation overrode an explicit choice")
+		}
+	})
+	t.Run("stored pairing transport is not moved", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		c, _ := config.Resolve(nil, func(string) string { return "" })
+		c.Gateway.Mode = "lan"
+		m := newSetupModel(c, filepath.Join(home, "config.toml"), nil, []bool{}, nil, false)
+		defer m.work.close()
+		m.Update(probeResult{channel.TailscaleReport{State: channel.TailscaleUsable, Address: "100.64.0.1"}})
+		if m.values["connect"] != connectPaired || m.values["transport"] != "lan" {
+			t.Fatalf("%v", m.values)
+		}
+	})
+}
+
+func TestWizardConnectionChoices(t *testing.T) {
+	m := wizard(t)
+	m.Update(probeResult{channel.TailscaleReport{State: channel.TailscaleMissingCLI, Detail: "Tailscale CLI not found"}})
+	keys := func() string {
+		var out []string
+		for _, f := range m.fields() {
+			out = append(out, f.key)
+		}
+		return strings.Join(out, ",")
+	}
+	if k := keys(); strings.Contains(k, "transport") || strings.Contains(k, "mode") || !strings.Contains(k, "connect,hostname") {
+		t.Fatal(k)
+	}
+	// Paired devices: transport and endpoints, MCP networking pinned to local.
+	gotoField(t, m, "connect")
+	m.Update(key("down"))
+	if m.values["connect"] != connectPaired || !strings.Contains(m.View(), "Requires the service") {
+		t.Fatal(m.View())
+	}
+	if k := keys(); !strings.Contains(k, "connect,transport,endpoints,hostname") {
+		t.Fatal(k)
+	}
+	m.Update(key("enter"))
+	if m.fields()[m.step].key != "transport" || m.values["transport"] != "lan" || !strings.Contains(m.View(), "private LAN interface") {
+		t.Fatal(m.View())
+	}
+	m.Update(key("enter"))
+	if m.fields()[m.step].key != "endpoints" || !strings.Contains(m.View(), "Automatic resolves the listen endpoint") {
+		t.Fatal(m.View())
+	}
+	a, err := m.answers()
+	if err != nil || a.Gateway.Mode != "lan" || a.Network.Mode != "local" || !a.Selected["gateway-mode"] || a.Gateway.Listen != "" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	review := m.review()
+	for _, want := range []string{"Connection: paired devices over lan", "Gateway endpoints: automatic (a private LAN interface", "Change: gateway pairing turns on over lan", `[gateway]`, `mode = "lan"`, `[network]`, `mode = "local"`, "Pairing: later; the exact commands are printed after apply"} {
+		if !strings.Contains(review, want) {
+			t.Fatalf("missing %q in\n%s", want, review)
+		}
+	}
+	m.values["service"] = "yes"
+	gotoField(t, m, "service")
+	if !strings.Contains(m.View(), "Paired devices need the running service") || !strings.Contains(m.review(), "Pairing: offered after the service") {
+		t.Fatal(m.View(), m.review())
+	}
+	// Custom endpoints are validated against the transport policy inline.
+	m.values["endpoints"] = "custom"
+	m.values["gw_listen"] = "8.8.8.8:7947"
+	gotoField(t, m, "gw_listen")
+	m.Update(key("enter"))
+	if m.err == nil || m.fields()[m.step].key != "gw_listen" {
+		t.Fatal("public endpoint advanced")
+	}
+	m.values["gw_listen"] = "192.168.1.2:7947"
+	m.Update(key("enter"))
+	if m.err != nil || m.fields()[m.step].key != "gw_advertise" {
+		t.Fatal(m.err)
+	}
+	if a, err = m.answers(); err != nil || a.Gateway.Listen != "192.168.1.2:7947" || !a.Selected["gateway-listen"] {
+		t.Fatalf("%+v %v", a, err)
+	}
+	if r := m.review(); !strings.Contains(r, "Gateway listen: 192.168.1.2:7947") || !strings.Contains(r, "Gateway advertise: same as listen") {
+		t.Fatal(r)
+	}
+	m.values["transport"] = "tailscale"
+	if m.validate() == nil {
+		t.Fatal("LAN endpoint accepted for Tailscale pairing")
+	}
+	m.values["endpoints"] = "automatic"
+	if err := m.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if r := m.review(); !strings.Contains(r, "Connection: paired devices over tailscale") || !strings.Contains(r, "Tailscale IPv4, port 7947") || !strings.Contains(r, "Tailscale CLI not found") {
+		t.Fatal(r)
+	}
+	gotoField(t, m, "transport")
+	if !strings.Contains(m.View(), "service will refuse to start") {
+		t.Fatal(m.View())
+	}
+	// Direct network: the legacy gossip fields, gateway off, token notice.
+	m.values["connect"] = connectDirect
+	if k := keys(); !strings.Contains(k, "connect,mode,bind,advertise,join_lan,mdns,hostname") || strings.Contains(k, "transport") {
+		t.Fatal(k)
+	}
+	gotoField(t, m, "mode")
+	if v := m.View(); !strings.Contains(v, "shared-token gossip") || !strings.Contains(v, "cluster token") {
+		t.Fatal(v)
+	}
+	if a, err = m.answers(); err != nil || a.Gateway.Mode != "off" || a.Network.Mode != "lan" || a.Selected["gateway-mode"] {
+		t.Fatalf("%+v %v", a, err)
+	}
+	if r := m.review(); !strings.Contains(r, "Connection: direct lan network") || !strings.Contains(r, "Change: MCP networking switches from local to lan gossip") || strings.Contains(r, "Pairing:") {
+		t.Fatal(r)
+	}
+	// Back from the transport field lands on the connection question again.
+	m.values["connect"] = connectPaired
+	gotoField(t, m, "transport")
+	m.Update(key("back"))
+	if m.fields()[m.step].key != "connect" || m.values["connect"] != connectPaired {
+		t.Fatal("back navigation lost the answer")
+	}
+	// Cancel before apply: nothing written.
+	_, cmd := m.Update(key("esc"))
+	if cmd == nil || m.applied {
+		t.Fatal("cancel")
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(m.path)); len(entries) != 0 {
+		t.Fatal("cancel wrote files")
 	}
 }
+
+// fakeAdmin answers the gateway control actions setup uses, without a service.
+type fakeAdmin struct {
+	calls     []string
+	failPeers int // peers queries that fail before the gateway is "ready"
+	invite    error
+	join      error
+	connected bool
+}
+
+func (f *fakeAdmin) call(_ context.Context, runtime string, cmd channel.GatewayCommand) (json.RawMessage, error) {
+	f.calls = append(f.calls, cmd.Action)
+	if runtime != "/run" {
+		return nil, errors.New("wrong runtime")
+	}
+	switch cmd.Action {
+	case "peers":
+		if f.failPeers > 0 {
+			f.failPeers--
+			return nil, errors.New("gateway service unavailable")
+		}
+		return json.RawMessage(`[{"host_id":"` + strings.Repeat("b", 64) + `","endpoint":"127.0.0.1:1","connected":` + strconv.FormatBool(f.connected) + `,"pending":false}]`), nil
+	case "invite":
+		if f.invite != nil {
+			return nil, f.invite
+		}
+		if cmd.Expires != setupInviteExpiry {
+			return nil, errors.New("unexpected expiry")
+		}
+		return json.RawMessage(`{"invitation":"rhz1_secret","id":"inv1"}`), nil
+	case "join":
+		if f.join != nil {
+			return nil, f.join
+		}
+		if cmd.Code != "rhz1_code" {
+			return nil, errors.New("unexpected code " + cmd.Code)
+		}
+		return json.RawMessage(`{"host_id":"` + strings.Repeat("b", 64) + `","status":"connected"}`), nil
+	}
+	return nil, errors.New("unexpected action")
+}
+
+// pairedWizard stages paired devices with the service accepted and a running
+// fake service, ready for the pairing phase.
+func pairedWizard(t *testing.T, admin *fakeAdmin) *setupModel {
+	t.Helper()
+	m := wizard(t)
+	m.values["connect"], m.values["transport"], m.values["service"] = connectPaired, "lan", "yes"
+	m.installService = func(context.Context, string) (serviceOutcome, error) {
+		return serviceOutcome{Installed: true, Running: true, Runtime: "/run"}, nil
+	}
+	m.admin = admin.call
+	return m
+}
+
+func TestWizardPairingPhase(t *testing.T) {
+	t.Run("declined service prints the commands for later", func(t *testing.T) {
+		admin := &fakeAdmin{}
+		m := pairedWizard(t, admin)
+		m.values["service"] = "no"
+		r := m.applyAnswers(context.Background())
+		joined := strings.Join(r.steps, "\n")
+		if r.err != nil || r.pairing != "" || len(admin.calls) != 0 || !strings.Contains(joined, "rhizome service install --config "+m.path) || !strings.Contains(joined, "rhizome invite") || !strings.Contains(joined, "rhizome join <invitation>") {
+			t.Fatal(r, admin.calls)
+		}
+	})
+	t.Run("service start failure stops before pairing", func(t *testing.T) {
+		admin := &fakeAdmin{}
+		m := pairedWizard(t, admin)
+		m.installService = func(context.Context, string) (serviceOutcome, error) {
+			return serviceOutcome{Installed: true}, errors.New("observer did not acquire its runtime lock")
+		}
+		r := m.applyAnswers(context.Background())
+		if r.err == nil || !strings.Contains(r.err.Error(), "completed steps remain") || r.pairing != "" || len(admin.calls) != 0 {
+			t.Fatal(r, admin.calls)
+		}
+		if _, err := os.Stat(m.path); err != nil {
+			t.Fatal("written configuration missing", err)
+		}
+	})
+	t.Run("already running service needs a restart first", func(t *testing.T) {
+		admin := &fakeAdmin{}
+		m := pairedWizard(t, admin)
+		m.installService = func(context.Context, string) (serviceOutcome, error) {
+			return serviceOutcome{Installed: true, Running: true, WasRunning: true, Runtime: "/run"}, nil
+		}
+		r := m.applyAnswers(context.Background())
+		joined := strings.Join(r.steps, "\n")
+		if r.err != nil || r.pairing != "" || len(admin.calls) != 0 || !strings.Contains(joined, "rhizome service restart") || !strings.Contains(joined, "rhizome invite") {
+			t.Fatal(r, admin.calls)
+		}
+	})
+	t.Run("gateway readiness timeout defers pairing", func(t *testing.T) {
+		admin := &fakeAdmin{failPeers: 1 << 20}
+		m := pairedWizard(t, admin)
+		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		defer cancel()
+		r := m.applyAnswers(ctx)
+		joined := strings.Join(r.steps, "\n")
+		if r.err != nil || r.pairing != "" || !strings.Contains(joined, "gateway not ready") || !strings.Contains(joined, "rhizome invite") || len(admin.calls) < 1 {
+			t.Fatal(r, len(admin.calls))
+		}
+		for _, c := range admin.calls {
+			if c != "peers" {
+				t.Fatal("enrollment attempted while not ready", admin.calls)
+			}
+		}
+	})
+	t.Run("ready after retries then invitation", func(t *testing.T) {
+		admin := &fakeAdmin{failPeers: 2}
+		m := pairedWizard(t, admin)
+		gotoField(t, m, "review")
+		_, cmd := m.Update(key("enter"))
+		m.Update(cmd())
+		if m.err != nil || !m.done || m.result.pairing != "/run" || m.pair.closed {
+			t.Fatalf("%+v %+v", m.result, m.pair)
+		}
+		view := m.View()
+		if !strings.Contains(view, "Pair this device now?") || !strings.Contains(view, "create an invitation") || !strings.Contains(view, "> later") {
+			t.Fatal(view)
+		}
+		if _, quit := m.Update(key("enter")); quit != nil && m.pair.closed == false {
+			t.Fatal("enter on later did not defer")
+		}
+		if !m.pair.closed || !strings.Contains(m.View(), "rhizome invite") || !strings.Contains(m.View(), "Setup completed. Enter exits.") {
+			t.Fatal(m.View())
+		}
+		if _, quit := m.Update(key("enter")); quit == nil {
+			t.Fatal("exit")
+		}
+		// Invitation path on a fresh model.
+		admin = &fakeAdmin{}
+		m = pairedWizard(t, admin)
+		m.Update(setupResult{steps: []string{"Wrote"}, pairing: "/run"})
+		m.Update(key("up"))
+		m.Update(key("up"))
+		_, cmd = m.Update(key("enter"))
+		if cmd == nil || !m.pair.busy {
+			t.Fatal("invite not dispatched")
+		}
+		if _, again := m.Update(key("enter")); again != nil {
+			t.Fatal("duplicate invite")
+		}
+		m.Update(cmd())
+		view = m.View()
+		if m.pair.busy || !m.pair.closed || !strings.Contains(view, "rhizome join rhz1_secret") || !strings.Contains(view, "no peer is connected yet") || strings.Contains(view, "connected.") {
+			t.Fatal(view)
+		}
+		if admin.calls[len(admin.calls)-1] != "invite" {
+			t.Fatal(admin.calls)
+		}
+	})
+	t.Run("join flow with retry and connection state", func(t *testing.T) {
+		admin := &fakeAdmin{join: errors.New("enrollment rejected (HTTP 404); invitation may be expired, revoked or consumed")}
+		m := pairedWizard(t, admin)
+		m.Update(setupResult{steps: []string{"Wrote"}, pairing: "/run"})
+		m.Update(key("up")) // later -> join
+		m.Update(key("enter"))
+		if !m.pair.editing || !strings.Contains(m.View(), "Invitation (paste the code") {
+			t.Fatal(m.View())
+		}
+		_, cmd := m.Update(key("enter")) // empty code never reaches the service
+		if cmd != nil || m.pair.err == nil || len(admin.calls) != 0 {
+			t.Fatal(m.pair.err, admin.calls)
+		}
+		for _, r := range "rhizome join rhz1_code" {
+			m.Update(key(string(r)))
+		}
+		_, cmd = m.Update(key("enter"))
+		if cmd == nil || !m.pair.busy {
+			t.Fatal("join not dispatched")
+		}
+		m.Update(cmd())
+		if m.pair.busy || m.pair.closed || m.pair.err == nil || !strings.Contains(m.View(), "expired, revoked or consumed") || !strings.Contains(m.View(), "retry here") {
+			t.Fatal(m.View())
+		}
+		if err := runSetupTUIResult(m); err == nil || !strings.Contains(err.Error(), "pairing failed after setup completed") {
+			t.Fatal(err)
+		}
+		// Retry with a fresh invitation on the same screen: pending, then connected.
+		admin.join = nil
+		m.pair.editing = true
+		_, cmd = m.Update(key("enter"))
+		m.Update(cmd())
+		if m.pair.err != nil || !m.pair.closed || !strings.Contains(m.View(), "Paired with host "+strings.Repeat("b", 64)+": trust saved, connection not established yet") {
+			t.Fatal(m.View())
+		}
+		if got := admin.calls[len(admin.calls)-2:]; got[0] != "join" || got[1] != "peers" {
+			t.Fatal(admin.calls)
+		}
+		if err := runSetupTUIResult(m); err != nil {
+			t.Fatal(err)
+		}
+		admin = &fakeAdmin{connected: true}
+		m = pairedWizard(t, admin)
+		m.Update(setupResult{steps: []string{"Wrote"}, pairing: "/run"})
+		m.Update(key("up"))
+		m.Update(key("enter"))
+		for _, r := range "rhz1_code" {
+			m.Update(key(string(r)))
+		}
+		_, cmd = m.Update(key("enter"))
+		m.Update(cmd())
+		if !strings.Contains(m.View(), ": connected.") {
+			t.Fatal(m.View())
+		}
+	})
+	t.Run("interrupted pairing is reported", func(t *testing.T) {
+		m := pairedWizard(t, &fakeAdmin{})
+		m.Update(setupResult{steps: []string{"Wrote"}, pairing: "/run"})
+		m.pair.busy = true
+		if err := runSetupTUIResult(m); err == nil || !strings.Contains(err.Error(), "pairing interrupted") {
+			t.Fatal(err)
+		}
+	})
+	t.Run("no pairing offer for local or fixed answers", func(t *testing.T) {
+		m := wizard(t)
+		m.values["service"] = "yes"
+		admin := &fakeAdmin{}
+		m.admin = admin.call
+		m.installService = func(context.Context, string) (serviceOutcome, error) {
+			return serviceOutcome{Installed: true, Running: true, Runtime: "/run"}, nil
+		}
+		r := m.applyAnswers(context.Background())
+		if r.err != nil || r.pairing != "" || len(admin.calls) != 0 || strings.Contains(strings.Join(r.steps, "\n"), "invite") {
+			t.Fatal(r)
+		}
+		m.Update(r)
+		if !m.pair.closed || !strings.Contains(m.View(), "Setup completed. Enter exits.") {
+			t.Fatal(m.View())
+		}
+	})
+}
+
+// runSetupTUIResult evaluates the exit status of a model whose program loop ended.
+func runSetupTUIResult(m *setupModel) error {
+	m.applied, m.done = true, true
+	return m.exitStatus(nil)
+}
+
 func TestPanelActionsAndReadOnly(t *testing.T) {
 	for _, ro := range []bool{false, true} {
 		calls := []string{}

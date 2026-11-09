@@ -76,7 +76,7 @@ lookback = "15d"
 		t.Fatal("original backup changed")
 	}
 	var out bytes.Buffer
-	if _, err := setupConfig(config.Config{}, path, nil, false, true, strings.NewReader("replace\n"+strings.Repeat("\n", 8)), &out, &out); err != nil {
+	if _, err := setupConfig(config.Config{}, path, nil, false, true, strings.NewReader("replace\n"+strings.Repeat("\n", 8)), &out, &out, tailscaleMissing); err != nil {
 		t.Fatal(err)
 	}
 	if after := storedDocument(t, path); !reflect.DeepEqual(before, after) {
@@ -142,13 +142,13 @@ func TestGatewayWizard(t *testing.T) {
 	for _, mode := range []string{"off", "lan", "tailscale"} {
 		t.Run(mode, func(t *testing.T) {
 			c := resolved(t)
-			input := mode + "\n"
+			input := "1\n"
 			if mode != "off" {
-				input += "\n\n"
+				input = "2\n" + mode + "\nn\n"
 			}
 			input += "\n\n\n\n"
 			var out bytes.Buffer
-			a, err := askConfig(prompter{in: bufioReader(input), out: &out}, c, func() error { return os.ErrNotExist })
+			a, err := askConfig(prompter{in: bufioReader(input), out: &out}, c, tailscaleStopped)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -178,7 +178,7 @@ func TestSetupRejectsInvalidStoredFile(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")
 			os.WriteFile(path, []byte(body), 0600)
 			var out bytes.Buffer
-			_, err := setupConfig(config.Config{}, path, &configAnswers{Network: config.Network{Mode: "local"}}, true, false, nil, &out, &out)
+			_, err := setupConfig(config.Config{}, path, &configAnswers{Network: config.Network{Mode: "local"}}, true, false, nil, &out, &out, nil)
 			if err == nil {
 				t.Fatal("accepted invalid stored file")
 			}
@@ -299,11 +299,22 @@ func TestSetupModelPreservesStoredSettings(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := newSetupModel(config.Config{}, path, nil, []bool{}, nil, false)
-	m.values["existing"], m.values["mode"], m.values["hostname"] = "replace", "local", ""
+	loaded, err := config.LoadForSetup(path, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newSetupModel(loaded, path, nil, []bool{}, nil, false)
+	// Defaults follow the stored file: paired devices over lan with its endpoint.
+	if m.values["connect"] != connectPaired || m.values["transport"] != "lan" || m.values["endpoints"] != "custom" || m.values["gw_listen"] != "127.0.0.1:7947" {
+		t.Fatalf("defaults %v", m.values)
+	}
+	m.values["existing"], m.values["hostname"] = "replace", ""
 	a, err := m.answers()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if a.Selected["gateway-mode"] || a.Selected["gateway-listen"] {
+		t.Fatalf("unchanged pairing selected: %v", a.Selected)
 	}
 	out, err := a.render()
 	if err != nil {
@@ -316,5 +327,24 @@ func TestSetupModelPreservesStoredSettings(t *testing.T) {
 	}
 	if strings.Contains(out, "hostname") {
 		t.Fatalf("blank hostname did not clear:\n%s", out)
+	}
+	// Choosing automatic endpoints drops the stored one; switching to only this
+	// device turns pairing off but keeps the history policy and says so.
+	m.values["endpoints"] = "automatic"
+	if a, err = m.answers(); err != nil || !a.Selected["gateway-listen"] {
+		t.Fatal(a, err)
+	}
+	if out, err = a.render(); err != nil || strings.Contains(out, "listen") || !strings.Contains(out, `mode = "lan"`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	m.values["connect"] = connectLocal
+	if a, err = m.answers(); err != nil || !a.Selected["gateway-mode"] {
+		t.Fatal(a, err)
+	}
+	if out, err = a.render(); err != nil || !strings.Contains(out, `mode = "off"`) || strings.Contains(out, "listen") || !strings.Contains(out, `lookback = "45d"`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if review := m.review(); !strings.Contains(review, "Change: gateway pairing turns off (was lan)") || !strings.Contains(review, "Connection: only this device") {
+		t.Fatal(review)
 	}
 }

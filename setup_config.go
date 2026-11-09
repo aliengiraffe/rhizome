@@ -129,11 +129,18 @@ func (a configAnswers) render() (string, error) {
 			delete(m, "advertise")
 		}
 	}
-	if selected("gateway-listen", g.Listen != "") {
-		set("gateway", "listen", g.Listen)
-	}
-	if selected("gateway-advertise", g.Advertise != "") {
-		set("gateway", "advertise", g.Advertise)
+	// A selected blank endpoint restores automatic selection by dropping the
+	// stored key, so a transport switch never carries the other transport's
+	// address along.
+	for _, f := range []struct{ key, flag, value string }{{"listen", "gateway-listen", g.Listen}, {"advertise", "gateway-advertise", g.Advertise}} {
+		if !selected(f.flag, f.value != "") {
+			continue
+		}
+		if f.value != "" {
+			set("gateway", f.key, f.value)
+		} else if m, ok := d["gateway"].(map[string]any); ok {
+			delete(m, f.key)
+		}
 	}
 	if a.AutoUpdate != nil && selected("auto-update", true) {
 		set("update", "enabled", *a.AutoUpdate)
@@ -287,79 +294,115 @@ func (p prompter) listDefault(question string, current []string) ([]string, erro
 }
 
 // askConfig runs the interactive questions. c supplies the displayed defaults;
-// tailscale reports whether Tailscale mode could start now.
-func askConfig(p prompter, c config.Config, tailscale func() error) (configAnswers, error) {
+// probe is the bounded read-only Tailscale detection, run once before the
+// connection question so its result can inform the choice without ever
+// pre-selecting networking. The connection model decides both tables at once:
+// paired devices pins MCP networking to local, direct network turns pairing
+// off, and every change from the stored file is explained before writing.
+func askConfig(p prompter, c config.Config, probe tailscaleProbe) (configAnswers, error) {
 	a := configAnswers{Selected: map[string]bool{}}
-	fmt.Fprintln(p.out, "Gateway pairing connects per-user services using invite/join; it requires local MCP networking. Legacy gossip instead shares a cluster token. History sharing is not enabled by setup.")
-	gatewayDefault := c.Gateway.Mode
-	if gatewayDefault == "" {
-		gatewayDefault = "off"
-	}
-	for {
-		mode, err := p.ask("Gateway pairing mode (off, lan, tailscale)", gatewayDefault)
-		if err != nil {
-			return a, err
-		}
-		if mode != "off" && mode != "lan" && mode != "tailscale" {
-			fmt.Fprintln(p.out, "Choose off, lan or tailscale.")
-			continue
-		}
-		a.Gateway.Mode = mode
-		a.Selected["gateway-mode"] = mode != gatewayDefault
-		break
-	}
-	if a.Gateway.Mode != "off" {
-		for _, f := range []struct {
-			question, def, key string
-			dest               *string
-		}{
-			{"Gateway listen IP:port (- for automatic)", c.Gateway.Listen, "gateway-listen", &a.Gateway.Listen},
-			{"Gateway advertise IP:port (- for automatic)", c.Gateway.Advertise, "gateway-advertise", &a.Gateway.Advertise},
-		} {
-			v, err := p.ask(f.question, f.def)
-			if err != nil {
-				return a, err
-			}
-			if v == "-" {
-				v = ""
-			}
-			*f.dest = v
-			a.Selected[f.key] = v != f.def
-		}
-		if a.Gateway.Mode == "tailscale" {
-			if err := tailscale(); err != nil {
-				fmt.Fprintf(p.out, "Warning: %v; the service will refuse to start until Tailscale is available.\n", err)
-			}
-		}
-	}
+	fmt.Fprintln(p.out, "Checking Tailscale (read-only; nothing is changed)…")
+	report := probeTailscaleBounded(context.Background(), probe)
+	fmt.Fprintln(p.out, tailscaleSummary(report))
+	storedChoice, storedTransport := storedConnection(c)
 	fmt.Fprint(p.out, `
-How will Rhizome be used on this device?
-  1) local      loopback MCP networking (gateway pairing is separate)
-  2) lan        legacy shared-token gossip on your local network
-  3) tailscale  legacy shared-token gossip on your tailnet
+How should this device connect?
+  1) only this device   `+connectExplanation(connectLocal)+`
+  2) paired devices     `+connectExplanation(connectPaired)+`
+  3) direct network     `+connectExplanation(connectDirect)+`
 `)
-	for a.Network.Mode == "" {
-		ans, err := p.ask("MCP network (gateway pairing requires local)", defaultString(c.Network.Mode, "local"))
+	choice := ""
+	for choice == "" {
+		ans, err := p.ask("Connection (1-3)", map[string]string{connectLocal: "1", connectPaired: "2", connectDirect: "3"}[storedChoice])
 		if err != nil {
 			return a, err
 		}
 		switch strings.ToLower(ans) {
-		case "1", "local":
-			a.Network.Mode = config.ModeLocal
-		case "2", "lan":
-			a.Network.Mode = config.ModeLAN
-		case "3", "tailscale":
-			a.Network.Mode = config.ModeTailscale
+		case "1", "local", "only this device":
+			choice = connectLocal
+		case "2", "paired", "paired devices":
+			choice = connectPaired
+		case "3", "direct", "direct network":
+			choice = connectDirect
 		default:
-			fmt.Fprintln(p.out, "Choose 1, 2 or 3 (or local, lan, tailscale).")
+			fmt.Fprintln(p.out, "Choose 1, 2 or 3.")
 		}
 	}
-	a.Selected["network"] = !c.Found || a.Network.Mode != defaultString(c.Network.Mode, "local")
+	plan := connectionPlan{Choice: choice, Stored: c, Tailscale: &report}
+	gatewayDefault := defaultString(c.Gateway.Mode, "off")
+	switch choice {
+	case connectPaired:
+		def := storedTransport
+		if storedChoice != connectPaired {
+			def = recommendedTransport(&report)
+		}
+		for plan.Transport == "" {
+			fmt.Fprintln(p.out, "Pairing transport: tailscale uses your tailnet ("+transportExplanation("tailscale", &report)+"); lan uses a private network interface ("+transportExplanation("lan", nil)+").")
+			ans, err := p.ask("Pairing transport (tailscale, lan)", def)
+			if err != nil {
+				return a, err
+			}
+			switch strings.ToLower(ans) {
+			case "tailscale", "lan":
+				plan.Transport = strings.ToLower(ans)
+			default:
+				fmt.Fprintln(p.out, "Choose tailscale or lan.")
+			}
+		}
+		if plan.Transport == "tailscale" && !report.Usable() {
+			fmt.Fprintf(p.out, "Warning: %s; the service will refuse to start until Tailscale is available.\n", report.Detail)
+		}
+		custom, err := p.yesNo("Set gateway listen/advertise endpoints manually (blank keeps automatic selection)", c.Gateway.Listen != "" || c.Gateway.Advertise != "")
+		if err != nil {
+			return a, err
+		}
+		if custom {
+			for _, f := range []struct {
+				question, def string
+				dest          *string
+			}{
+				{"Gateway listen IP:port (- for automatic)", c.Gateway.Listen, &plan.Listen},
+				{"Gateway advertise IP:port (- for automatic)", c.Gateway.Advertise, &plan.Advertise},
+			} {
+				v, err := p.ask(f.question, f.def)
+				if err != nil {
+					return a, err
+				}
+				if v == "-" {
+					v = ""
+				}
+				*f.dest = v
+			}
+		}
+	case connectDirect:
+		def := storedTransport
+		if storedChoice != connectDirect {
+			def = "lan"
+		}
+		for plan.Transport == "" {
+			ans, err := p.ask("Direct network (lan: shared-token gossip on your local network; tailscale: on your tailnet)", def)
+			if err != nil {
+				return a, err
+			}
+			switch strings.ToLower(ans) {
+			case "lan", "tailscale":
+				plan.Transport = strings.ToLower(ans)
+			default:
+				fmt.Fprintln(p.out, "Choose lan or tailscale.")
+			}
+		}
+	}
+	a.Gateway = config.Gateway{Mode: plan.gatewayMode(), Listen: plan.Listen, Advertise: plan.Advertise}
+	a.Selected["gateway-mode"] = a.Gateway.Mode != gatewayDefault
+	a.Selected["gateway-listen"] = a.Gateway.Listen != c.Gateway.Listen
+	a.Selected["gateway-advertise"] = a.Gateway.Advertise != c.Gateway.Advertise
+	a.Network.Mode = plan.networkMode()
+	a.Selected["network"] = !c.Found || a.Network.Mode != defaultString(c.Network.Mode, config.ModeLocal)
 	if a.Network.Mode == c.Network.Mode {
 		a.Network = c.Network
 	}
-	if a.Gateway.Mode != "off" && a.Network.Mode != "local" {
-		return a, errors.New("gateway pairing requires --network local; disable pairing explicitly with --gateway-mode off to use legacy gossip")
+	for _, line := range plan.lines()[1:] {
+		fmt.Fprintln(p.out, line)
 	}
 	n := &a.Network
 	switch n.Mode {
@@ -387,8 +430,8 @@ How will Rhizome be used on this device?
 			n.MDNS = &mdns
 		}
 	case config.ModeTailscale:
-		if err := tailscale(); err != nil {
-			fmt.Fprintf(p.out, "Warning: %v\nThe configuration will still be written, but `rhizome mcp` will refuse to start in this mode until Tailscale is running.\n", err)
+		if !report.Usable() {
+			fmt.Fprintf(p.out, "Warning: %s\nThe configuration will still be written, but `rhizome mcp` will refuse to start in this mode until Tailscale is running.\n", report.Detail)
 		}
 		port, err := p.ask("Well-known gossip port", defaultString(strconv.Itoa(n.GossipPort), "7946"))
 		if err != nil {
@@ -491,13 +534,4 @@ func confirmExisting(p prompter, path string) (replace bool, err error) {
 		return false, err
 	}
 	return strings.EqualFold(ans, "replace"), nil
-}
-
-// tailscaleCheck bounds the advisory Tailscale probe.
-func tailscaleCheck(check func(context.Context) error) func() error {
-	return func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		return check(ctx)
-	}
 }

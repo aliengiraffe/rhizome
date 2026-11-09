@@ -501,10 +501,10 @@ func setup(args []string) error {
 		fmt.Println("nothing selected; no agent installed")
 	}
 	// Configuration first: directory answers decide where agents are installed.
-	// One buffered reader serves the configuration questions and the service
-	// question so no answer is lost between them.
+	// One buffered reader serves the configuration questions, the service
+	// question and the pairing phase so no answer is lost between them.
 	stdin := bufio.NewReader(os.Stdin)
-	wizard, err := setupConfig(c, path, answers, *replaceConfig, tty, stdin, os.Stdout, os.Stderr)
+	wizard, err := setupConfig(c, path, answers, *replaceConfig, tty, stdin, os.Stdout, os.Stderr, channel.ProbeTailscale)
 	if err != nil {
 		return err
 	}
@@ -534,11 +534,59 @@ func setup(args []string) error {
 			}
 		}
 	}
-	if !wizard {
+	if !wizard.asked {
 		return nil
 	}
-	return offerService(prompter{in: stdin, out: os.Stdout}, path, os.Stdout, plainServiceInstaller)
+	p := prompter{in: stdin, out: os.Stdout}
+	outcome, accepted, err := offerService(p, path, os.Stdout, plainServiceInstaller)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	return plainPairing(ctx, p, path, wizard, outcome, accepted, os.Stdout, channel.GatewayAdmin, gatewayReadyWait)
 }
+
+// plainPairing is the line-prompt pairing phase after the service question.
+// It does nothing unless the saved file enables gateway pairing; it offers
+// invite/join only against a service that was started by this run or already
+// ran the kept configuration, and whose gateway answers within wait; every
+// other case prints the exact commands for later and succeeds.
+func plainPairing(ctx context.Context, p prompter, path string, wizard setupConfigResult, outcome serviceOutcome, accepted bool, out io.Writer, admin gatewayAdmin, wait time.Duration) error {
+	saved, err := config.Resolve(map[string]string{"config": path}, func(string) string { return "" })
+	if err != nil {
+		return err
+	}
+	if saved.Gateway.Mode == "" || saved.Gateway.Mode == "off" {
+		return nil
+	}
+	switch {
+	case !accepted || !outcome.Running:
+		for _, line := range pairingNextSteps(path, false) {
+			fmt.Fprintln(out, line)
+		}
+		return nil
+	case outcome.WasRunning && wizard.wrote:
+		fmt.Fprintln(out, "The service was already running with the previous configuration; run `rhizome service restart` to apply the new one, then pair:")
+		for _, line := range pairingNextSteps(path, true)[1:] {
+			fmt.Fprintln(out, line)
+		}
+		return nil
+	}
+	if err := waitGatewayReady(ctx, outcome.Runtime, admin, wait); err != nil {
+		fmt.Fprintf(out, "Service running but %v; check `rhizome service status` and pair once it answers:\n", err)
+		for _, line := range pairingNextSteps(path, true)[1:] {
+			fmt.Fprintln(out, line)
+		}
+		return nil
+	}
+	return offerPairing(ctx, p, outcome.Runtime, path, out, admin)
+}
+
+// setupConfigResult reports what setupConfig did: whether the interactive
+// questions ran (so the service and pairing phases follow) and whether the
+// file at path was written by this run.
+type setupConfigResult struct{ asked, wrote bool }
 
 // resolveForSetup resolves configuration like every other command, except that
 // an explicitly selected file that does not exist yet is allowed: setup is the
@@ -574,65 +622,69 @@ func resolveForSetup(opts *flag.FlagSet, quiet bool) (config.Config, string, boo
 // otherwise a terminal gets the interactive questions and anything else leaves
 // configuration alone and says so. It reports whether the interactive questions
 // ran and a valid file exists at path, whether created, replaced, or kept; the
-// caller then offers the background service once agents are installed.
-func setupConfig(c config.Config, path string, answers *configAnswers, replace, tty bool, in io.Reader, out, errOut io.Writer) (bool, error) {
-	c, err := config.LoadForSetup(path, func(string) string { return "" })
+// caller then offers the background service once agents are installed. probe
+// is the read-only Tailscale detection the questions start with.
+func setupConfig(c config.Config, path string, answers *configAnswers, replace, tty bool, in io.Reader, out, errOut io.Writer, probe tailscaleProbe) (r setupConfigResult, err error) {
+	c, err = config.LoadForSetup(path, func(string) string { return "" })
 	if err != nil {
-		return false, err
+		return r, err
 	}
 	wizard := answers == nil
 	p := prompter{in: bufio.NewReader(in), out: out}
 	_, statErr := os.Lstat(path)
 	exists := statErr == nil
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-		return false, statErr
+		return r, statErr
 	}
 	stored, err := storedConfig(path)
 	if err != nil {
-		return false, err
+		return r, err
 	}
 	if wizard {
 		if !tty {
 			fmt.Fprintln(errOut, "configuration not written: no terminal for the questions; pass --network local|lan|tailscale or --gateway-mode off|lan|tailscale")
-			return false, nil
+			return r, nil
 		}
+		r.asked = true
 		if exists {
 			if replace, err = confirmExisting(p, path); err != nil {
-				return false, err
+				return r, err
 			}
 		}
 		if !exists || replace {
-			a, err := askConfig(p, c, tailscaleCheck(channel.CheckTailscale))
+			a, err := askConfig(p, c, probe)
 			if err != nil {
-				return false, err
+				return r, err
 			}
 			answers = &a
 		}
 	} else if exists && !replace {
 		fmt.Fprintf(errOut, "configuration not written: %s already exists; pass --replace-config to back it up and replace it\n", path)
-		return false, nil
+		return r, nil
 	}
 	if answers == nil {
 		fmt.Fprintf(out, "kept existing %s\n", path)
-		return wizard, nil
+		return r, nil
 	}
 	answers.Stored = stored
 	body, err := answers.render()
 	if err != nil {
-		return false, err
+		return r, err
 	}
 	backup, err := writeConfig(path, body, exists && replace, time.Now())
 	if err != nil {
-		return false, err
+		return r, err
 	}
+	r.wrote = true
 	if backup != "" {
 		fmt.Fprintf(out, "backed up previous configuration to %s\n", backup)
 	}
 	saved, err := config.Resolve(map[string]string{"config": path}, func(string) string { return "" })
 	if err != nil {
-		return false, err
+		return r, err
 	}
 	fmt.Fprintf(out, "wrote %s (network mode: %s; gateway mode: %s)\n", path, defaultString(saved.Network.Mode, "local"), saved.Gateway.Mode)
+	fmt.Fprintln(out, connectionSummary(saved))
 	fmt.Fprintln(out, "Restart the service and MCP processes to apply changes. Configuration saved; peer connectivity has not been verified. History policy is unchanged.")
 	if answers.RuntimeDir != "" && answers.RuntimeDir != c.RuntimeDir {
 		fmt.Fprintln(out, "Runtime directory changed: existing tokens, host identity and pairings remain in the old directory; keep service and MCP runtime scopes aligned.")
@@ -640,25 +692,27 @@ func setupConfig(c config.Config, path string, answers *configAnswers, replace, 
 	if !wizard && (saved.Gateway.Mode == "tailscale" || saved.Network.Mode == "tailscale") {
 		fmt.Fprintln(out, "Tailscale requires a running CLI/daemon with an IP; startup fails closed if unavailable.")
 	}
-	return wizard, nil
+	return r, nil
 }
 
 // offerService asks the opt-in service question after a valid configuration
 // exists at path. Declining leaves the service untouched; accepting installs
-// and starts it and reports success only once the observer is running.
-func offerService(p prompter, path string, out io.Writer, install serviceInstaller) error {
+// and starts it and reports success only once the observer is running. It
+// returns the outcome and whether the user accepted, so the caller can decide
+// whether pairing may follow.
+func offerService(p prompter, path string, out io.Writer, install serviceInstaller) (serviceOutcome, bool, error) {
 	accept, err := p.yesNo("Install and start the background service now", false)
 	if err != nil {
-		return err
+		return serviceOutcome{}, false, err
 	}
 	if !accept {
 		fmt.Fprintf(out, "background service unchanged; run `rhizome service install --config %s` later\n", path)
-		return nil
+		return serviceOutcome{}, false, nil
 	}
 	outcome, err := install(context.Background(), path)
 	if err != nil {
-		return err
+		return outcome, true, err
 	}
 	fmt.Fprintf(out, "background service installed and running (configuration %s, runtime %s)\n", path, outcome.Runtime)
-	return nil
+	return outcome, true, nil
 }

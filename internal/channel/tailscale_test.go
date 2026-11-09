@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"slices"
@@ -392,4 +393,96 @@ func TestTailscaleModeIsolation(t *testing.T) {
 	if _, err := stranger.members.Join([]string{target}); err == nil {
 		t.Fatal("stranger joined with the wrong key")
 	}
+}
+
+// blockingTailscale answers only when its context ends, like a hung CLI.
+type blockingTailscale struct{}
+
+func (blockingTailscale) Status(ctx context.Context) (*tailscaleStatus, error) {
+	<-ctx.Done()
+	return nil, fmt.Errorf("%w: %w", errTailscaleDaemon, ctx.Err())
+}
+
+func TestProbeTailscale(t *testing.T) {
+	running, err := parseTailscaleStatus([]byte(statusFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withState := func(state string) *tailscaleStatus {
+		st, err := parseTailscaleStatus([]byte(strings.Replace(statusFixture, `"BackendState": "Running"`, `"BackendState": "`+state+`"`, 1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	noAddress, _ := parseTailscaleStatus([]byte(strings.Replace(statusFixture, `"TailscaleIPs": ["100.93.74.31", "fd7a:115c:a1e0::df39:4a20"]`, `"TailscaleIPs": []`, 1)))
+	publicAddress, _ := parseTailscaleStatus([]byte(strings.Replace(statusFixture, `"100.93.74.31"`, `"8.8.8.8"`, 1)))
+	_, parseErr := parseTailscaleStatus([]byte("not json"))
+	if parseErr == nil || !errors.Is(parseErr, errTailscaleParse) {
+		t.Fatalf("parse error not classified: %v", parseErr)
+	}
+	cases := []struct {
+		name    string
+		client  tailscaleClient
+		want    TailscaleState
+		address string
+		detail  string
+	}{
+		{"usable", &fakeTailscale{st: running}, TailscaleUsable, "100.93.74.31", "running"},
+		{"absent cli", &fakeTailscale{err: errTailscaleCLIMissing}, TailscaleMissingCLI, "", "install Tailscale"},
+		{"daemon unreachable", &fakeTailscale{err: fmt.Errorf("%w: %w: failed to connect to local tailscaled", errTailscaleDaemon, errors.New("exit status 1"))}, TailscaleDaemonDown, "", "did not answer"},
+		{"stopped", &fakeTailscale{st: withState("Stopped")}, TailscaleDaemonDown, "", `state "Stopped"`},
+		{"no state", &fakeTailscale{st: withState("NoState")}, TailscaleDaemonDown, "", `state "NoState"`},
+		{"hostile state", &fakeTailscale{st: withState(`\u001b[2J` + strings.Repeat("x", 40))}, TailscaleDaemonDown, "", `state "Jxxxxxxxxxxxxxxxxxxxxxxx"`},
+		{"needs login", &fakeTailscale{st: withState("NeedsLogin")}, TailscaleNeedsLogin, "", "not logged in"},
+		{"needs machine auth", &fakeTailscale{st: withState("NeedsMachineAuth")}, TailscaleNeedsLogin, "", "approved"},
+		{"missing address", &fakeTailscale{st: noAddress}, TailscaleNoAddress, "", "no Tailscale IPv4"},
+		{"address outside tailnet range", &fakeTailscale{st: publicAddress}, TailscaleNoAddress, "", "no Tailscale IPv4"},
+		{"malformed response", &fakeTailscale{err: parseErr}, TailscaleProbeError, "", "unreadable"},
+		{"other failure", &fakeTailscale{err: errors.New("boom")}, TailscaleProbeError, "", "check failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := probeTailscale(context.Background(), tc.client)
+			if r.State != tc.want || r.Address != tc.address || !strings.Contains(r.Detail, tc.detail) {
+				t.Fatalf("%+v", r)
+			}
+			if r.Usable() != (tc.want == TailscaleUsable) {
+				t.Fatal("usable mismatch")
+			}
+			if strings.Contains(r.Detail, "nicos-macbook") || strings.Contains(r.Detail, "100.114.80.29") || strings.Contains(r.Detail, "tailscaled") || strings.ContainsAny(r.Detail, "\x1b{}") {
+				t.Fatalf("detail leaks daemon output or peers: %q", r.Detail)
+			}
+		})
+	}
+	t.Run("timeout", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		if r := probeTailscale(ctx, blockingTailscale{}); r.State != TailscaleProbeTimeout || !strings.Contains(r.Detail, "timed out") {
+			t.Fatalf("%+v", r)
+		}
+	})
+	t.Run("cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan TailscaleReport, 1)
+		go func() { done <- probeTailscale(ctx, blockingTailscale{}) }()
+		cancel()
+		select {
+		case r := <-done:
+			if r.State != TailscaleProbeError || !strings.Contains(r.Detail, "cancelled") {
+				t.Fatalf("%+v", r)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("probe ignored cancellation")
+		}
+	})
+	t.Run("production probe is bounded", func(t *testing.T) {
+		// Whatever this machine has installed, the probe returns a classified
+		// report without panicking and without leaking the environment.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if r := ProbeTailscale(ctx); r.State == "" || r.Detail == "" {
+			t.Fatalf("%+v", r)
+		}
+	})
 }

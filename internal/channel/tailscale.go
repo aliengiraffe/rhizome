@@ -95,8 +95,17 @@ func findTailscaleBinary(goos string, lookPath func(string) (string, error), exi
 			}
 		}
 	}
-	return "", errors.New("tailscale CLI not found on PATH; install Tailscale or add its CLI to PATH")
+	return "", errTailscaleCLIMissing
 }
+
+// Sentinel causes of a failed status query, so the setup probe can explain a
+// missing CLI, an unreachable daemon and an unreadable response differently.
+// Messages are unchanged from before they were classified.
+var (
+	errTailscaleCLIMissing = errors.New("tailscale CLI not found on PATH; install Tailscale or add its CLI to PATH")
+	errTailscaleDaemon     = errors.New("tailscale status")
+	errTailscaleParse      = errors.New("parse tailscale status")
+)
 
 // tailscaleEnv sets TERM when it is unset. The macOS app binary acts as the GUI
 // without it (as under launchd) and prints a GUI error instead of status JSON.
@@ -121,7 +130,10 @@ func (tailscaleCLI) Status(ctx context.Context) (*tailscaleStatus, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("tailscale status: %w: %s", err, strings.TrimSpace(stderr.String()))
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%w: %w", errTailscaleDaemon, ctx.Err())
+		}
+		return nil, fmt.Errorf("%w: %w: %s", errTailscaleDaemon, err, strings.TrimSpace(stderr.String()))
 	}
 	return parseTailscaleStatus(out)
 }
@@ -145,7 +157,7 @@ func parseTailscaleStatus(raw []byte) (*tailscaleStatus, error) {
 		}
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, fmt.Errorf("parse tailscale status: %w", err)
+		return nil, fmt.Errorf("%w: %w", errTailscaleParse, err)
 	}
 	convert := func(n *node) tailscalePeer {
 		p := tailscalePeer{HostName: n.HostName, DNSName: n.DNSName, Online: n.Online}
@@ -372,11 +384,88 @@ func (n *Node) tailnet(interval time.Duration) {
 	}
 }
 
-// CheckTailscale reports whether Tailscale mode could start now: the CLI is
-// installed, the daemon is running and this device has a Tailscale address. It
-// is advisory (used by `rhizome setup`); startup performs the same check and
-// fails closed.
-func CheckTailscale(ctx context.Context) error {
-	_, err := tailscaleSelf(ctx, tailscaleCLI{})
-	return err
+// TailscaleState classifies what a setup-time probe learned about the local
+// Tailscale installation. Only TailscaleUsable means Tailscale transports
+// could start now; every other state explains what is missing.
+type TailscaleState string
+
+// Probe states, in the order setup explains them.
+const (
+	TailscaleUsable       TailscaleState = "usable"
+	TailscaleMissingCLI   TailscaleState = "missing_cli"
+	TailscaleDaemonDown   TailscaleState = "daemon_unavailable"
+	TailscaleNeedsLogin   TailscaleState = "needs_login"
+	TailscaleNoAddress    TailscaleState = "no_address"
+	TailscaleProbeError   TailscaleState = "error"
+	TailscaleProbeTimeout TailscaleState = "timeout"
+)
+
+// TailscaleReport is the advisory result of ProbeTailscale: a state, a fixed
+// explanation with the next step for the user, and, when usable, this
+// device's own Tailscale IPv4. It never carries raw status output, daemon
+// error text or the names or addresses of other tailnet devices.
+type TailscaleReport struct {
+	State   TailscaleState
+	Detail  string
+	Address string
+}
+
+// Usable reports whether Tailscale transports could start now.
+func (r TailscaleReport) Usable() bool { return r.State == TailscaleUsable }
+
+// ProbeTailscale is the read-only detection `rhizome setup` runs before the
+// connection question. It is advisory: startup performs the same check through
+// tailscaleSelf and fails closed. The caller bounds ctx; the CLI query itself
+// is limited to ten seconds.
+func ProbeTailscale(ctx context.Context) TailscaleReport {
+	return probeTailscale(ctx, tailscaleCLI{})
+}
+
+func probeTailscale(ctx context.Context, client tailscaleClient) TailscaleReport {
+	st, err := client.Status(ctx)
+	switch {
+	case err == nil:
+	case errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded):
+		return TailscaleReport{State: TailscaleProbeTimeout, Detail: "the Tailscale check timed out; Tailscale may be installed but is not answering"}
+	case errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled):
+		return TailscaleReport{State: TailscaleProbeError, Detail: "the Tailscale check was cancelled"}
+	case errors.Is(err, errTailscaleCLIMissing):
+		return TailscaleReport{State: TailscaleMissingCLI, Detail: "Tailscale CLI not found; install Tailscale or add its CLI to PATH"}
+	case errors.Is(err, errTailscaleParse):
+		return TailscaleReport{State: TailscaleProbeError, Detail: "`tailscale status` returned an unreadable response; check the Tailscale installation"}
+	case errors.Is(err, errTailscaleDaemon):
+		return TailscaleReport{State: TailscaleDaemonDown, Detail: "the Tailscale daemon did not answer; start Tailscale and retry"}
+	default:
+		return TailscaleReport{State: TailscaleProbeError, Detail: "the Tailscale check failed; run `tailscale status` to inspect"}
+	}
+	switch st.BackendState {
+	case "Running":
+	case "NeedsLogin", "NeedsMachineAuth":
+		return TailscaleReport{State: TailscaleNeedsLogin, Detail: "Tailscale is installed but this device is not logged in or approved; run `tailscale up` (or log in from the app) and retry"}
+	default:
+		return TailscaleReport{State: TailscaleDaemonDown, Detail: fmt.Sprintf("Tailscale is not running (state %q); run `tailscale up`", backendLabel(st.BackendState))}
+	}
+	ip := st.Self.ipv4()
+	if ip == nil || !tailscaleIP(ip) {
+		return TailscaleReport{State: TailscaleNoAddress, Detail: "Tailscale is running but this device has no Tailscale IPv4 address; check the device in the tailnet admin console"}
+	}
+	return TailscaleReport{State: TailscaleUsable, Detail: "Tailscale is running", Address: ip.String()}
+}
+
+// backendLabel bounds the daemon's state string for display: letters only, at
+// most 24, "unknown" when nothing remains.
+func backendLabel(state string) string {
+	var b strings.Builder
+	for _, r := range state {
+		if b.Len() >= 24 {
+			break
+		}
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "unknown"
+	}
+	return b.String()
 }

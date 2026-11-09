@@ -39,9 +39,19 @@ class Terminal:
         if select.select([self.master], [], [], 0.05)[0]:
             self.output += os.read(self.master, 65536)
 
+    def seen(self, text):
+        """Whether text appeared since the last send, also across soft wraps.
+
+        The UI hard-wraps at the terminal width, which splits words with a bare
+        CR LF; real line ends carry an erase-to-end-of-line sequence first.
+        """
+        raw = self.output[self.mark:]
+        flat = raw.replace(b"\x1b[K\r\n", b"\n").replace(b"\r\n", b"")
+        return text.encode() in raw or text.encode() in flat
+
     def expect(self, text):
         deadline = time.monotonic() + 5
-        while text.encode() not in self.output[self.mark:]:
+        while not self.seen(text):
             self.read()
             if time.monotonic() > deadline:
                 raise AssertionError((text, self.output[self.mark:]))
@@ -77,8 +87,16 @@ def main():
                if not k.startswith("RHIZOME_") and k not in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_CONFIG_HOME")}
         env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / "config"), TERM="xterm-256color", NO_COLOR="1")
         config = home / ".rhizome" / "config.toml"
+        # The connection question comes first; the Tailscale check is advisory
+        # (its real result on this machine is not asserted) and never blocks.
         ui = Terminal(["setup", "--agents", ","], env)
-        ui.expect("Network mode")
+        ui.expect("How should this device connect?")
+        ui.expect("only this device")
+        ui.send(b"\x1b[B"); ui.expect("Requires the service")  # paired devices explained
+        ui.send(b"\r"); ui.expect("Pairing transport")
+        ui.send(b"\x1b[Z"); ui.expect("How should this device connect?")  # back keeps the answer
+        ui.send(b"\x1b[B"); ui.expect("shared-token gossip")  # direct network explained
+        ui.send(b"\x1b[B"); ui.expect("no service or pairing is needed")  # wraps to only this device
         ui.send(b"\r"); ui.expect("Hostname override")
         ui.send(b"staged\r"); ui.expect("Install verified updates automatically")
         ui.send(b"\r"); ui.expect("Customize directories")
@@ -89,13 +107,35 @@ def main():
         assert not config.exists(), "cancel created configuration"
         assert not list(home.rglob("SKILL.md")), "cancel installed skills"
 
-        ui = Terminal(["setup", "--agents", ","], env)
-        ui.expect("Network mode")
-        for expected in ("Hostname override", "Install verified updates automatically", "Customize directories", "Install and start", "Enter applies"):
+        # Paired devices without the service: review shows the gateway transport
+        # and local MCP networking; apply prints the pairing commands for later.
+        ui = Terminal(["setup", "--agents", ","], env, width=120)
+        ui.expect("How should this device connect?")
+        ui.send(b"\x1b[B"); ui.expect("paired devices")
+        ui.send(b"\r"); ui.expect("Pairing transport")
+        ui.send(b"\r"); ui.expect("Gateway endpoints")
+        for expected in ("Hostname override", "Install verified updates automatically", "Customize directories", "Install and start"):
             ui.send(b"\r"); ui.expect(expected)
+        ui.expect("Paired devices need the running service")
+        ui.send(b"\r"); ui.expect("Enter applies")
+        for expected in ("Connection: paired devices over ", "[gateway]", "[network]", 'mode = "local"', "Pairing: later", "Change: gateway pairing turns on"):
+            assert ui.seen(expected), (expected, ui.output[ui.mark:])
         ui.send(b"\r"); ui.expect("Setup completed")
+        ui.expect("rhizome invite")
         ui.send(b"\r"); ui.finish()
         assert config.stat().st_mode & 0o777 == 0o600
+        stored = config.read_text()
+        assert 'mode = "local"' in stored and ('mode = "lan"' in stored or 'mode = "tailscale"' in stored), stored
+        assert "token" not in stored and "rhz1_" not in stored, stored
+
+        # Local-only run on top of the paired file: keep leaves it byte-identical.
+        ui = Terminal(["setup", "--agents", ","], env)
+        ui.expect("Existing config")
+        ui.send(b"\r"); ui.expect("Install and start")
+        ui.send(b"\r"); ui.expect("Keep existing configuration")
+        ui.send(b"\r"); ui.expect("Setup completed")
+        ui.send(b"\r"); ui.finish()
+        assert config.read_text() == stored, "keep rewrote the file"
 
         for index, args in enumerate((["service"], ["service", "status", "--tui"])):
             ui = Terminal(args, env)
@@ -171,11 +211,15 @@ def main():
             result = subprocess.run([str(BINARY), *args], env=env, capture_output=True, timeout=5)
             assert result.returncode != 0 and b"requires terminal" in result.stderr
             assert b"\x1b" not in result.stdout + result.stderr
-        result = subprocess.run([str(BINARY), "setup", "--plain", "--agents", ",", "--network", "local"],
+        # Noninteractive flags on a separate fresh file: no probe, no service, no enrollment.
+        plain = home / "plain.toml"
+        result = subprocess.run([str(BINARY), "setup", "--plain", "--agents", ",", "--config", str(plain), "--network", "local", "--gateway-mode", "off"],
                                 env=env, capture_output=True, timeout=5)
-        assert result.returncode == 0 and b"\x1b" not in result.stdout + result.stderr
+        assert result.returncode == 0 and b"\x1b" not in result.stdout + result.stderr, result
+        assert b"Connection: only this device" in result.stdout and b"Pair" not in result.stdout and b"Tailscale" not in result.stdout, result.stdout
+        assert 'mode = "off"' in plain.read_text() and config.read_text() == stored
         uninstall_checks(home, env, config)
-    print("TUI PTY checks passed: setup, service, peers, cancellation, resize, terminal restoration, JSON, redirection, uninstall")
+    print("TUI PTY checks passed: setup (connection choices, pairing review, keep), service, peers, cancellation, resize, terminal restoration, JSON, redirection, uninstall")
 
 
 def uninstall_checks(home, env, config):
@@ -191,9 +235,11 @@ def uninstall_checks(home, env, config):
     claude_json, settings = home / ".claude.json", home / ".claude" / "settings.json"
     codex_toml, codex_hooks = home / ".codex" / "config.toml", home / ".codex" / "hooks.json"
     opencode = home / "config" / "opencode"
+    pi = home / ".pi" / "agent"
     skills = [home / ".claude" / "skills" / "rhizome-collab", home / ".codex" / "skills" / "rhizome-collab",
-              opencode / "skills" / "rhizome-collab"]
-    plugins = [opencode / "plugins" / "rhizome.js", opencode / "plugins" / "rhizome-tui" / "tui.js"]
+              opencode / "skills" / "rhizome-collab", pi / "skills" / "rhizome-collab"]
+    plugins = [opencode / "plugins" / "rhizome.js", opencode / "plugins" / "rhizome-tui" / "tui.js",
+               pi / "extensions" / "rhizome" / "index.js", pi / "extensions" / "rhizome" / "rhizome.json"]
     run(["setup", "--plain", "--agents", "all"])
     assert all(p.is_dir() for p in skills) and all(p.is_file() for p in plugins)
     assert "rhizome" in json.loads(claude_json.read_text())["mcpServers"]
@@ -203,10 +249,10 @@ def uninstall_checks(home, env, config):
     run(["uninstall"], ok=False)
     run(["uninstall", "--agents", "all"], ok=False)
     out = run(["uninstall", "--all", "--dry-run"])
-    assert out.count("would remove") == 9 and "service: not installed" in out and "backup" not in out, out
+    assert out.count("would remove") == 12 and "service: not installed" in out and "backup" not in out, out
     assert all(p.is_dir() for p in skills) and not list(home.rglob("*.bak-*")), "dry run changed files"
     out = run(["uninstall", "--all", "--yes"])
-    assert "service: not installed" in out and out.count("removed") >= 9 and "token" not in out, out
+    assert "service: not installed" in out and out.count("removed") >= 12 and "token" not in out, out
     assert not any(p.exists() for p in skills + plugins) and not (opencode / "plugins" / "rhizome-tui").exists()
     assert "rhizome" not in json.loads(claude_json.read_text())["mcpServers"]
     assert json.loads(settings.read_text())["hooks"] == {} and json.loads(codex_hooks.read_text())["hooks"] == {}
@@ -217,7 +263,7 @@ def uninstall_checks(home, env, config):
     out = run(["uninstall", "--agents", "all", "--yes"])
     assert "removed" not in out and "backup" not in out and sorted(home.rglob("*.bak-*")) == backups, out
     out = run(["setup", "--plain", "--agents", "all"])
-    assert out.count("skill: installed") == 3 and all(p.is_file() for p in plugins), out
+    assert out.count("skill: installed") == 4 and all(p.is_file() for p in plugins), out
 
 
 if __name__ == "__main__":
