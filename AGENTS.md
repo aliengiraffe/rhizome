@@ -5,7 +5,8 @@
 Rhizome is a Go MCP bridge for local coding agent sessions (Claude Code, Codex,
 OpenCode and Pi). It binds verified session identities, collects selected activity,
 discovers peers through memberlist, and delivers events over authenticated
-loopback gRPC. Claude uses channel notifications; Codex uses per-thread nodes and
+loopback gRPC. Claude uses channel notifications (or hook `additionalContext` with
+`claude.delivery = "hooks"`); Codex uses per-thread nodes and
 local queue delivery; OpenCode uses an embedded plugin over a private Unix socket
 bridge; Pi uses an embedded extension over the same kind of bridge, bound by a
 per-session nonce ([docs/pi.md](docs/pi.md)). An optional per-user service observes coding agent logs independently of MCP
@@ -402,6 +403,25 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   waits for the bound/ready gates, bypasses pause, batching and the rate limit,
   and never enters activity, retention, gossip, the gateway or history; logs
   carry versions and outcome codes only.
+- **Claude delivery is channel by default, hooks by explicit choice.**
+  `notifications/claude/channel` is fire-and-forget, so `Written` counts a
+  notification Claude Code discards when the organization has not enabled
+  channels (claude.ai Team/Enterprise default); Rhizome cannot observe that
+  gate. `claude.delivery` (`RHIZOME_CLAUDE_DELIVERY`, `mcp`/`config`
+  `--claude-delivery`; exactly `channel` or `hooks`, flag > env > file >
+  default) selects the path for `mcp --agent claude` only. In `hooks` mode
+  `Node.notify` is `holdForHook` (`internal/channel/hook_delivery.go`): the
+  delivery loop's selection, batching, pause and rate limit are unchanged, each
+  notification is wrapped in `peerEnvelope` and held in a 64 KiB inbox (a full
+  inbox returns `errDestinationUnavailable`, so the bounded queue retains the
+  event), and `observe_session` returns the held envelopes once as
+  `hookSpecificOutput.additionalContext` only for main-thread
+  `UserPromptSubmit`/`PreToolUse` hooks whose request is still live and within
+  3 s of arrival (Claude discards the output of a hook that hits its 5 s
+  timeout). Every other hook, subagent hook, and channel mode return `{}`.
+  `list_sessions` adds `claude_delivery` and `hook_queue_depth` only in hooks
+  mode; `counters.HookInjected` counts injections. Keep
+  [reference "Claude delivery"](docs/reference.md#claude-delivery) in step.
 - **Hostnames are display labels.** Shared top-level `hostname` is written by
   the setup prompt or `setup --network ... --hostname ...`. Blank clears an
   override and uses the OS short hostname in every mode, including Tailscale.

@@ -25,6 +25,7 @@ the table for diagnostics; `setup --hostname` only writes the file. All startup 
 | `debug` | `RHIZOME_DEBUG` (boolean) | mcp, service install/run `--debug` | `false`; adds a session status substatus and debug-level diagnostics (stderr for MCP, `observer.log` for the service; metadata only) |
 | `claude.config_dir` | `CLAUDE_CONFIG_DIR` | — | `~/.claude` |
 | `claude.projects_dir` | — | service `--claude-root` | effective `claude.config_dir` + `/projects` |
+| `claude.delivery` | `RHIZOME_CLAUDE_DELIVERY` | mcp `--claude-delivery` | `channel`; `hooks` returns peer events as hook `additionalContext` for organizations without channels ([Claude delivery](#claude-delivery)) |
 | `codex.bin` | — | mcp `--codex-bin` | `codex` |
 | `codex.home` | `CODEX_HOME` | — | `~/.codex` |
 | `codex.sessions_dir` | — | service `--codex-root` | effective `codex.home` + `/sessions` |
@@ -56,6 +57,8 @@ hostname = "" # optional device display label; blank uses the OS hostname
 config_dir = "~/.claude"
 # Omit, or leave empty, to derive from config_dir.
 projects_dir = ""
+# channel (default) or hooks; see Claude delivery.
+delivery = "channel"
 
 [codex]
 bin = "codex"
@@ -263,6 +266,36 @@ MCP **2025-11-25**: testing found that Claude 2.1.302 disables unsolicited chann
 notifications when the SDK negotiates its newer 2026 protocol family.
 Stdout is exclusively MCP; application diagnostics go to stderr.
 
+### Claude delivery
+
+Channel notifications are fire-and-forget: a successful write counts as
+`Written`, but Claude Code discards it unless channels are enabled for the
+account. On claude.ai Team and Enterprise plans an Owner must enable channels
+(`channelsEnabled: true` in managed settings); Claude shows a short startup
+notice ("Channels are not enabled for your org") when it rejects the server,
+and Rhizome cannot observe that decision: `send` is still accepted, `Written`
+still grows and `delivery_error` stays empty. Organizations that cannot enable
+channels set `claude.delivery = "hooks"` (`RHIZOME_CLAUDE_DELIVERY=hooks` or
+`rhizome mcp --agent claude --claude-delivery hooks` in the MCP registration).
+Rhizome then holds each delivered event, wrapped in the same untrusted-peer
+envelope as the other agents, and the next main-thread `UserPromptSubmit` or
+`PreToolUse` `observe_session` hook returns it as
+`hookSpecificOutput.additionalContext`; Claude Code reads an `mcp_tool` hook's
+text result like command-hook stdout. Events therefore arrive while Claude is
+working (the next prompt or tool call), not while it is idle, and the
+`--dangerously-load-development-channels` flag is unnecessary in this mode.
+
+Each event is injected once. A hook drains the inbox only while its request is
+live and less than three seconds after it started, so a hook that runs into
+Claude's five-second timeout (whose output Claude discards) leaves the events
+for the next hook; subagent hooks never drain it. The inbox holds 64 KiB; beyond
+that the normal bounded delivery queue retains events. The pause notice and the
+[restart notice](service.md#automatic-updates) use the same path. `list_sessions`
+reports `claude_delivery: "hooks"` and `hook_queue_depth`, and
+`counters.HookInjected` counts injected events; `Written` counts events held
+for a hook. In channel mode neither field is reported. Restart the Claude MCP
+process (restart Claude Code) after changing the setting.
+
 ## Tools
 
 | Tool | Behavior |
@@ -273,7 +306,7 @@ Stdout is exclusively MCP; application diagnostics go to stderr.
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
 | `publish(text, reply_to?)` | Announce to current subscribers. |
 | `send(session_id, text, reply_to?)` | Direct message without a subscription. Returns a stable message ID and receiver queue acceptance. |
-| `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. Not offered in OpenCode mode. |
+| `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. With `claude.delivery = "hooks"`, main-thread `UserPromptSubmit`/`PreToolUse` calls return held peer events as `additionalContext` ([Claude delivery](#claude-delivery)). Not offered in OpenCode mode. |
 | `send_file`, `list_files`, `accept_file`, `cancel_file` | Explicit file offers between sessions on paired hosts; see [file transfers](files.md). |
 | `search_sessions(filters…, host_id?)` | Metadata search of the local history catalog by exact ID, agent, project path, title substring, and activity date, with deterministic pagination. Rows carry history availability and current live status separately. Requires the observer service's catalog. With `host_id`, searches one directly paired host that opted in. |
 | `read_session_history(session_id, agent_type, limit?, cursor?, host_id?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes reasoning, subagents, and peer traffic, and excludes prompts and tool bodies unless the serving host sets `[sessions].share_prompts_and_tools`. With `host_id`, reads from one opted-in paired host within its owner's lookback. |

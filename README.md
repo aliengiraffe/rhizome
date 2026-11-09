@@ -116,7 +116,7 @@ Restart your agent and complete its integration steps:
 
 | Agent | Before the first conversation |
 | --- | --- |
-| **Claude Code** | Launch with `claude --dangerously-load-development-channels server:rhizome` and accept the channel/hook prompts. [Setup details](docs/reference.md#claude-setup). |
+| **Claude Code** | Launch with `claude --dangerously-load-development-channels server:rhizome` and accept the channel/hook prompts. On a claude.ai Team or Enterprise organization that has not enabled channels, Claude silently discards them: set `claude.delivery = "hooks"` to receive peer events through the binding hooks instead ([Claude delivery](docs/reference.md#claude-delivery)). [Setup details](docs/reference.md#claude-setup). |
 | **Codex** | Start a fresh session, review and trust the Rhizome hooks in `/hooks`. [Setup details](docs/codex.md#install). |
 | **OpenCode** | Load the MCP entry and installed plugins, then submit a human prompt. [Setup details](docs/opencode.md#install). |
 | **Pi** | Run `rhizome setup --agents pi`, then restart Pi (or `/reload`); each session binds when it starts. [Setup details](docs/pi.md#install). |
@@ -217,7 +217,7 @@ requires the service on both machines.
 | --- | --- |
 | **Session identity** | Agent-specific hooks or verified transport metadata bind each session. Exact IDs keep worktrees, concurrent chats, and agent types distinct. |
 | **Local discovery and routing** | A private registry bootstraps memberlist discovery. Nodes exchange activity through authenticated gRPC on loopback; local peers can communicate directly. |
-| **Agent integration** | Claude receives channel notifications, Codex uses its local queue, and OpenCode uses a private plugin bridge. |
+| **Agent integration** | Claude receives channel notifications (or hook context where channels are disabled), Codex uses its local queue, and OpenCode uses a private plugin bridge. |
 | **Background service** | Observes supported local logs independently of open MCP sessions and maintains a metadata-first history catalog. Observation-only sessions cannot receive messages. |
 | **Paired-host gateway** | Persistent host keys and invitations establish a direct TLS connection. Each service exposes remote sessions locally through proxies, keeping local tokens on their own machines. |
 

@@ -32,6 +32,10 @@ type Config struct {
 		ConfigDir   string      `toml:"config_dir"`   // CLAUDE_CONFIG_DIR; skills and transcripts live under it.
 		ProjectsDir string      `toml:"projects_dir"` // Transcript root the observer watches; default <config_dir>/projects.
 		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for Claude-sourced history.
+		// Delivery selects how peer events reach Claude Code: "channel" pushes
+		// notifications/claude/channel; "hooks" returns them as hook
+		// additionalContext for accounts whose organization has not enabled channels.
+		Delivery string `toml:"delivery"`
 	} `toml:"claude"`
 	Codex struct {
 		Bin         string      `toml:"bin"`          // Codex CLI executable name or path.
@@ -108,6 +112,12 @@ func (n Network) Validate() error {
 	return nil
 }
 
+// Claude delivery paths accepted by claude.delivery.
+const (
+	ClaudeDeliveryChannel = "channel"
+	ClaudeDeliveryHooks   = "hooks"
+)
+
 type setting struct {
 	key, env, flag string
 	value          *string
@@ -123,6 +133,7 @@ func (c *Config) settings() []setting {
 		{"runtime_dir", "RHIZOME_RUNTIME_DIR", "runtime-dir", &c.RuntimeDir, true},
 		{"claude.config_dir", "CLAUDE_CONFIG_DIR", "", &c.Claude.ConfigDir, true},
 		{"claude.projects_dir", "", "claude-root", &c.Claude.ProjectsDir, true},
+		{"claude.delivery", "RHIZOME_CLAUDE_DELIVERY", "claude-delivery", &c.Claude.Delivery, false},
 		{"codex.bin", "", "codex-bin", &c.Codex.Bin, false},
 		{"codex.home", "CODEX_HOME", "", &c.Codex.Home, true},
 		{"codex.sessions_dir", "", "codex-root", &c.Codex.SessionsDir, true},
@@ -381,6 +392,8 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 			switch s.key {
 			case "claude.projects_dir":
 				*s.value = filepath.Join(c.Claude.ConfigDir, "projects")
+			case "claude.delivery":
+				*s.value = ClaudeDeliveryChannel
 			case "codex.sessions_dir":
 				*s.value = filepath.Join(c.Codex.Home, "sessions")
 			case "opencode.data_dir", "pi.sessions_dir":
@@ -403,6 +416,9 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 			}
 		}
 		c.Sources[s.key] = source
+	}
+	if c.Claude.Delivery != ClaudeDeliveryChannel && c.Claude.Delivery != ClaudeDeliveryHooks {
+		return c, fmt.Errorf("config %s: claude.delivery %q must be %q or %q (%s)", path, c.Claude.Delivery, ClaudeDeliveryChannel, ClaudeDeliveryHooks, c.Sources["claude.delivery"])
 	}
 	if err := c.Gateway.Validate(); err != nil {
 		return c, err
