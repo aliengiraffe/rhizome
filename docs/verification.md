@@ -64,7 +64,7 @@ A resumed session enabled only `Read` to exercise the non-Rhizome tool hook.
 | Check | Observed result |
 | --- | --- |
 | MCP protocol/channel handshake | Channel registered with MCP 2025-11-25. The latest SDK's default 2026-07-28 negotiation initially caused Claude to skip channel registration; the adapter now constrains negotiation, with a regression test. |
-| Initial SessionStart | Claude skipped the MCP-tool hook with its documented non-blocking notice. Rhizome logged UNBOUND before any prompt. |
+| Initial SessionStart | Claude 2.1.319 `--init-only` in disposable state reproduced the startup hook error with the old template and emitted no SessionStart error with the new matcher. Full interactive launch confirmation is pending; first binding remains prompt-time. |
 | First prompt | UserPromptSubmit called `rhizome/observe_session`; two distinct IDs bound independently despite identical cwd/display names. |
 | Hook result parsing | Claude accepted the tool's `{}` text as hook JSON for prompt, stop, Read, clear and compact events. |
 | Recursion exclusions | Rhizome list/subscribe/send/publish calls did not invoke PreToolUse; a normal Read did invoke PreToolUse successfully. |
@@ -82,6 +82,25 @@ The process-level test separately checks a publisher restart while its subscribe
 stays alive. Delayed old hooks, replay races, queue saturation and circuit-breaker
 thresholds are deterministic automated scenarios, not claims about manually
 forcing every failure in the interactive UI.
+
+### SessionStart matcher regression (#106)
+
+Automated setup tests check the JavaScript source matcher (`startup` excluded;
+`resume`, `clear`, `compact`, `fork` and future sources allowed), replacement of
+old matcher-less hooks, repeat setup, and uninstall preservation of unrelated
+hooks. A Claude 2.1.319 `--init-only` comparison confirmed the startup matcher
+in the real client without model turns (the unrelated SessionEnd hook still
+has no MCP context in init-only mode). Codex retains its original template.
+The `/clear`, `/compact` and resume results above predate this matcher change;
+they have not been re-run interactively.
+
+To repeat with the new hooks, rerun `rhizome setup --agents claude` in disposable
+user state and launch two Claude sessions with the channel flag. Confirm no
+`SessionStart:startup hook error` notice, then bind both with a prompt and subscribe
+one to the other. Before sending another prompt after `/clear`, confirm a new
+session ID/generation and a `session-ended` notification at the peer. After
+`/compact`, confirm the binding refreshes with the same ID/generation. Resume
+and confirm the hook still binds. Record the client version and results.
 
 ## Repeatable manual steps
 
