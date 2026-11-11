@@ -100,9 +100,12 @@ With `rhizome` installed on `PATH`, run:
 rhizome setup
 ```
 
-Select your agents and review the setup changes. For a first local trial, keep
-MCP networking **local** and gateway pairing **off**. Setup installs the
-collaboration skill and, for Claude Code and Codex, their MCP registration
+Select your agents and review the setup changes. Setup checks Tailscale
+read-only, then asks how this device should connect: **only this device**
+(the default; nothing listens on the network), **paired devices** (invite/join
+through the background service over Tailscale or a LAN) or **direct network**
+(shared-token gossip). For a first local trial keep the default. Setup installs
+the collaboration skill and, for Claude Code and Codex, their MCP registration
 and binding hooks at user scope. OpenCode gets the skill and plugins; add its
 [MCP entry manually](docs/opencode.md#install). To take Rhizome out again,
 `rhizome uninstall` reverses these installs for the agents you pick (`--all`
@@ -148,7 +151,11 @@ LAN or an existing Tailscale network.
 
 ### 1. Enable pairing on both machines
 
-For Tailscale, run on each machine:
+The guided path is `rhizome setup` on each machine: choose **paired devices**,
+accept the recommended transport (Tailscale when it is usable, otherwise LAN),
+let setup install and start the service, and create the invitation on one
+machine and join with it on the other when setup offers to. The equivalent
+flags, for Tailscale, are:
 
 ```sh
 rhizome setup --network local --gateway-mode tailscale --replace-config

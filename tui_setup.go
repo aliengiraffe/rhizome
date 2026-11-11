@@ -22,11 +22,36 @@ type wizardField struct {
 	key, label string
 	choices    []string
 }
+
+// setupResult is what apply achieved. pairing names the runtime directory
+// when the service and its gateway were confirmed ready, so the pairing phase
+// may follow; it is blank whenever pairing must happen later.
 type setupResult struct {
-	steps []string
+	steps   []string
+	err     error
+	pairing string
+}
+type probeResult struct{ report channel.TailscaleReport }
+type pairingResult struct {
+	lines []string
 	err   error
 }
-type probeResult struct{ err error }
+
+// pairingPhase is the post-apply enrollment offer: it stages nothing and only
+// calls the service's own invite/join through admin.
+type pairingPhase struct {
+	runtime string
+	choice  int  // 0 invite, 1 join, 2 later
+	editing bool // entering an invitation
+	code    string
+	busy    bool
+	lines   []string // outcome shown on screen and printed on exit
+	err     error    // last failed attempt; the menu stays open for a retry
+	closed  bool     // finished or deferred
+}
+
+var pairingChoices = []string{"create an invitation for another device to join", "join with an invitation from another device", "later"}
+
 type setupModel struct {
 	work                                *uiWork
 	c                                   config.Config
@@ -37,14 +62,20 @@ type setupModel struct {
 	fixedAnswers                        *configAnswers
 	exists, replace                     bool
 	values                              map[string]string
+	touched                             map[string]bool // fields the user edited, so recommendations stop moving them
+	recommend                           bool            // the stored file has no pairing transport, so Tailscale may be suggested
 	step, choice, offset, width, height int
 	busy, done, applied                 bool
 	err                                 error
 	warning                             string
 	result                              setupResult
+	tailscale                           *channel.TailscaleReport // nil until the advisory probe answered
+	probing, probed                     bool
+	pair                                pairingPhase
 	installService                      serviceInstaller
 	apply                               func(context.Context) setupResult
-	probe                               func(context.Context) error
+	probe                               tailscaleProbe
+	admin                               gatewayAdmin
 	explicit                            bool                                        // configuration selected with --config/RHIZOME_CONFIG
 	reload                              func() (config.Config, error)               // re-resolves after the file is written
 	installAgent                        func(config.Config, agent, io.Writer) error // skill, MCP registration and hooks for one agent
@@ -52,7 +83,18 @@ type setupModel struct {
 
 func newSetupModel(c config.Config, path string, agents []agent, checked []bool, answers *configAnswers, replace bool) *setupModel {
 	_, err := os.Lstat(path)
-	m := &setupModel{work: newUIWork(), c: c, path: path, agents: agents, fixedAgents: checked != nil, fixedAnswers: answers, exists: err == nil, replace: replace, values: map[string]string{"existing": "keep", "mode": "local", "mdns": "yes", "port": "7946", "interval": "20s", "custom": "no", "service": "no", "updates": map[bool]string{true: "yes", false: "no"}[c.AutoUpdate.Enabled]}, width: 80, height: 24, probe: channel.CheckTailscale}
+	connect, transport := storedConnection(c)
+	values := map[string]string{"existing": "keep", "connect": connect, "transport": "lan", "endpoints": "automatic", "gw_listen": c.Gateway.Listen, "gw_advertise": c.Gateway.Advertise, "mode": "lan", "mdns": "yes", "port": "7946", "interval": "20s", "custom": "no", "service": "no", "updates": map[bool]string{true: "yes", false: "no"}[c.AutoUpdate.Enabled]}
+	switch connect {
+	case connectPaired:
+		values["transport"] = transport
+		if c.Gateway.Listen != "" || c.Gateway.Advertise != "" {
+			values["endpoints"] = "custom"
+		}
+	case connectDirect:
+		values["mode"] = transport
+	}
+	m := &setupModel{work: newUIWork(), c: c, path: path, agents: agents, fixedAgents: checked != nil, fixedAnswers: answers, exists: err == nil, replace: replace, values: values, touched: map[string]bool{}, recommend: connect != connectPaired, width: 80, height: 24, probe: channel.ProbeTailscale, admin: channel.GatewayAdmin}
 	m.checked = append([]bool(nil), checked...)
 	if checked == nil {
 		m.checked = make([]bool, len(agents))
@@ -65,6 +107,11 @@ func newSetupModel(c config.Config, path string, agents []agent, checked []bool,
 	m.installAgent = m.defaultAgentInstaller
 	return m
 }
+
+// asksConnection reports whether the wizard will ask the connection question.
+func (m *setupModel) asksConnection() bool {
+	return m.fixedAnswers == nil && (!m.exists || m.values["existing"] == "replace")
+}
 func (m *setupModel) fields() []wizardField {
 	var f []wizardField
 	if !m.fixedAgents {
@@ -74,13 +121,22 @@ func (m *setupModel) fields() []wizardField {
 		if m.exists {
 			f = append(f, wizardField{"existing", "Existing config: keep or back up and replace?", []string{"keep", "replace"}})
 		}
-		if !m.exists || m.values["existing"] == "replace" {
-			f = append(f, wizardField{"mode", "Network mode", []string{"local", "lan", "tailscale"}})
-			switch m.values["mode"] {
-			case "lan":
-				f = append(f, wizardField{"bind", "Listen address (blank: all interfaces)", nil}, wizardField{"advertise", "Address peers dial (blank: first private interface)", nil}, wizardField{"join_lan", "Gossip host:port seeds (comma-separated, blank: none)", nil}, wizardField{"mdns", "Advertise and browse mDNS?", []string{"yes", "no"}})
-			case "tailscale":
-				f = append(f, wizardField{"port", "Well-known gossip port", nil}, wizardField{"interval", "Tailnet discovery interval", nil}, wizardField{"join_tailscale", "Extra gossip host:port seeds (comma-separated)", nil})
+		if m.asksConnection() {
+			f = append(f, wizardField{"connect", "How should this device connect?", connectChoices})
+			switch m.values["connect"] {
+			case connectPaired:
+				f = append(f, wizardField{"transport", "Pairing transport", []string{"tailscale", "lan"}}, wizardField{"endpoints", "Gateway endpoints", []string{"automatic", "custom"}})
+				if m.values["endpoints"] == "custom" {
+					f = append(f, wizardField{"gw_listen", "Gateway listen IP:port (blank: automatic)", nil}, wizardField{"gw_advertise", "Gateway advertise IP:port (blank: same as listen)", nil})
+				}
+			case connectDirect:
+				f = append(f, wizardField{"mode", "Direct network transport (shared cluster token)", []string{"lan", "tailscale"}})
+				switch m.values["mode"] {
+				case "lan":
+					f = append(f, wizardField{"bind", "Listen address (blank: all interfaces)", nil}, wizardField{"advertise", "Address peers dial (blank: first private interface)", nil}, wizardField{"join_lan", "Gossip host:port seeds (comma-separated, blank: none)", nil}, wizardField{"mdns", "Advertise and browse mDNS?", []string{"yes", "no"}})
+				case "tailscale":
+					f = append(f, wizardField{"port", "Well-known gossip port", nil}, wizardField{"interval", "Tailnet discovery interval", nil}, wizardField{"join_tailscale", "Extra gossip host:port seeds (comma-separated)", nil})
+				}
 			}
 			f = append(f, wizardField{"hostname", "Hostname override (blank: OS hostname)", nil}, wizardField{"updates", "Install verified updates automatically? (service only; HTTPS to github.com)", []string{"yes", "no"}}, wizardField{"custom", "Customize directories or Codex binary?", []string{"no", "yes"}})
 			if m.values["custom"] == "yes" {
@@ -90,6 +146,33 @@ func (m *setupModel) fields() []wizardField {
 	}
 	f = append(f, wizardField{"service", "Install and start the background service?", []string{"no", "yes"}})
 	return append(f, wizardField{"review", "Review / Apply", nil})
+}
+
+// plan is the staged connection decision.
+func (m *setupModel) plan() connectionPlan {
+	p := connectionPlan{Choice: m.values["connect"], Stored: m.c, Tailscale: m.tailscale}
+	switch p.Choice {
+	case connectPaired:
+		p.Transport = m.values["transport"]
+		if m.values["endpoints"] == "custom" {
+			p.Listen, p.Advertise = strings.TrimSpace(m.values["gw_listen"]), strings.TrimSpace(m.values["gw_advertise"])
+		}
+	case connectDirect:
+		p.Transport = m.values["mode"]
+	}
+	return p
+}
+
+// effectiveGateway is the gateway mode in force after apply: the staged plan,
+// the fixed flag answers, or the kept file.
+func (m *setupModel) effectiveGateway() string {
+	switch {
+	case m.fixedAnswers != nil && (!m.exists || m.replace):
+		return defaultString(m.fixedAnswers.Gateway.Mode, defaultString(m.c.Gateway.Mode, "off"))
+	case m.asksConnection():
+		return m.plan().gatewayMode()
+	}
+	return defaultString(m.c.Gateway.Mode, "off")
 }
 func (m *setupModel) answers() (*configAnswers, error) {
 	stored, err := storedConfig(m.path)
@@ -104,8 +187,17 @@ func (m *setupModel) answers() (*configAnswers, error) {
 		return nil, nil
 	}
 	// Replacing merges these answers into the stored file: unanswered settings
-	// (gateway, history, agent options) survive, and a blank hostname clears.
-	a := &configAnswers{Stored: stored, Selected: map[string]bool{"hostname": true, "network": true}, Hostname: m.values["hostname"], Network: config.Network{Mode: m.values["mode"]}}
+	// (history, agent options) survive, and a blank hostname clears. The
+	// connection answer decides both the network and the gateway table.
+	plan := m.plan()
+	a := &configAnswers{Stored: stored, Selected: map[string]bool{"hostname": true, "network": true}, Hostname: m.values["hostname"], Network: config.Network{Mode: plan.networkMode()}, Gateway: config.Gateway{Mode: plan.gatewayMode(), Listen: plan.Listen, Advertise: plan.Advertise}}
+	storedGateway, _ := stored["gateway"].(map[string]any)
+	storedMode, _ := storedGateway["mode"].(string)
+	storedListen, _ := storedGateway["listen"].(string)
+	storedAdvertise, _ := storedGateway["advertise"].(string)
+	a.Selected["gateway-mode"] = a.Gateway.Mode != defaultString(storedMode, "off")
+	a.Selected["gateway-listen"] = a.Gateway.Listen != storedListen
+	a.Selected["gateway-advertise"] = a.Gateway.Advertise != storedAdvertise
 	n := &a.Network
 	if n.Mode == "lan" || n.Mode == "tailscale" {
 		for _, seed := range strings.Split(m.values["join_"+n.Mode], ",") {
@@ -184,6 +276,11 @@ func (m *setupModel) validateField(key string) error {
 		a.CodexHome = m.values[key]
 	case "bin":
 		a.CodexBin = m.values[key]
+	case "gw_listen", "gw_advertise":
+		if v := strings.TrimSpace(m.values[key]); v != "" {
+			return config.ValidateGatewayEndpoint(v, m.values["transport"])
+		}
+		return nil
 	case "port":
 		port, err := strconv.Atoi(m.values[key])
 		if err != nil || port < 1 || port > 65535 {
@@ -202,24 +299,49 @@ func (m *setupModel) validateField(key string) error {
 	_, err = config.Preview(body)
 	return err
 }
-func (m *setupModel) Init() tea.Cmd { return nil }
+
+// startProbe runs the advisory Tailscale detection once, in the background
+// and without blocking any answer; the result only updates the hints and, when
+// the stored file has no pairing transport yet, the untouched transport default.
+func (m *setupModel) startProbe() tea.Cmd {
+	if m.probed || m.probing {
+		return nil
+	}
+	m.probing = true
+	return m.work.command(func(ctx context.Context) tea.Msg {
+		return probeResult{probeTailscaleBounded(ctx, m.probe)}
+	})
+}
+func (m *setupModel) Init() tea.Cmd {
+	if m.fixedAnswers == nil {
+		return m.startProbe()
+	}
+	return nil
+}
 func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = v.Width
 		m.height = v.Height
 	case probeResult:
-		m.busy = false
-		if v.err != nil {
-			m.warning = "Tailscale advisory: " + safeText(v.err.Error()) + ". Setup can continue; MCP requires running Tailscale."
-		} else {
-			m.warning = "Tailscale is available."
+		m.probing, m.probed = false, true
+		report := v.report
+		m.tailscale = &report
+		if m.recommend && !m.touched["transport"] {
+			m.values["transport"] = recommendedTransport(&report)
 		}
 	case setupResult:
 		m.busy = false
 		m.done = true
 		m.result = v
 		m.err = v.err
+		m.pair = pairingPhase{runtime: v.pairing, choice: 2, closed: v.pairing == ""}
+	case pairingResult:
+		m.pair.busy = false
+		m.pair.err = v.err
+		if v.err == nil {
+			m.pair.lines, m.pair.closed, m.pair.editing = v.lines, true, false
+		}
 	case tea.KeyMsg:
 		key := v.String()
 		if key == "ctrl+c" || key == "esc" {
@@ -227,10 +349,7 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if m.done {
-			if key == "enter" || key == "q" {
-				return m, tea.Quit
-			}
-			return m, nil
+			return m, m.updatePairing(v)
 		}
 		if m.busy {
 			return m, nil
@@ -269,17 +388,13 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			}
+			m.touched[field.key] = true
 			m.step++
 			m.choice = 0
 			m.offset = 0
 			m.err = nil
-			if field.key == "mode" && m.values["mode"] == "tailscale" {
-				m.busy = true
-				return m, m.work.command(func(ctx context.Context) tea.Msg {
-					ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-					defer cancel()
-					return probeResult{m.probe(ctx)}
-				})
+			if field.key == "existing" && m.values["existing"] == "replace" {
+				return m, m.startProbe()
 			}
 			return m, nil
 		}
@@ -312,8 +427,11 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				index = (index + 1) % len(field.choices)
 			case "up", "left", "k":
 				index = (index + len(field.choices) - 1) % len(field.choices)
+			default:
+				return m, nil
 			}
 			m.values[field.key] = field.choices[index]
+			m.touched[field.key] = true
 		} else if field.key != "review" {
 			value := []rune(m.values[field.key])
 			if key == "backspace" && len(value) > 0 {
@@ -327,6 +445,81 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// updatePairing handles keys after apply: the pairing menu, the invitation
+// entry, or exit once pairing is finished or was never offered.
+func (m *setupModel) updatePairing(v tea.KeyMsg) tea.Cmd {
+	key := v.String()
+	if m.pair.closed {
+		if key == "enter" || key == "q" {
+			return tea.Quit
+		}
+		return nil
+	}
+	if m.pair.busy {
+		return nil
+	}
+	if m.pair.editing {
+		switch {
+		case key == "enter":
+			code := m.pair.code
+			if _, err := normalizeInvitation(code); err != nil {
+				m.pair.err = err
+				return nil
+			}
+			m.pair.busy, m.pair.err = true, nil
+			return m.work.command(func(ctx context.Context) tea.Msg {
+				j, err := pairingJoinHost(ctx, m.pair.runtime, m.admin, code)
+				if err != nil {
+					return pairingResult{err: err}
+				}
+				return pairingResult{lines: joinLines(j)}
+			})
+		case key == "shift+tab":
+			m.pair.editing = false
+		case key == "backspace":
+			if r := []rune(m.pair.code); len(r) > 0 {
+				m.pair.code = string(r[:len(r)-1])
+			}
+		case key == "ctrl+u":
+			m.pair.code = ""
+		case v.Type == tea.KeyRunes && len(m.pair.code)+len(v.Runes) <= maxInvitation+16:
+			m.pair.code += string(v.Runes)
+		}
+		return nil
+	}
+	switch key {
+	case "down", "j":
+		m.pair.choice = min(m.pair.choice+1, len(pairingChoices)-1)
+	case "up", "k":
+		m.pair.choice = max(0, m.pair.choice-1)
+	case "enter":
+		switch m.pair.choice {
+		case 0:
+			m.pair.busy, m.pair.err = true, nil
+			return m.work.command(func(ctx context.Context) tea.Msg {
+				command, id, err := pairingInvite(ctx, m.pair.runtime, m.admin)
+				if err != nil {
+					return pairingResult{err: err}
+				}
+				return pairingResult{lines: inviteLines(command, id)}
+			})
+		case 1:
+			m.pair.editing, m.pair.err = true, nil
+		default:
+			m.pair.closed, m.pair.lines = true, pairingNextSteps(m.path, true)
+		}
+	}
+	return nil
+}
+
+// tailscaleLine is the probe hint for the current moment.
+func (m *setupModel) tailscaleLine() string {
+	if m.tailscale == nil {
+		return "Tailscale: checking (read-only)… you can continue; the result updates here."
+	}
+	return tailscaleSummary(*m.tailscale)
 }
 func (m *setupModel) review() string {
 	var b strings.Builder
@@ -343,6 +536,11 @@ func (m *setupModel) review() string {
 	if a == nil || m.fixedAnswers != nil && m.exists && !m.replace {
 		b.WriteString("Keep existing configuration.\n")
 	} else {
+		if m.asksConnection() {
+			for _, line := range m.plan().lines() {
+				b.WriteString(safeText(line) + "\n")
+			}
+		}
 		body, err := a.render()
 		if err != nil {
 			return b.String() + safeText(err.Error())
@@ -356,10 +554,17 @@ func (m *setupModel) review() string {
 			}
 		}
 	}
-	if m.fixedAnswers == nil && (!m.exists || m.values["existing"] == "replace") {
+	if m.asksConnection() {
 		fmt.Fprintf(&b, "Automatic updates: %s\n", m.values["updates"])
 	}
 	fmt.Fprintf(&b, "Install and start service: %s\n", m.values["service"])
+	if m.effectiveGateway() != "off" {
+		if m.values["service"] == "yes" {
+			b.WriteString("Pairing: offered after the service and its gateway are confirmed running (invite or join; nothing is sent before you choose).\n")
+		} else {
+			b.WriteString("Pairing: later; the exact commands are printed after apply.\n")
+		}
+	}
 	b.WriteString("Enter applies these changes. Esc cancels before any writes.")
 	return b.String()
 }
@@ -368,10 +573,7 @@ func (m *setupModel) View() string {
 	body := safeText(field.label) + "\n"
 	switch {
 	case m.done:
-		body = strings.Join(m.result.steps, "\n")
-		if m.err == nil {
-			body += "\nSetup completed. Enter exits."
-		}
+		body = m.doneView()
 	case field.key == "review":
 		body = m.review()
 	case field.key == "agents":
@@ -396,8 +598,27 @@ func (m *setupModel) View() string {
 	default:
 		body += "> " + safeText(m.values[field.key]) + "_"
 	}
-	if m.values["mode"] != "local" {
-		body += "\nNetwork access requires the separately managed cluster token."
+	if !m.done {
+		switch field.key {
+		case "connect":
+			body += "\n" + connectExplanation(m.values["connect"]) + "\n" + m.tailscaleLine()
+		case "transport":
+			body += "\n" + transportExplanation(m.values["transport"], m.tailscale) + "\n" + m.tailscaleLine()
+		case "endpoints":
+			body += "\nAutomatic resolves the listen endpoint when the service starts (no address entry). Custom sets concrete IP:port endpoints for the " + m.values["transport"] + " policy."
+		case "mode":
+			body += "\n" + connectExplanation(connectDirect)
+			if m.values["mode"] == "tailscale" {
+				body += "\n" + m.tailscaleLine()
+			}
+		case "service":
+			if m.effectiveGateway() != "off" {
+				body += "\nPaired devices need the running service; choosing yes offers pairing right after it starts. Choosing no prints the commands for later."
+			}
+		}
+		if m.values["connect"] == connectDirect && m.asksConnection() {
+			body += "\nNetwork access requires the separately managed cluster token."
+		}
 	}
 	if m.warning != "" {
 		body += "\n" + m.warning
@@ -409,6 +630,41 @@ func (m *setupModel) View() string {
 		body = "Working… Esc cancels; completed steps remain.\n" + body
 	}
 	return uiView("Rhizome setup", body, "Esc: cancel | Enter: next/apply | Shift+Tab: back | arrows/space: select | PgUp/Dn: scroll | Ctrl+U: clear", m.width, m.height, m.offset)
+}
+
+// doneView shows the completed steps and, when the gateway is ready, the
+// pairing menu; otherwise the exit prompt.
+func (m *setupModel) doneView() string {
+	body := strings.Join(m.result.steps, "\n")
+	if m.err != nil {
+		return body
+	}
+	if m.pair.closed {
+		if len(m.pair.lines) > 0 {
+			body += "\n" + strings.Join(m.pair.lines, "\n")
+		}
+		return body + "\nSetup completed. Enter exits."
+	}
+	body += "\nSetup completed. Pair this device now? (Esc exits; pairing can also be done later.)\n"
+	switch {
+	case m.pair.editing:
+		body += "Invitation (paste the code printed by `rhizome invite` on the other device; Shift+Tab goes back):\n> " + safeText(m.pair.code) + "_"
+	default:
+		for i, s := range pairingChoices {
+			prefix := "  "
+			if i == m.pair.choice {
+				prefix = "> "
+			}
+			body += prefix + s + "\n"
+		}
+	}
+	if m.pair.err != nil {
+		body = "Pairing error: " + safeText(m.pair.err.Error()) + " (retry here, or later with `rhizome invite` / `rhizome join <invitation>`)\n" + body
+	}
+	if m.pair.busy {
+		body = "Pairing… Esc cancels; completed steps remain.\n" + body
+	}
+	return body
 }
 func (m *setupModel) applyAnswers(ctx context.Context) setupResult {
 	r := setupResult{}
@@ -445,7 +701,11 @@ func (m *setupModel) applyAnswers(ctx context.Context) setupResult {
 	if err := m.installAgents(ctx, &r, wrote); err != nil {
 		return fail(err)
 	}
+	gateway := m.effectiveGateway()
 	if m.values["service"] != "yes" {
+		if gateway != "off" {
+			r.steps = append(r.steps, pairingNextSteps(m.path, false)...)
+		}
 		return r
 	}
 	if err := ctx.Err(); err != nil {
@@ -460,6 +720,22 @@ func (m *setupModel) applyAnswers(ctx context.Context) setupResult {
 		return fail(fmt.Errorf("service step failed; completed steps remain: %w", err))
 	}
 	r.steps = append(r.steps, "Background service installed and running (configuration "+safeText(path)+", runtime "+safeText(outcome.Runtime)+")")
+	if gateway == "off" {
+		return r
+	}
+	// Pairing only against the configuration the service actually runs, and
+	// only once its gateway answers; otherwise the exact commands for later.
+	if outcome.WasRunning && wrote {
+		r.steps = append(r.steps, "The service was already running with the previous configuration; run `rhizome service restart` to apply the new one, then pair:")
+		r.steps = append(r.steps, pairingNextSteps(path, true)[1:]...)
+		return r
+	}
+	if err := waitGatewayReady(ctx, outcome.Runtime, m.admin, gatewayReadyWait); err != nil {
+		r.steps = append(r.steps, "Service running but "+safeText(err.Error())+"; check `rhizome service status`, then pair:")
+		r.steps = append(r.steps, pairingNextSteps(path, true)[1:]...)
+		return r
+	}
+	r.pairing = outcome.Runtime
 	return r
 }
 
@@ -525,14 +801,29 @@ func runSetupTUI(m *setupModel) error {
 		for _, step := range m.result.steps {
 			fmt.Println(step)
 		}
-		if m.result.err != nil {
-			return m.result.err
+		for _, line := range m.pair.lines {
+			fmt.Println(line)
 		}
-		if !m.done {
-			return errors.New("setup interrupted; completed steps above were not rolled back")
-		}
-	} else {
+	}
+	return m.exitStatus(err)
+}
+
+// exitStatus is the command result once the program loop ended: apply errors
+// first, then an interrupted apply or pairing, then a pairing attempt that
+// failed and was not retried; each names what remains and the retry path.
+func (m *setupModel) exitStatus(runErr error) error {
+	if !m.applied {
 		return errors.New("setup cancelled; no changes applied")
 	}
-	return err
+	switch {
+	case m.result.err != nil:
+		return m.result.err
+	case !m.done:
+		return errors.New("setup interrupted; completed steps above were not rolled back")
+	case m.pair.busy:
+		return errors.New("pairing interrupted after setup completed; check `rhizome peers list` and retry with `rhizome invite` or `rhizome join <invitation>`")
+	case m.pair.err != nil && !m.pair.closed:
+		return fmt.Errorf("pairing failed after setup completed: %w; retry with `rhizome invite` or `rhizome join <invitation>`", m.pair.err)
+	}
+	return runErr
 }

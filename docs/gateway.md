@@ -44,10 +44,16 @@ rhizome setup --config /absolute/path/config.toml --network local --gateway-mode
 
 Omit `--replace-config` for a fresh file. `--gateway-mode tailscale` selects
 Tailscale pairing; optional `--gateway-advertise IP:port` sets a separate reachable
-endpoint. Interactive setup offers the same choices, defaulting to stored values.
-Gateway mode defaults to off on fresh installs. `--network` continues to mean
-legacy MCP gossip, and must be local for pairing. Existing incompatible settings
-require an explicit switch; setup never silently disables pairing or gossip.
+endpoint. Interactive `rhizome setup` offers the same result as the
+**paired devices** connection choice: it first probes Tailscale read-only and
+recommends it as the transport when usable, pins MCP networking to local,
+resolves endpoints automatically unless you ask for custom ones, shows every
+change from a stored file in the review, and after installing the service can
+run the invite or join below itself (see
+[setup](reference.md#creating-the-configuration-file)). Gateway mode defaults
+to off on fresh installs. `--network` continues to mean legacy MCP gossip, and
+must be local for pairing. Existing incompatible settings require an explicit
+switch; setup never silently disables pairing or gossip.
 
 Setup preserves unedited settings, history policy and runtime scope; it does not
 invite/join, rotate tokens/host keys or modify trust/revocation records. Explicit
@@ -80,7 +86,10 @@ rhizome service run --config /absolute/path/config.toml
 ```
 
 Service installation is still explicit; `invite` and `join` do not install or
-start it. Networking defaults to off and commands fail when the gateway is not
+start it. Interactive setup offers invite/join only after it installed or
+confirmed the running service and its gateway answered the local control
+endpoint; a service that was already running when the file changed is told to
+restart first. Networking defaults to off and commands fail when the gateway is not
 running. LAN mode with no listen address selects a private interface; detection
 failure is an error. Addresses must be concrete IP:port values (not wildcard
 binds, DNS names, or port zero). Public Internet addresses are unsupported.
@@ -126,8 +135,10 @@ rhizome peers revoke-invite <invitation-id>
 rhizome peers revoke <host-id>
 ```
 
-Lists never reveal invitation secrets. Failed enrollment can leave a visible
-pending peer; revoke that exact host ID to remove it. Revoking an invitation
+Lists never reveal invitation secrets. An invitation, whether created here or
+by setup, is not a connected peer: `peers list` shows `connected: true` only
+after the other host joined and the link is up. Failed enrollment can leave a
+visible pending peer; revoke that exact host ID to remove it. Revoking an invitation
 blocks its redemption/recovery, but does not revoke an already paired host.
 Revoking a host closes its connection, removes its proxy routes, fences locally
 queued events from that trust grant, and prevents reconnect. Fresh explicit

@@ -803,35 +803,63 @@ scroll long views. `--plain` retains the original prompts (and their immediate
 skill installation behavior). Fully specified `--agents` plus `--network`
 invocations stay noninteractive.
 
-Setup asks how Rhizome will be used and writes
+Setup asks how this device should connect and writes
 `~/.rhizome/config.toml` (or the file selected with `--config`/`RHIZOME_CONFIG`,
 which setup may create):
 
-1. **Gateway pairing**: `off` (default), `lan`, or `tailscale`, with optional
-   concrete listen/advertise IP:port endpoints. This connects per-user services
-   through explicit invite/join, independently of the local cluster token.
-2. **MCP network**: `local` (default), or legacy shared-token `lan`/`tailscale`
-   gossip. Pairing requires local MCP networking; incompatible choices fail.
-   Legacy mode options retain their existing meaning. Tailscale probing is
-   advisory in the wizard; startup still fails closed if the daemon is unavailable.
-3. **Hostname override**: Enter keeps the stored label; `-` clears it to use the
-   OS hostname. Optional gateway endpoints also accept `-` for automatic selection.
-4. **Automatic updates**: whether the background service installs verified
+1. **Tailscale check**: a read-only, bounded (15 s) probe of the local
+   Tailscale CLI/daemon runs first and changes nothing. It reports usable (with
+   this device's Tailscale IPv4), CLI not found, daemon unavailable, not logged
+   in or approved, no Tailscale IPv4 address, unreadable response, or timeout,
+   each with the next step. The screen keeps accepting answers while it runs.
+   Startup still fails closed if Tailscale is unavailable later.
+2. **Connection**: `only this device` (default: loopback MCP networking,
+   gateway pairing off, no service needed), `paired devices` (the background
+   service pairs hosts through explicit invitations over `tailscale` or `lan`;
+   MCP networking stays `local`; per-host, revocable trust; each host keeps its
+   own token) or `direct network` (advanced: shared-token `lan`/`tailscale`
+   gossip in every MCP process; no pairing or service; separate from pairing).
+   Usable Tailscale is recommended for paired devices and becomes the suggested
+   transport, but no recommendation enables networking by itself. Prompts
+   default to the stored model and transport, and the review names every
+   change from a stored file (for example switching direct gossip to local
+   because pairing requires it, or pairing turning off); the two models are
+   never combined.
+3. **Transport details**: paired devices asks for the transport and whether to
+   set custom gateway listen/advertise `IP:port` endpoints (default automatic:
+   the Tailscale IPv4 or a private LAN interface, port 7947, resolved when the
+   service starts, so no address entry is needed). Direct network asks the
+   legacy gossip options, which retain their existing meaning.
+4. **Hostname override**: Enter keeps the stored label; `-` clears it to use the
+   OS hostname.
+5. **Automatic updates**: whether the background service installs verified
    releases (default yes, or the stored value). Answering the default on a file
    that never set the key leaves the key out; any other answer writes
    `[update] enabled`. See [automatic updates](service.md#automatic-updates).
-5. **Directories**: optionally change runtime scope, Claude config directory,
+6. **Directories**: optionally change runtime scope, Claude config directory,
    Codex home or executable. Changing runtime scope selects different token,
    host identity and pairing state; the old state remains in the old directory.
-6. **Service**: asks whether to install and start the background service
-   (default no). The question follows the configuration step whether the file
-   was created, updated, or kept, and runs the same lifecycle as
-   `rhizome service install --config <path>`: a missing service is installed
-   and started, a stopped compatible one is started, and a running one counts
-   as success without a restart. Setup reports success only after the observer
-   is running and names the configuration file it used. On failure the written
-   configuration and any installed definition stay in place for diagnosis;
-   declining leaves the service untouched.
+7. **Service**: asks whether to install and start the background service
+   (default no; paired devices need it). The question follows the configuration
+   step whether the file was created, updated, or kept, and runs the same
+   lifecycle as `rhizome service install --config <path>`: a missing service is
+   installed and started, a stopped compatible one is started, and a running
+   one counts as success without a restart. Setup reports success only after
+   the observer is running and names the configuration file it used. On
+   failure the written configuration and any installed definition stay in
+   place for diagnosis; declining leaves the service untouched.
+8. **Pairing** (paired devices only, after apply): once the observer is
+   confirmed and the service's gateway answers its private control endpoint
+   (within 10 s), setup offers to create an invitation, join with one, or do it
+   later. These are the regular [`invite`/`join`](gateway.md#pair-and-manage)
+   operations with their trust checks. An invitation is printed once as the
+   `rhizome join …` command to share privately and is reported as "no peer is
+   connected yet"; a join reports the host ID and whether `peers` currently
+   shows it connected. If the service was already running when setup rewrote
+   the file, setup asks for `rhizome service restart` instead of pairing
+   against stale settings. Declining, an unready gateway or a failed attempt
+   prints the exact commands and retry path; completed steps are never rolled
+   back. Setup never trusts discovered devices or enables history sharing.
 
 Prompts default to stored choices, without persisting shell overrides. Keeping
 an existing file leaves it byte-identical (the service step is still offered). Updating merges selected settings and
@@ -873,8 +901,9 @@ terminal and without `--network` or `--gateway-mode`, setup installs the selecte
 agents, leaves configuration untouched and says so on stderr; it refuses to
 register an explicit `--config` file that does not exist yet. The terminal screen
 replaces a file by merging its answers into the stored one, so settings it does
-not ask about (gateway pairing, history policy, agent options) survive; use the
-flags or `--plain` to change gateway pairing.
+not ask about (history policy, agent options) survive; the connection answer
+covers both `[network].mode` and `[gateway]`. Flag-only runs never run the
+Tailscale check, enroll or start the service.
 
 Bare `rhizome service` opens [service management](service.md#terminal-interface)
 on usable terminals. `rhizome service status --tui` and

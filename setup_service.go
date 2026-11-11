@@ -14,9 +14,10 @@ import (
 // serviceOutcome reports what the setup service step achieved so callers can
 // distinguish a written definition from a running observer.
 type serviceOutcome struct {
-	Installed bool   // a native definition exists after the attempt
-	Running   bool   // the observer holds its runtime lock
-	Runtime   string // effective runtime directory from the configuration file
+	Installed  bool   // a native definition exists after the attempt
+	Running    bool   // the observer holds its runtime lock
+	WasRunning bool   // the observer already held its lock before the step, so it still runs the previous configuration
+	Runtime    string // effective runtime directory from the configuration file
 }
 
 // serviceInstaller installs and starts the background service for the absolute
@@ -38,6 +39,9 @@ func installService(ctx context.Context, path string, manage func(context.Contex
 	}
 	sc := service.FromConfig(c)
 	out := serviceOutcome{Runtime: sc.Observer.Runtime}
+	if before, err := service.Inspect(ctx, sc); err == nil {
+		out.WasRunning = before.Running
+	}
 	installErr := manage(ctx, "install", sc)
 	// Inspect reads local files only; report the final state even after cancellation.
 	status, inspectErr := service.Inspect(context.Background(), sc)

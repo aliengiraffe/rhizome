@@ -38,7 +38,7 @@ func TestAskConfigAutoUpdate(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			a, err := askConfig(prompter{in: bufioReader("off\nlocal\n\n" + tc.answer + "\nn\n"), out: &out}, c, func() error { return nil })
+			a, err := askConfig(prompter{in: bufioReader("1\n\n" + tc.answer + "\nn\n"), out: &out}, c, tailscaleMissing)
 			if err != nil {
 				t.Fatal(err)
 			}
