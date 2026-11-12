@@ -239,7 +239,7 @@ at user scope (`~/.claude.json`) and installs the binding hooks in
 `~/.claude/settings.json`; see [Installing into agents](#installing-into-agents).
 
 **Contributor path for this repository:** build the checkout with `task build`
-(Go 1.27.3+ and [Task v3](https://taskfile.dev/docs/installation) required).
+(Go 1.27.4+ and [Task v3](https://taskfile.dev/docs/installation) required).
 This repository ships `.mcp.json` and `.claude/settings.json`; from its root,
 start Claude in two terminals with
 `claude --dangerously-load-development-channels server:rhizome`.

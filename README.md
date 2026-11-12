@@ -62,7 +62,7 @@ notarized macOS installer places `rhizome` in `/usr/local/bin`, and archives are
 available for macOS, Linux, and Windows (Linux and Windows artifacts are unsigned).
 See the [installation and checksum guide](docs/releasing.md#installing-and-upgrading).
 
-**Alternative: build from source** with Go 1.27.3+ and [Task v3](https://taskfile.dev/docs/installation):
+**Alternative: build from source** with Go 1.27.4+ and [Task v3](https://taskfile.dev/docs/installation):
 
 ```sh
 git clone https://github.com/aliengiraffe/rhizome.git

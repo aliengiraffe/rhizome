@@ -46,7 +46,7 @@ transcripts. Support and response-time promises require maintainer approval.
 
 ## Commands and completion
 
-Run from the repository root with Go 1.27.3+, Python 3, and [Task v3](https://taskfile.dev/docs/installation).
+Run from the repository root with Go 1.27.4+, Python 3, and [Task v3](https://taskfile.dev/docs/installation).
 Install Task with `brew install go-task` or
 `go install github.com/go-task/task/v3/cmd/task@latest`, with the Go bin directory
 on `PATH`. Prefer Taskfile tasks over their underlying commands; `task --list`
