@@ -81,6 +81,10 @@ type counters struct {
 	// Redacted counts published activity events whose text was changed by the
 	// secret filter; RedactionFailures counts those masked without a completed scan.
 	Redacted, RedactionFailures uint64
+	// HookInjected counts events returned to Claude Code as hook
+	// additionalContext (claude.delivery = "hooks"); Written counts them when
+	// they are held for the next hook.
+	HookInjected uint64
 }
 type Node struct {
 	peerActivity config.PeerActivityPolicy
@@ -96,6 +100,11 @@ type Node struct {
 	collectionState  string
 	deliveryError    string
 	deliveryReady    bool
+	// hookDelivery holds Claude events for hook additionalContext instead of
+	// channel notifications; hookInbox and hookInboxBytes are guarded by mu.
+	hookDelivery   bool
+	hookInbox      []string
+	hookInboxBytes int
 	// external marks delivery to an agent's own queue (Codex, OpenCode): gated
 	// on deliveryReady and counted as queue handoffs.
 	external       bool

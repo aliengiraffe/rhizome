@@ -16,7 +16,7 @@ transcripts, or other people's personal information in reports or examples.
 
 ## Set up a checkout
 
-Install Git, Go 1.27.3+, Python 3, and [Task v3](https://taskfile.dev/docs/installation).
+Install Git, Go 1.27.4+, Python 3, and [Task v3](https://taskfile.dev/docs/installation).
 Fork the repository on GitHub if you do not have push access. In the clone command
 below, replace `aliengiraffe` with your GitHub username to clone your fork; use the
 upstream URL as written if you have push access:

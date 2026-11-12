@@ -82,7 +82,12 @@ func (n *Node) status() map[string]any {
 	if n.identity.SessionId == "" {
 		binding = "UNBOUND: waiting for session hook; submit a prompt with observe_session hooks configured"
 	}
-	return map[string]any{"binding": binding, "identity": cloneIdentity(n.identity), "subscriptions": feeds, "queue_depth": len(n.incoming), "delivery_paused": n.paused, "counters": n.stats, "collection_state": n.collectionState, "delivery_error": n.deliveryError}
+	out := map[string]any{"binding": binding, "identity": cloneIdentity(n.identity), "subscriptions": feeds, "queue_depth": len(n.incoming), "delivery_paused": n.paused, "counters": n.stats, "collection_state": n.collectionState, "delivery_error": n.deliveryError}
+	if n.hookDelivery {
+		out["claude_delivery"] = config.ClaudeDeliveryHooks
+		out["hook_queue_depth"] = len(n.hookInbox)
+	}
+	return out
 }
 
 // listSessions merges current discovery with recent-only metadata. Verified
@@ -202,7 +207,15 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 			if err != nil {
 				return result(nil, err)
 			}
-			return result(map[string]any{}, n.observe(in))
+			started := time.Now()
+			if err := n.observe(in); err != nil {
+				return result(nil, err)
+			}
+			if in.AgentID != "" {
+				// Subagent hooks share the session; held peer events go to the main thread.
+				return result(map[string]any{}, nil)
+			}
+			return result(n.hookOutput(ctx, in.Event, started), nil)
 		})
 	case agentCodex:
 		mcp.AddTool(s, &mcp.Tool{Name: "observe_session", Description: "Internal hook-only Codex session binding. Never invoke manually."}, func(ctx context.Context, r *mcp.CallToolRequest, in codexHook) (*mcp.CallToolResult, any, error) {
@@ -298,7 +311,12 @@ func Run(c config.Config, o Options) error {
 	}
 	n.mu.Lock()
 	n.notify = transport.notify
+	if c.Claude.Delivery == config.ClaudeDeliveryHooks {
+		n.hookDelivery = true
+		n.notify = n.holdForHook
+	}
 	n.mu.Unlock()
+	slog.Info("claude_delivery", "path", c.Claude.Delivery)
 	n.wg.Add(1)
 	go func() { defer n.wg.Done(); n.deliver(n.ctx) }()
 	done := make(chan error, 1)

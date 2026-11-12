@@ -22,8 +22,11 @@ retirement, stale/child hooks, unsubscribe queue removal, transcript partial
 writes, historical partial-line baselines, duplicate records, truncation,
 filesystem-watch failure/poll recovery, bounded replay and expiry, concurrent
 replay/live boundaries, slow subscriber disconnection, bounded receiver queues,
-rate limits, channel handshake, prompt explicit delivery, 8 KiB batching and
-30-notification circuit-breaker re-arm.
+rate limits, channel handshake, prompt explicit delivery, 8 KiB batching,
+30-notification circuit-breaker re-arm, and hook delivery (`claude.delivery =
+"hooks"`: once-only `additionalContext` injection from main-thread
+`UserPromptSubmit`/`PreToolUse` hooks, retention across timed-out or cancelled
+hooks, inbox backpressure into the bounded queue, status fields).
 
 Session names (2026-10-19): unit tests cover label normalization (Unicode,
 control characters, whitespace, instruction-like text, 96-byte rune-safe
