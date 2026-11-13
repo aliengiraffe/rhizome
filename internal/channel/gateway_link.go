@@ -29,7 +29,8 @@ type gatewayFrame struct {
 }
 type gatewayLink struct {
 	opencode     bool // the peer negotiated gatewaySubprotocolOpenCode or the later Pi one
-	pi           bool // the peer negotiated gatewaySubprotocolPi
+	pi           bool // the peer negotiated gatewaySubprotocolPi or the later dream one
+	dream        bool // both hosts enabled [gateway.dream] and negotiated gatewaySubprotocolDream
 	lastSnapshot time.Time
 	established  time.Time
 	stopOnce     sync.Once
@@ -113,7 +114,9 @@ func (g *gateway) attach(host string, c *websocket.Conn, outgoing bool) bool {
 	}
 	ctx, cancel := context.WithCancel(g.ctx)
 	sub := c.Subprotocol()
-	l := &gatewayLink{opencode: sub == gatewaySubprotocolOpenCode || sub == gatewaySubprotocolPi, pi: sub == gatewaySubprotocolPi, lastSnapshot: time.Now(), established: time.Now(), g: g, host: host, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
+	dream := sub == gatewaySubprotocolDream && g.cfg.Dream.Enabled()
+	pi := sub == gatewaySubprotocolPi || dream
+	l := &gatewayLink{opencode: sub == gatewaySubprotocolOpenCode || pi, pi: pi, dream: dream, lastSnapshot: time.Now(), established: time.Now(), g: g, host: host, outgoing: outgoing, conn: c, ctx: ctx, cancel: cancel, done: make(chan struct{}), writes: make(chan gatewayFrame, 64), snapshots: make(chan []*pb.Identity, 1), proxies: map[string]*gatewayProxy{}, pending: map[string]chan gatewayFrame{}, active: map[string]context.CancelFunc{}}
 	g.mu.Lock()
 	if reason := g.attachRejection(host, outgoing, true); reason != "" {
 		g.mu.Unlock()
@@ -202,6 +205,10 @@ func (l *gatewayLink) run() {
 	go func() { defer l.wg.Done(); l.writer() }()
 	go func() { defer l.wg.Done(); l.advertise() }()
 	go func() { defer l.wg.Done(); l.reconcile() }()
+	if l.dream {
+		l.wg.Add(1)
+		go func() { defer l.wg.Done(); l.pullDigests() }()
+	}
 	for l.ctx.Err() == nil {
 		_ = l.conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 		var f gatewayFrame
@@ -295,6 +302,11 @@ func (l *gatewayLink) run() {
 	// Advertisement lifetime is the connection: a disconnected or revoked
 	// host's recent entries disappear with its proxies.
 	l.g.recent.clear(l)
+	// Received digests live only while the link and trust exist; the pull
+	// goroutine has exited, so nothing rewrites the file after this.
+	if l.dream {
+		l.g.clearPeerDigests(l.host)
+	}
 	l.g.logger().Info("gateway_link_stop", "host", gatewayHostLabel(l.host), "direction", gatewayDirection(l.outgoing), "reason", l.reason, "uptime_ms", lifetime.Milliseconds(), "proxies", len(proxies), "failures", failures, "backoff_ms", backoff.Milliseconds())
 }
 func (l *gatewayLink) writer() {
@@ -656,12 +668,12 @@ const gatewaySubprotocolOpenCode = "rhizome.gateway.opencode.v1"
 // negotiates none.
 const gatewaySubprotocolPi = "rhizome.gateway.pi.v1"
 
-func newGatewayUpgrader() *websocket.Upgrader {
-	return &websocket.Upgrader{HandshakeTimeout: 5 * time.Second, Subprotocols: []string{gatewaySubprotocolPi, gatewaySubprotocolOpenCode}, CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}
+func newGatewayUpgrader(dream bool) *websocket.Upgrader {
+	return &websocket.Upgrader{HandshakeTimeout: 5 * time.Second, Subprotocols: gatewaySubprotocols(dream), CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}
 }
 
-func newGatewayDialer(tlsCfg *tls.Config) *websocket.Dialer {
-	return &websocket.Dialer{TLSClientConfig: tlsCfg, HandshakeTimeout: 5 * time.Second, Proxy: nil, Subprotocols: []string{gatewaySubprotocolPi, gatewaySubprotocolOpenCode}}
+func newGatewayDialer(tlsCfg *tls.Config, dream bool) *websocket.Dialer {
+	return &websocket.Dialer{TLSClientConfig: tlsCfg, HandshakeTimeout: 5 * time.Second, Proxy: nil, Subprotocols: gatewaySubprotocols(dream)}
 }
 
 // accepts reports whether the subprotocol negotiated on this link allows p to

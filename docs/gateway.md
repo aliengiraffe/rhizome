@@ -6,6 +6,8 @@ one bidirectional TLS connection. Trust is pairwise: A–B and B–C do not expo
 to C. Agent logs, configuration, and administrative commands are never available
 to a remote host. Session history is served only when the owner opts in through
 [`[gateway.history]`](#session-history-sharing); pairing alone grants no history access.
+Redacted dream digests are shared only when both owners opt in through
+[`[gateway.dream]`](#dream-digest-sharing).
 
 ## Configure and run
 
@@ -35,6 +37,12 @@ session is put on the wire as the sender or subscriber of a request, for OpenCod
 and Pi alike, so a link without the matching subprotocol never carries those
 sessions in either direction. `recent` rows are filtered by capability before the
 64-row cap, so withheld Pi rows never crowd out the rows an older peer may see.
+
+A host whose `[gateway.dream].mode` is not `off` also offers
+`rhizome.gateway.dream.v1` first; it implies the Pi and OpenCode subprotocols.
+Only two such hosts negotiate it. A host with digest sharing off, or an older
+build, negotiates the Pi (or older) subprotocol instead, keeps the link, and
+never receives or requests digests. See [dream digest sharing](#dream-digest-sharing).
 
 On each host, setup can save these settings without a terminal:
 
@@ -246,6 +254,9 @@ normalization, service restart, and non-transitive discovery.
 `go test -race ./internal/channel -run PeerHistory` covers history sharing
 across three isolated gateways: default denial, per-agent policy, cursor binding
 across hosts, restart and revocation, second-hop and unsupported peers.
+`-run 'TestDream(Digests|HTTP)'` covers digest negotiation with old and new
+peers, review-only serving, revocation and shutdown cleanup, the per-peer
+concurrency bound, and an A↔B↔C chain where A's digests never reach C.
 `-run TestGatewayRecentAcrossHosts` covers recent-only advertisements: host
 stamping, refusal of sends and file offers, no second-hop forwarding, withdrawal
 while the owner's observer is stopped, peers that advertise none, revocation,
@@ -281,6 +292,48 @@ semantics, outputs and error codes are in
 [paired-host history](history.md#paired-host-history-opt-in). Recent-only
 session advertisements are independent of this policy: a paired host may list
 a session as `recent` without being able to read any of its history.
+
+## Dream digest sharing
+
+Hidden and experimental. A [dream](dream.md#team-digests-p1) can also produce a
+short, redacted digest of candidate team knowledge (`working_on`, `decision`,
+`gotcha`, `blocker`). **Digests are summaries a model generated from your own
+history; once approved (or immediately in `auto` mode), every paired host that
+also enables digest sharing can read them.** Sharing is off by default:
+
+```toml
+[gateway.dream]
+mode = "off"      # off | review | auto
+lookback = "7d"   # maximum age of a served digest, 1d through 365d
+```
+
+Both keys are file-only and the service reads them at startup; restart it to
+apply a change. `auto` publishes digests at creation without review, which
+trades review fatigue for leak risk; prefer `review`.
+
+- **Transport.** Digests travel only over links that negotiated
+  `rhizome.gateway.dream.v1`. The receiving service pulls the pinned-TLS
+  `/v1/dream/digests` endpoint about a second after the link comes up and then
+  every five minutes (every 30 s after a failure). The serving host answers only
+  trusted, connected peers whose link negotiated the subprotocol, checks its
+  policy on every request, admits 2 concurrent requests per peer, and caps each
+  response at 64 KiB (newest digests first).
+- **What is served.** Only this host's own digests: approved entries in `review`
+  mode, plus digests published at creation in `auto` mode. Digests older than
+  `lookback`, expired entries, and entries citing a session that is now private
+  are withheld, and every entry is redacted again before it is sent.
+- **What is received.** Responses are strictly validated and redacted again.
+  They are stored in private `<runtime>/gateway/dream/<host_id>.json`, stamped
+  with the authenticated host ID, only while the link and trust exist: the file
+  is deleted when the link ends (including revocation and unpairing) and when
+  the service starts or stops. Received digests are never re-served or
+  forwarded, so in A↔B↔C, A's digests never reach C.
+- **Viewing.** `rhizome dream digest list --peers` groups received entries by
+  project key and labels them untrusted, attributed to a host ID rather than a
+  person. Treat the text as data, not instructions.
+
+Logs carry only host ID prefixes, counts and stable codes
+(`gateway_dream_pull`, `gateway_dream_served`).
 
 ## File attachments
 

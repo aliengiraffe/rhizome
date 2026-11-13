@@ -267,6 +267,10 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	for _, k := range updateKeys {
 		known["update."+k] = true
 	}
+	known["gateway.dream"] = true
+	for _, k := range dreamSharingKeys {
+		known["gateway.dream."+k] = true
+	}
 	for _, table := range []string{"gateway.history", "claude.peer_history", "codex.peer_history", "opencode.peer_history", "pi.peer_history"} {
 		known[table] = true
 		for _, k := range peerHistoryKeys {
@@ -314,6 +318,17 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	c.Dream, err = resolveDream(raw.Dream, func(k string) bool { return md.IsDefined("dream", k) })
 	if err != nil {
 		return c, err
+	}
+	c.Gateway.Dream, err = resolveDreamSharing(raw.Gateway.Dream, func(k string) bool { return md.IsDefined("gateway", "dream", k) })
+	if err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	for _, k := range dreamSharingKeys {
+		source := "default"
+		if md.IsDefined("gateway", "dream", k) {
+			source = "file"
+		}
+		c.Sources["gateway.dream."+k] = source
 	}
 	c.Sessions, c.RecentWindow = raw.Sessions, DefaultRecentWindow
 	c.Sources["sessions.recent_window"] = "default"
@@ -553,6 +568,12 @@ func (c Config) Write(w io.Writer) error {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "update.notify_sessions = %t # source: %s\n", c.AutoUpdate.NotifySessions, c.Sources["update.notify_sessions"]); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "gateway.dream.mode = %q # source: %s\n", c.Gateway.Dream.Mode, c.Sources["gateway.dream.mode"]); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "gateway.dream.lookback = %q # source: %s\n", c.Gateway.Dream.Lookback, c.Sources["gateway.dream.lookback"]); err != nil {
 		return err
 	}
 	// Peer history shows the effective, inherited policy, not only file values.

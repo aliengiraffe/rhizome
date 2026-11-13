@@ -55,3 +55,60 @@ func (d Dream) Cutoff(now time.Time) time.Time {
 	days, _ := ParseLookback(d.Lookback)
 	return now.UTC().Add(-time.Duration(days) * 24 * time.Hour)
 }
+
+// Digest-sharing modes for [gateway.dream].
+const (
+	DreamShareOff    = "off"
+	DreamShareReview = "review"
+	DreamShareAuto   = "auto"
+)
+
+// DreamSharing is the serving host's file-only [gateway.dream] policy for
+// redacted team digests. Off (the default) generates, serves and requests
+// nothing and keeps the dream gateway subprotocol unadvertised. The service
+// reads it at start; a restart applies a change.
+type DreamSharing struct {
+	Mode     string `toml:"mode"`
+	Lookback string `toml:"lookback"`
+}
+
+var dreamSharingKeys = []string{"mode", "lookback"}
+
+func resolveDreamSharing(d DreamSharing, defined func(string) bool) (DreamSharing, error) {
+	if !defined("mode") {
+		d.Mode = DreamShareOff
+	}
+	if !defined("lookback") {
+		d.Lookback = "7d"
+	}
+	return d, d.Validate()
+}
+
+// Validate rejects unknown modes and lookbacks outside 1d through 365d.
+func (d DreamSharing) Validate() error {
+	switch d.Mode {
+	case DreamShareOff, DreamShareReview, DreamShareAuto:
+	default:
+		return errors.New("gateway.dream.mode must be off, review or auto")
+	}
+	days, err := ParseLookback(d.Lookback)
+	if err != nil || days < 1 || days > 365 {
+		return errors.New("gateway.dream.lookback must be 1d through 365d")
+	}
+	return nil
+}
+
+// Enabled reports whether digests may be generated, served or requested. The
+// zero value is off.
+func (d DreamSharing) Enabled() bool {
+	return d.Mode == DreamShareReview || d.Mode == DreamShareAuto
+}
+
+// Cutoff is the oldest creation time a published digest may have at now.
+func (d DreamSharing) Cutoff(now time.Time) time.Time {
+	days, err := ParseLookback(d.Lookback)
+	if err != nil || days < 1 {
+		days = 7
+	}
+	return now.UTC().Add(-time.Duration(days) * 24 * time.Hour)
+}

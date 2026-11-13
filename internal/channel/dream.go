@@ -52,6 +52,9 @@ type DreamBatch struct {
 	Partial string
 	// Remaining counts eligible sessions not read to their end in this batch.
 	Remaining int
+	// Projects maps session keys with selected events to their project
+	// identity. It is filled only when [gateway.dream] is enabled.
+	Projects map[string]string
 }
 
 // DreamHistory reads only the local catalog and existing confined snapshots.
@@ -102,6 +105,9 @@ func DreamHistory(ctx context.Context, c config.Config, progress DreamProgress, 
 	})
 	batch.Remaining = len(sessions)
 	batch.Scanned = map[string]time.Time{}
+	if c.Gateway.Dream.Enabled() {
+		batch.Projects = map[string]string{}
+	}
 	if len(sessions) > 64 {
 		sessions = sessions[:64]
 	}
@@ -109,6 +115,9 @@ func DreamHistory(ctx context.Context, c config.Config, progress DreamProgress, 
 	for _, session := range sessions {
 		key := DreamKey(session.AgentType, session.SessionID)
 		since := floor(session)
+		if batch.Projects != nil && session.ProjectPath != "" {
+			batch.Projects[key] = DigestProjectKey(session.ProjectPath)
+		}
 		snap, err := h.openSnapshot(ctx, session.AgentType, session.SessionID, "dream", session.source())
 		if err != nil {
 			return DreamBatch{}, err

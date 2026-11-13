@@ -15,6 +15,9 @@ type Gateway struct {
 	// History is the global peer-history policy. It is read only from the file
 	// and is inert while mode is off.
 	History PeerHistory `toml:"history"`
+	// Dream is the digest-sharing policy ([gateway.dream]). It is read only
+	// from the file, resolved with defaults, and inert while mode is off.
+	Dream DreamSharing `toml:"dream"`
 }
 
 // Validate rejects invalid gateway configuration before opening listeners.
