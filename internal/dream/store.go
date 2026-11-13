@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"rhizome/internal/channel"
 	"runtime"
 	"sort"
 	"strings"
@@ -21,16 +22,18 @@ const maxLogBytes = 32 << 20
 // Revision is an append-only operation set and its validated materialized state.
 // Rollback records the target revision instead of asking the model for operations.
 type Revision struct {
-	Version    int         `json:"version"`
-	Revision   int         `json:"revision"`
-	At         time.Time   `json:"at"`
-	Since      time.Time   `json:"since"`
-	Rollback   int         `json:"rollback,omitempty"`
-	Operations []Operation `json:"operations"`
-	Items      []Item      `json:"items"`
-	Added      int         `json:"added"`
-	Updated    int         `json:"updated"`
-	Removed    int         `json:"removed"`
+	Version  int       `json:"version"`
+	Revision int       `json:"revision"`
+	At       time.Time `json:"at"`
+	Since    time.Time `json:"since"`
+	// Cursors resume partially read sessions; see channel.DreamProgress.
+	Cursors    map[string]time.Time `json:"cursors,omitempty"`
+	Rollback   int                  `json:"rollback,omitempty"`
+	Operations []Operation          `json:"operations"`
+	Items      []Item               `json:"items"`
+	Added      int                  `json:"added"`
+	Updated    int                  `json:"updated"`
+	Removed    int                  `json:"removed"`
 }
 
 // Store addresses the private user store. The log is authoritative; Markdown is a cache.
@@ -249,12 +252,12 @@ func Render(items []Item, topic string) string {
 	}
 	return out.String()
 }
-func current(revs []Revision) ([]Item, time.Time) {
+func current(revs []Revision) ([]Item, channel.DreamProgress) {
 	if len(revs) == 0 {
-		return nil, time.Time{}
+		return nil, channel.DreamProgress{}
 	}
 	r := revs[len(revs)-1]
-	return r.Items, r.Since
+	return r.Items, channel.DreamProgress{Since: r.Since, Cursors: r.Cursors}
 }
 func counts(old, new []Item) (add, update, remove int) {
 	m := map[string]Item{}
@@ -291,8 +294,8 @@ func (s Store) Rollback(target int, now time.Time) error {
 	if target < 1 || target > len(revs) {
 		return errors.New("unknown dream revision")
 	}
-	old, since := current(revs)
+	old, progress := current(revs)
 	items := revs[target-1].Items
 	a, u, r := counts(old, items)
-	return s.Commit(revs, Revision{At: now.UTC(), Since: since, Rollback: target, Operations: []Operation{}, Items: items, Added: a, Updated: u, Removed: r})
+	return s.Commit(revs, Revision{At: now.UTC(), Since: progress.Since, Cursors: progress.Cursors, Rollback: target, Operations: []Operation{}, Items: items, Added: a, Updated: u, Removed: r})
 }

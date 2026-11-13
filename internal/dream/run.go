@@ -25,7 +25,7 @@ func Run(ctx context.Context, c config.Config, client Client, dry bool, out, met
 	return run(ctx, c, client, dry, out, metadata, channel.DreamHistory)
 }
 
-func run(ctx context.Context, c config.Config, client Client, dry bool, out, metadata io.Writer, history func(context.Context, config.Config, time.Time, time.Time, int) ([]channel.DreamExcerpt, error)) error {
+func run(ctx context.Context, c config.Config, client Client, dry bool, out, metadata io.Writer, history func(context.Context, config.Config, channel.DreamProgress, time.Time, int) (channel.DreamBatch, error)) error {
 	if !c.Dream.Enabled {
 		return errors.New("dream disabled; explicitly set [dream].enabled = true in the configuration file to send redacted local history to OpenAI")
 	}
@@ -46,7 +46,7 @@ func run(ctx context.Context, c config.Config, client Client, dry bool, out, met
 	if err != nil {
 		return err
 	}
-	items, since := current(revs)
+	items, progress := current(revs)
 	now := time.Now().UTC()
 	memory, _ := json.Marshal(items)
 	// Reserve framing and instructions as well as memory under the same cap.
@@ -54,12 +54,23 @@ func run(ctx context.Context, c config.Config, client Client, dry bool, out, met
 	if budget < 0 {
 		return errors.New("dream input budget too small for current memory")
 	}
-	excerpts, err := history(ctx, c, since, now, budget)
+	batch, err := history(ctx, c, progress, now, budget)
 	if err != nil {
 		return err
 	}
+	excerpts := batch.Excerpts
 	if len(excerpts) == 0 {
-		_, err = fmt.Fprintln(metadata, "dream: 0 eligible events; no model call")
+		if batch.Partial != "" && len(batch.Scanned) == 0 {
+			return errors.New("dream history bound reached without progress; increase max_input_bytes or narrow lookback")
+		}
+		next := advance(progress, batch, nil, now, c.Dream.Cutoff(now))
+		if !dry && len(batch.Scanned) > 0 {
+			// Record scanned-but-empty sessions so later runs do not re-read them.
+			if err = store.Commit(revs, Revision{At: now, Since: next.Since, Cursors: next.Cursors, Operations: []Operation{}, Items: items}); err != nil {
+				return err
+			}
+		}
+		_, err = fmt.Fprintf(metadata, "dream: 0 eligible events; no model call; remaining_sessions=%d\n", batch.Remaining)
 		return err
 	}
 	assemble := func(events []channel.DreamExcerpt) (oai.Request, []byte) {
@@ -86,7 +97,28 @@ func run(ctx context.Context, c config.Config, client Client, dry bool, out, met
 	if low == 0 {
 		return errors.New("dream input budget too small for an event")
 	}
+	if low < len(excerpts) {
+		// Sessions cut by the envelope limit are not complete; the last kept one is partial.
+		cut := map[string]bool{}
+		for _, ex := range excerpts[low:] {
+			cut[channel.DreamKey(ex.Source.Agent, ex.Source.SessionID)] = true
+		}
+		for key := range cut {
+			if _, ok := batch.Scanned[key]; ok {
+				delete(batch.Scanned, key)
+				batch.Remaining++
+			}
+		}
+		last := excerpts[low-1].Source
+		if key := channel.DreamKey(last.Agent, last.SessionID); cut[key] {
+			batch.Partial = key
+		}
+	}
 	excerpts = excerpts[:low]
+	excerpts = holdTies(excerpts, batch.Partial)
+	if len(excerpts) == 0 {
+		return errors.New("dream input budget too small for a complete timestamp group; increase max_input_bytes")
+	}
 	request, raw := assemble(excerpts)
 	// Scan the fully assembled JSON request and fail closed if source metadata
 	// or framing cannot survive redaction.
@@ -114,7 +146,7 @@ func run(ctx context.Context, c config.Config, client Client, dry bool, out, met
 	for _, ex := range excerpts {
 		sessions[ex.Source.Agent+":"+ex.Source.SessionID] = true
 	}
-	if _, err = fmt.Fprintf(metadata, "dream: input_bytes=%d sessions=%d\n", len(filtered), len(sessions)); err != nil {
+	if _, err = fmt.Fprintf(metadata, "dream: input_bytes=%d sessions=%d remaining_sessions=%d\n", len(filtered), len(sessions), batch.Remaining); err != nil {
 		return err
 	}
 	reply, err := client.Respond(ctx, safe)
@@ -129,10 +161,63 @@ func run(ctx context.Context, c config.Config, client Client, dry bool, out, met
 		return json.NewEncoder(out).Encode(proposal)
 	}
 	a, u, r := counts(items, next)
-	err = store.Commit(revs, Revision{At: now, Since: now, Operations: proposal.Operations, Items: next, Added: a, Updated: u, Removed: r})
+	cursor := advance(progress, batch, excerpts, now, c.Dream.Cutoff(now))
+	err = store.Commit(revs, Revision{At: now, Since: cursor.Since, Cursors: cursor.Cursors, Operations: proposal.Operations, Items: next, Added: a, Updated: u, Removed: r})
 	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(metadata, "dream: revision=%d added=%d updated=%d removed=%d\n", len(revs)+1, a, u, r)
 	return err
+}
+
+// holdTies drops the partial session's trailing events that share the last
+// kept timestamp: the cursor resumes strictly after it, so a group split by the
+// budget is resent whole next run instead of partly skipped.
+func holdTies(excerpts []channel.DreamExcerpt, partial string) []channel.DreamExcerpt {
+	if partial == "" || len(excerpts) == 0 {
+		return excerpts
+	}
+	last := excerpts[len(excerpts)-1].Source
+	if channel.DreamKey(last.Agent, last.SessionID) != partial {
+		return excerpts
+	}
+	n := len(excerpts)
+	for n > 0 {
+		s := excerpts[n-1].Source
+		if channel.DreamKey(s.Agent, s.SessionID) != partial || !s.At.Equal(last.At) {
+			break
+		}
+		n--
+	}
+	return excerpts[:n]
+}
+
+// advance returns progress after sending excerpts: fully scanned sessions are
+// done through their last activity, the partial one through its last sent
+// event. Cursors at or before the lookback cutoff are pruned; they cannot
+// select anything again.
+func advance(prev channel.DreamProgress, batch channel.DreamBatch, sent []channel.DreamExcerpt, now, cutoff time.Time) channel.DreamProgress {
+	next := channel.DreamProgress{Since: prev.Since, Cursors: map[string]time.Time{}}
+	for k, v := range prev.Cursors {
+		next.Cursors[k] = v
+	}
+	for k, v := range batch.Scanned {
+		next.Cursors[k] = v
+	}
+	if batch.Partial != "" {
+		for _, ex := range sent {
+			if channel.DreamKey(ex.Source.Agent, ex.Source.SessionID) == batch.Partial && ex.Source.At.After(next.Cursors[batch.Partial]) {
+				next.Cursors[batch.Partial] = ex.Source.At
+			}
+		}
+	}
+	for k, v := range next.Cursors {
+		if !v.After(cutoff) || v.After(now) {
+			delete(next.Cursors, k)
+		}
+	}
+	if len(next.Cursors) == 0 {
+		next.Cursors = nil
+	}
+	return next
 }

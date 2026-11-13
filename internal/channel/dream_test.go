@@ -39,7 +39,8 @@ func TestDreamHistoryPolicyAndSelection(t *testing.T) {
 		for _, tools := range []bool{false, true} {
 			c.Dream.IncludePrompts = prompts
 			c.Dream.IncludeToolBodies = tools
-			events, err := DreamHistory(context.Background(), c, time.Time{}, now, c.Dream.MaxInputBytes)
+			batch, err := DreamHistory(context.Background(), c, DreamProgress{}, now, c.Dream.MaxInputBytes)
+			events := batch.Excerpts
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -65,12 +66,12 @@ func TestDreamHistoryPolicyAndSelection(t *testing.T) {
 			}
 		}
 	}
-	events, err := DreamHistory(context.Background(), c, now, now, c.Dream.MaxInputBytes)
-	if err != nil || len(events) != 0 {
-		t.Fatal("since bound", err, events)
+	batch, err := DreamHistory(context.Background(), c, DreamProgress{Since: now}, now, c.Dream.MaxInputBytes)
+	if err != nil || len(batch.Excerpts) != 0 {
+		t.Fatal("since bound", err, batch.Excerpts)
 	}
-	events, err = DreamHistory(context.Background(), c, time.Time{}, now, 2)
-	if err != nil || len(events) != 0 {
+	batch, err = DreamHistory(context.Background(), c, DreamProgress{}, now, 2)
+	if err != nil || len(batch.Excerpts) != 0 || batch.Partial == "" || batch.Remaining == 0 {
 		t.Fatal("budget", err)
 	}
 	_, lockAfter := os.Stat(filepath.Join(c.RuntimeDir, "observer.lock"))
@@ -82,7 +83,7 @@ func TestDreamHistoryPolicyAndSelection(t *testing.T) {
 		t.Fatal("catalog changed")
 	}
 	c.Dream.Enabled = false
-	if _, err := DreamHistory(context.Background(), c, time.Time{}, now, 100); err == nil {
+	if _, err := DreamHistory(context.Background(), c, DreamProgress{}, now, 100); err == nil {
 		t.Fatal("disabled history accepted")
 	}
 }
@@ -105,11 +106,11 @@ func TestDreamHistoryOpenCodePiAndConfinement(t *testing.T) {
 	c.Codex.SessionsDir = hh.scope.CodexRoot
 	c.OpenCode.DataDir = hh.scope.OpenCodeRoot
 	c.Pi.SessionsDir = hh.scope.PiRoot
-	events, err := DreamHistory(context.Background(), c, time.Time{}, now, c.Dream.MaxInputBytes)
+	batch, err := DreamHistory(context.Background(), c, DreamProgress{}, now, c.Dream.MaxInputBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(events)
+	raw, _ := json.Marshal(batch.Excerpts)
 	for _, marker := range []string{"OC_PROMPT", "OC_ANSWER", "PI_PROMPT", "PI_ANSWER"} {
 		if !strings.Contains(string(raw), marker) {
 			t.Errorf("missing %s: %s", marker, raw)
@@ -124,7 +125,43 @@ func TestDreamHistoryOpenCodePiAndConfinement(t *testing.T) {
 	if err := os.Symlink(outside, piPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DreamHistory(context.Background(), c, time.Time{}, now, c.Dream.MaxInputBytes); err == nil {
+	if _, err := DreamHistory(context.Background(), c, DreamProgress{}, now, c.Dream.MaxInputBytes); err == nil {
 		t.Fatal("followed a source symlink")
+	}
+}
+
+func TestDreamHistoryResumesFromCursors(t *testing.T) {
+	hh := newHistoryHarness(t)
+	now, _ := time.Parse(time.RFC3339, "2026-11-12T12:00:00Z")
+	appendLog(t, filepath.Join(hh.scope.ClaudeRoot, "older.jsonl"),
+		assistantText("older", "/p", "o1", "2026-11-10T10:00:00Z", "OLDER_ONE")+assistantText("older", "/p", "o2", "2026-11-10T10:00:01Z", "OLDER_TWO"))
+	appendLog(t, filepath.Join(hh.scope.ClaudeRoot, "newer.jsonl"),
+		assistantText("newer", "/p", "n1", "2026-11-11T10:00:00Z", "NEWER_ONE")+assistantText("newer", "/p", "n2", "2026-11-11T10:00:01Z", "NEWER_TWO"))
+	hh.index()
+	c := config.Config{RuntimeDir: hh.scope.Runtime, Dream: config.Dream{Enabled: true, Lookback: "7d", MaxInputBytes: 256 << 10}}
+	c.Claude.ProjectsDir = hh.scope.ClaudeRoot
+	c.Codex.SessionsDir = hh.scope.CodexRoot
+	c.OpenCode.DataDir = hh.scope.OpenCodeRoot
+	c.Pi.SessionsDir = hh.scope.PiRoot
+	full, err := DreamHistory(context.Background(), c, DreamProgress{}, now, c.Dream.MaxInputBytes)
+	if err != nil || len(full.Excerpts) != 4 || full.Excerpts[0].Text != "OLDER_ONE" || full.Partial != "" || full.Remaining != 0 || len(full.Scanned) != 2 {
+		t.Fatalf("oldest-first full scan: %+v %v", full, err)
+	}
+	// Budget for the older session and one newer event only.
+	one, _ := json.Marshal(full.Excerpts[0])
+	budget := 2 + 3*(len(one)+1)
+	cut, err := DreamHistory(context.Background(), c, DreamProgress{}, now, budget)
+	older, newer := DreamKey("claude", "older"), DreamKey("claude", "newer")
+	if err != nil || len(cut.Excerpts) != 3 || cut.Partial != newer || cut.Remaining != 1 || len(cut.Scanned) != 1 || cut.Scanned[older].IsZero() {
+		t.Fatalf("budget cut: %+v %v", cut, err)
+	}
+	resume := DreamProgress{Cursors: map[string]time.Time{older: cut.Scanned[older], newer: cut.Excerpts[2].Source.At}}
+	rest, err := DreamHistory(context.Background(), c, resume, now, c.Dream.MaxInputBytes)
+	if err != nil || len(rest.Excerpts) != 1 || rest.Excerpts[0].Text != "NEWER_TWO" || rest.Remaining != 0 {
+		t.Fatalf("resume: %+v %v", rest, err)
+	}
+	done := DreamProgress{Cursors: map[string]time.Time{older: cut.Scanned[older], newer: rest.Scanned[newer]}}
+	if again, err := DreamHistory(context.Background(), c, done, now, c.Dream.MaxInputBytes); err != nil || len(again.Excerpts) != 0 || again.Remaining != 0 {
+		t.Fatalf("drained history reread: %+v %v", again, err)
 	}
 }

@@ -45,8 +45,8 @@ operations to stdout, and leaves the memory tree unchanged, including when it
 does not exist. It does not reserve a revision. Show and log are read-only and
 work without sign-in or enabled egress; rollback is also local and requires no
 model call. Rollback appends a revision restoring the exact items at the target
-revision, including their timestamps and provenance. It does not rewind the last
-successful dream's history cutoff. Revisions start at 1.
+revision, including their timestamps and provenance. It does not rewind history
+progress. Revisions start at 1.
 
 Before inference, stderr reports input bytes and session count. Success reports
 revision and change counts. Errors never include model output or transcripts.
@@ -62,15 +62,23 @@ snapshot readers and normalizers as `read_session_history`, starting at byte
 zero. Run the observer to populate the catalog first. A stopped observer's last
 catalog is usable but may omit recent history. No remote catalog is read.
 
-Sessions and events must have recorded timestamps inside the lookback and newer
-than the last successful run; future or unknown timestamps are excluded. Sessions
-are selected newest-first, ties ordered by agent and exact session ID; each
-session's events remain in source order. Work is bounded to 64 sessions, 128
-history pages, a 30-second read deadline, and the configured input-byte cap
-(including instructions and existing memory). The first event that would exceed
-the budget ends selection. Omitted older events are not backfilled after a
-successful run advances the cutoff. An empty input makes no model call and no
-revision. A nonempty input makes exactly one call (180-second OAI deadline).
+Sessions and events must have recorded timestamps inside the lookback; future or
+unknown timestamps are excluded. Each revision records per-session progress
+cursors: a session read to its end is done through its last activity, and a
+session cut by a bound resumes after its last sent event. Sessions with unread
+events are selected oldest activity first, ties ordered by agent and exact
+session ID; each session's events remain in source order. Work is bounded to 64
+sessions, 128 history pages, a 30-second read deadline, and the configured
+input-byte cap (including instructions and existing memory). History that does
+not fit one input is therefore not skipped: run `rhizome dream` again until
+stderr reports `remaining_sessions=0`. When a cut splits events sharing one
+timestamp, the entire trailing group is held back for the next run. If no
+complete group fits, the run fails without advancing progress and asks for a
+larger input budget. An input with no eligible events makes no model call; it records a
+revision without memory changes only to mark scanned sessions done. A nonempty
+input makes exactly one call (180-second OAI deadline). Cursors before the
+lookback are pruned. Stores written before cursors existed resume after their
+last run time.
 
 User prompts and tool bodies have independent opt-ins, unrelated to
 `[sessions].share_prompts_and_tools`. The serving-host sharing policy and existing
