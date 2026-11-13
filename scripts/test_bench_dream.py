@@ -15,6 +15,52 @@ import bench_dream as bench
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_judge_files_are_separate_and_model_scoped(self):
+        self.assertEqual(bench.grade_path("claude").name, "grades.jsonl")
+        codex = bench.grade_path("codex")
+        self.assertNotEqual(codex, bench.grade_path("claude"))
+        with patch.object(bench, "CODEX_MODEL", "another-model"):
+            self.assertNotEqual(codex, bench.grade_path("codex"))
+
+    def test_repeated_judgments_never_share_a_batch(self):
+        rows = [{"suite": "recall", "qid": "q", "agent": "codex",
+                 "arm": "none", "rep": rep} for rep in range(6)]
+        batches = []
+
+        def grade(jobs, questions):
+            batches.append(jobs)
+            return []
+
+        with patch.object(bench, "load_questions", return_value=[{"id": "q"}]), \
+                patch.object(bench, "read_jsonl", side_effect=lambda p: rows if p.name == "recall.jsonl" else []), \
+                patch.object(bench, "grade_codex_batch", side_effect=grade), \
+                contextlib.redirect_stderr(io.StringIO()):
+            bench.cmd_grade(SimpleNamespace(suite="recall", judge_agent="codex", batch_size=4,
+                                            judge_repeats=2, jobs=1))
+        self.assertEqual(len(batches), 4)
+        self.assertEqual(sum(map(len, batches)), 12)
+        self.assertTrue(all(len({rep for _, rep in batch}) == 1 for batch in batches))
+
+    def test_codex_judge_validates_all_cases_before_accepting_batch(self):
+        rows = [{"suite": "recall", "qid": "q", "agent": "codex",
+                 "arm": arm, "rep": 0, "answer": "answer"} for arm in ("none", "oracle")]
+        questions = {"q": {"question": "question", "facts": ["fact"]}}
+        valid = [{"id": i, "facts": [bool(i)], "contradiction": False, "abstained": False}
+                 for i in range(2)]
+        for grades, tool_calls, succeeds in ((valid, 0, True), (valid[:1], 0, False),
+                                             ([valid[0], valid[0]], 0, False), (valid, 1, False),
+                                             ([dict(valid[0], facts=[]), valid[1]], 0, False)):
+            with self.subTest(grades=grades, tool_calls=tool_calls), patch.object(
+                    bench, "run_codex", return_value={"answer": json.dumps({"grades": grades}),
+                                                     "tool_calls": tool_calls, "error": None}):
+                if succeeds:
+                    got = bench.grade_codex_batch([(r, 1) for r in rows], questions)
+                    self.assertEqual([g["labels"] for g in got], [[False], [True]])
+                    self.assertTrue(all(g["judge_rep"] == 1 for g in got))
+                else:
+                    with self.assertRaises((ValueError, RuntimeError)):
+                        bench.grade_codex_batch([(r, 1) for r in rows], questions)
+
     def test_codex_checks_inputs_not_returned_text(self):
         for command, expected in (("cat README.md", False),
                                   ("cat ~/.claude/projects/session.jsonl", True)):

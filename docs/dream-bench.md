@@ -66,6 +66,18 @@ stated), correct (all facts), contradiction and abstention rates. `--judge-repea
 2` re-grades every answer to report judge test-retest agreement (Cohen's κ on
 per-fact labels).
 
+Claude remains the default judge. `grade --judge-agent codex` uses the configured
+`BENCH_CODEX_MODEL` and `BENCH_CODEX_EFFORT`, with structured JSON output and no
+tool use. It writes a separate grades file keyed by judge model and effort;
+`report --judge-agent codex` reads only that file and labels the judge in its
+output. Claude grades are never overwritten or pooled with Codex grades.
+Codex grades independent cases in batches (`--batch-size`, default 8, maximum
+32); repeated judgments of an answer always occur in separate calls. Every
+case ID, fact count and boolean label is checked before a batch is accepted.
+Batch sizes are recorded with each grade. Judge availability failures stop the
+stage while preserving completed grades. Compare judges as separate analyses:
+model choice and batching can affect scoring.
+
 `report` follows [Adding Error Bars to Evals](https://arxiv.org/abs/2411.00640):
 repeats are averaged per question (the question is the clustering unit), arms
 are compared by **paired** per-question differences against the baseline with
@@ -85,6 +97,9 @@ python3 scripts/bench_dream.py gen --exclude <current-session-id>
 python3 scripts/bench_dream.py run --suite recall --arms none,dream,raw,oracle --repeats 2
 python3 scripts/bench_dream.py grade --judge-repeats 2
 python3 scripts/bench_dream.py report --suite recall
+# Optional independent Codex judge, preserving Claude results:
+python3 scripts/bench_dream.py grade --judge-agent codex --judge-repeats 2
+python3 scripts/bench_dream.py report --suite recall --judge-agent codex
 ```
 
 Every stage is resumable; rerunning skips completed rows. Grading stops on a

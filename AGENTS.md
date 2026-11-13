@@ -211,6 +211,8 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   a partial timestamp group; fail without advancing if no complete group fits.
   `scripts/bench_dream.py` benchmarks memory against agents; its private data
   stays under `~/.rhizome-bench` (see [docs/dream-bench.md](docs/dream-bench.md)).
+  Benchmark grading defaults to Claude; opt-in `--judge-agent codex` keeps
+  model/effort-scoped grades and reports separate, with no judge tool use.
   No scheduled runs, MCP tool, native agent memory writes, public usage or setup
   entries. See [docs/dream.md](docs/dream.md) for bounds, atomic-file/cache
   semantics, provenance, and the pending real-account manual checklist.
