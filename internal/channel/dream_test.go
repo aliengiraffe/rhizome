@@ -66,7 +66,18 @@ func TestDreamHistoryPolicyAndSelection(t *testing.T) {
 			}
 		}
 	}
-	batch, err := DreamHistory(context.Background(), c, DreamProgress{Since: now}, now, c.Dream.MaxInputBytes)
+	// Project identities are derived only when digest sharing is enabled.
+	batch, err := DreamHistory(context.Background(), c, DreamProgress{}, now, c.Dream.MaxInputBytes)
+	if err != nil || batch.Projects != nil {
+		t.Fatal("projects without [gateway.dream]", err, batch.Projects)
+	}
+	c.Gateway.Dream = config.DreamSharing{Mode: "review", Lookback: "7d"}
+	batch, err = DreamHistory(context.Background(), c, DreamProgress{}, now, c.Dream.MaxInputBytes)
+	if err != nil || batch.Projects[DreamKey("claude", "dream-session")] != DigestProjectKey("/p") || batch.Projects[DreamKey("codex", "codex-dream")] != DigestProjectKey("/p") {
+		t.Fatal("projects", err, batch.Projects)
+	}
+	c.Gateway.Dream = config.DreamSharing{}
+	batch, err = DreamHistory(context.Background(), c, DreamProgress{Since: now}, now, c.Dream.MaxInputBytes)
 	if err != nil || len(batch.Excerpts) != 0 {
 		t.Fatal("since bound", err, batch.Excerpts)
 	}

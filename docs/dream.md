@@ -3,7 +3,8 @@
 `rhizome dream` is hidden and explicit-only. It consolidates this device's local
 coding-agent history into user-scope memory. It never runs automatically, creates
 an agent session, calls an agent daemon, or writes an agent's native memory files.
-There is no peer, gateway, team, or MCP memory API in P0.
+There is no MCP memory API and no team merging. Memory itself never leaves this
+host; the only shared artifact is an optional, reviewed digest (P1, below).
 
 ## Opt in and run
 
@@ -76,7 +77,8 @@ timestamp, the entire trailing group is held back for the next run. If no
 complete group fits, the run fails without advancing progress and asks for a
 larger input budget. An input with no eligible events makes no model call; it records a
 revision without memory changes only to mark scanned sessions done. A nonempty
-input makes exactly one call (180-second OAI deadline). Cursors before the
+input makes exactly one memory call (180-second OAI deadline), plus one digest
+call when `[gateway.dream]` is enabled (see below). Cursors before the
 lookback are pruned. Stores written before cursors existed resume after their
 last run time.
 
@@ -136,14 +138,70 @@ committed log; a subsequent successful revision rebuilds caches. Keep a backup
 of the private store before manual maintenance. Symlinked store directories or
 files are refused, and topic paths never come directly from model text.
 
+## Team digests (P1)
+
+With `[gateway.dream].mode` set to `review` or `auto` (default `off`; see
+[gateway digest sharing](gateway.md#dream-digest-sharing)), `rhizome dream` makes
+a **second model call** after committing the memory revision, which spends more
+plan usage, and proposes a short digest of candidate team knowledge. With mode
+`off` no digest is generated and P0 behavior is unchanged.
+
+- **Inputs.** Only this run's already-sent, redacted events from sessions that
+  are public under [session privacy](privacy.md) and have a project identity,
+  plus memory items whose every source is such a session. Private sessions and
+  peer data never contribute. The assembled digest request is redacted and
+  framing-checked again, under the same `max_input_bytes` cap (newest events
+  kept).
+- **Project identity.** Derived by the program from the session's project
+  directory: the nearest `.git` (a linked worktree's `commondir` is followed)
+  is read without running git, with bounded reads and symlinks refused, and
+  `remote "origin"` is normalized to `host/owner/repo`. The host is lowercased,
+  and the scheme, user information and credentials, port, query and `.git`
+  suffix are dropped, so `git@host:owner/repo` and
+  `https://host/owner/repo.git` match. Without a usable remote the key is
+  `local:<sha256(project_path)[:12]>`, which never matches across machines.
+  Credentials are never stored or sent.
+- **Validation.** The strict version-1 reply has `version` and `entries`. Each
+  entry has `type` (`working_on`, `decision`, `gotcha`, `blocker`), `text`
+  (nonblank, at most 512 UTF-8 bytes, no control characters), `project`, 1–16
+  distinct `sources` (`session_id`, `agent`) copied exactly from the request,
+  all belonging to `project`, and optional `expires_at` (future UTC, at most
+  30 days; default 7 days). At most 16 entries and 8 KiB per digest. Any invalid
+  entry rejects the whole digest; the memory revision is kept and the command
+  reports that the digest was not created. Text is redacted before storage and
+  again before it is served.
+- **Storage.** `<runtime>/memory/digests/<id>.json` (0700/0600), written under
+  `memory/dream.lock`. At most 64 are kept; fully expired digests are pruned.
+  Dry runs print the proposed digest and store nothing.
+
+Review with the hidden commands (they never call a model or the network):
+
+```sh
+rhizome dream digest list
+rhizome dream digest show <id>
+rhizome dream digest approve <id> [--entries 1,3]
+rhizome dream digest reject <id>
+rhizome dream digest list --peers
+```
+
+In `review` mode a digest is `pending` until `approve`, which publishes only
+the selected 1-based entries (all by default); `reject` withdraws it for good.
+In `auto` mode digests are `published` at creation, still redacted twice.
+`list --peers` shows entries received from paired hosts, grouped by project key
+and labelled untrusted; they are attributed to a host ID, not a person, and are
+never merged into memory.
+
 ## Verification
 
 Automated tests use synthetic transcripts, fake OAI endpoints and disposable
 state. They cover policy defaults/bounds, independent content opt-ins, lookback
 and since selection, request/reply redaction, strict validation, fabricated
 provenance injection, rollback, lock contention, dry runs, and OAI request/SSE
-behavior. Run the repository's required build/check and stdio, LAN, service and
-update smoke tests; see [AGENTS.md](../AGENTS.md).
+behavior. Digest tests cover remote normalization (SSH, HTTPS, credentials,
+ports, `.git`, worktrees, no remote, symlinked metadata), private-session
+exclusion, strict validation and bounds, review/auto status, and the serving
+policy matrix. Run the repository's required build/check and stdio, LAN, service,
+update and gateway smoke tests; see [AGENTS.md](../AGENTS.md).
 
 Manual checklist (not performed by automated tests):
 
@@ -156,3 +214,9 @@ Manual checklist (not performed by automated tests):
    materialized items and a new rollback revision.
 5. Disable the policy and verify a run refuses; show/log should still work.
 6. Review plan usage. Never include private transcripts or credentials in reports.
+7. For digests, pair two machines with `[gateway.dream].mode = "review"` on both,
+   run a dream in a git checkout whose `origin` uses HTTPS on one machine and SSH
+   on the other, approve a subset with `--entries`, and confirm `dream digest
+   list --peers` on the other machine shows only those entries under the same
+   project key. Mark a source session private and confirm the entry disappears
+   after the next pull; revoke the peer and confirm the received file is deleted.

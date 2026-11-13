@@ -655,11 +655,19 @@ func TestGatewayOpenCodeNegotiation(t *testing.T) {
 		dialer func() *websocket.Dialer
 		want   string
 	}{
-		{"both new", newGatewayUpgrader(), func() *websocket.Dialer { return newGatewayDialer(nil) }, gatewaySubprotocolPi},
-		{"new dialer, OpenCode-only server", &websocket.Upgrader{Subprotocols: openCodeOnly}, func() *websocket.Dialer { return newGatewayDialer(nil) }, gatewaySubprotocolOpenCode},
-		{"OpenCode-only dialer, new server", newGatewayUpgrader(), func() *websocket.Dialer { return &websocket.Dialer{Subprotocols: openCodeOnly} }, gatewaySubprotocolOpenCode},
-		{"old server", &websocket.Upgrader{}, func() *websocket.Dialer { return newGatewayDialer(nil) }, ""},
-		{"old dialer", newGatewayUpgrader(), func() *websocket.Dialer { return &websocket.Dialer{} }, ""},
+		{"both new", newGatewayUpgrader(false), func() *websocket.Dialer { return newGatewayDialer(nil, false) }, gatewaySubprotocolPi},
+		{"new dialer, OpenCode-only server", &websocket.Upgrader{Subprotocols: openCodeOnly}, func() *websocket.Dialer { return newGatewayDialer(nil, false) }, gatewaySubprotocolOpenCode},
+		{"OpenCode-only dialer, new server", newGatewayUpgrader(false), func() *websocket.Dialer { return &websocket.Dialer{Subprotocols: openCodeOnly} }, gatewaySubprotocolOpenCode},
+		{"old server", &websocket.Upgrader{}, func() *websocket.Dialer { return newGatewayDialer(nil, false) }, ""},
+		{"old dialer", newGatewayUpgrader(false), func() *websocket.Dialer { return &websocket.Dialer{} }, ""},
+		// Dream sharing negotiates only when both hosts enabled it; otherwise
+		// the link falls back to Pi (or older) and is kept.
+		{"both dream", newGatewayUpgrader(true), func() *websocket.Dialer { return newGatewayDialer(nil, true) }, gatewaySubprotocolDream},
+		{"dream dialer, sharing-off server", newGatewayUpgrader(false), func() *websocket.Dialer { return newGatewayDialer(nil, true) }, gatewaySubprotocolPi},
+		{"sharing-off dialer, dream server", newGatewayUpgrader(true), func() *websocket.Dialer { return newGatewayDialer(nil, false) }, gatewaySubprotocolPi},
+		{"dream dialer, OpenCode-only server", &websocket.Upgrader{Subprotocols: openCodeOnly}, func() *websocket.Dialer { return newGatewayDialer(nil, true) }, gatewaySubprotocolOpenCode},
+		{"dream dialer, old server", &websocket.Upgrader{}, func() *websocket.Dialer { return newGatewayDialer(nil, true) }, ""},
+		{"old dialer, dream server", newGatewayUpgrader(true), func() *websocket.Dialer { return &websocket.Dialer{} }, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := make(chan string, 1)

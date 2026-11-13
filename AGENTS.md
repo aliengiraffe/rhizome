@@ -26,6 +26,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `main.go`, `service.go`, `gateway.go`, `files.go`, `update.go` | CLI dispatch, MCP, service lifecycle, `rhizome update` and legacy demo. |
 | `setup.go`, `setup_config.go`, `setup_agents.go`, `uninstall.go` | `rhizome setup`: agent detection and picker, the configuration wizard, and user-scope skill/MCP/hook installation; `rhizome uninstall`: its counterpart, sharing the strip halves of the merges. |
 | `internal/config/` | Strict TOML schema, file/env/flag resolution and source tracking. |
+| `internal/project/` | Read-only project identity from a directory's git `origin` remote (normalized `host/owner/repo`, else `local:<hash>`). |
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks; `update.go` and `finish_*.go` wire the auto-updater (restarters, detached finisher) into the observer. |
 | `internal/update/` | Verified self-update: eligibility, bounded GitHub source, signed-manifest/digest/codesign/`--version` verification chain, strict extraction, atomic install with one backup, state file, background loop. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
@@ -218,6 +219,17 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   No scheduled runs, MCP tool, native agent memory writes, public usage or setup
   entries. See [docs/dream.md](docs/dream.md) for bounds, atomic-file/cache
   semantics, provenance, and the pending real-account manual checklist.
+  **Digests (P1)** are the only artifact that leaves the host: with file-only
+  `[gateway.dream].mode` (`off` default | `review` | `auto`, `lookback` default
+  `7d`, `config.DreamSharing`) a run makes one extra model call over its own
+  sent events from sessions public under `sessionPublic` that have a project key
+  (`internal/project`; credentials stripped, symlinks refused), plus memory
+  items sourced only from them; never peer data. Validation is whole-reply strict
+  (4 types, ≤512 B text, ≤16 entries, ≤8 KiB, sources exact and in the entry's
+  project); text is redacted before storage and again before serving. Digests
+  live in `<runtime>/memory/digests/` (`channel.DigestStore`, ≤64) and are
+  reviewed with hidden `rhizome dream digest list|show|approve|reject` and
+  `list --peers` (`internal/dream/review.go`).
 
 - **Experimental OAI commands are explicit-only and hidden.** `auth oai`
   (with `status` / `logout`) and `test oai` dispatch in `main.go` through
@@ -275,7 +287,8 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   are exported, `opencode` sessions only over links that negotiated the
   `rhizome.gateway.opencode.v1` subprotocol or the later `rhizome.gateway.pi.v1`
   one (preferred, implies OpenCode), and `pi` sessions, `recent` rows and history
-  only over the Pi one (older peers drop links over unknown agent types, so every
+  only over the Pi one (or `rhizome.gateway.dream.v1`, offered first only when
+  `[gateway.dream]` is enabled, which implies Pi and is required for digests) (older peers drop links over unknown agent types, so every
   new exported agent type needs its own subprotocol; a Pi identity or `recent` row
   on a link without it drops the link). The rule holds in every direction through
   `gatewayLink.accepts`: snapshots, a peer naming a local target (`localRoute`),
@@ -717,6 +730,19 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   `live_status: not_reported`. Bounds: 4 concurrent, 2 per peer, 8 snapshots
   per peer (`internal/channel/history_peer.go`, `internal/config/history.go`,
   `docs/history.md`).
+- **Dream digests are opt-in on both hosts, serving-host enforced and direct.**
+  Only links that negotiated `rhizome.gateway.dream.v1` carry them; a peer
+  without it keeps its link and gets nothing. Receivers pull `/v1/dream/digests`
+  (`internal/channel/digest_gateway.go`; 1 s after link-up, then 5 min, 30 s
+  after failures). The server serves trusted, connected, negotiated peers only,
+  checks policy on every request, selects only its own store (`servableDigests`:
+  approved entries in review, plus auto-published in auto; lookback, expiry and
+  current privacy re-checked; re-redacted), 2 concurrent per peer, 64 KiB per
+  response. Received digests are strictly parsed, re-redacted, stamped with the
+  authenticated host ID in private `<runtime>/gateway/dream/<host_id>.json`,
+  deleted when the link ends (revocation, unpairing) and at service start/stop,
+  and never re-served or forwarded (no P1 signed forwarding). Logs carry host ID
+  prefixes, counts and codes only. See [docs/gateway.md](docs/gateway.md#dream-digest-sharing).
 - **Device origin is evidence-based; labels never decide it.** The bundled
   `skills/rhizome-collab/SKILL.md` (embedded and installed by `rhizome setup`)
   classifies sessions as this session, this device (own identity has no

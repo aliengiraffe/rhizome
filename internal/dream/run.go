@@ -158,7 +158,10 @@ func run(ctx context.Context, c config.Config, client Client, dry bool, out, met
 		return err
 	}
 	if dry {
-		return json.NewEncoder(out).Encode(proposal)
+		if err := json.NewEncoder(out).Encode(proposal); err != nil {
+			return err
+		}
+		return digest(ctx, c, client, true, out, metadata, data.Events, batch.Projects, next, now)
 	}
 	a, u, r := counts(items, next)
 	cursor := advance(progress, batch, excerpts, now, c.Dream.Cutoff(now))
@@ -166,8 +169,14 @@ func run(ctx context.Context, c config.Config, client Client, dry bool, out, met
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(metadata, "dream: revision=%d added=%d updated=%d removed=%d\n", len(revs)+1, a, u, r)
-	return err
+	if _, err = fmt.Fprintf(metadata, "dream: revision=%d added=%d updated=%d removed=%d\n", len(revs)+1, a, u, r); err != nil {
+		return err
+	}
+	// The memory revision stands even if the separate digest step fails.
+	if err := digest(ctx, c, client, false, out, metadata, data.Events, batch.Projects, next, now); err != nil {
+		return fmt.Errorf("memory revision %d committed; digest not created: %w", len(revs)+1, err)
+	}
+	return nil
 }
 
 // holdTies drops the partial session's trailing events that share the last

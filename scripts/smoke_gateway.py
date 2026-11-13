@@ -36,6 +36,22 @@ def history_logs(directory):
         f.write(json.dumps({'timestamp': stamp(timedelta(hours=1)), 'type': 'session_meta', 'payload': {'id': 'hist-codex', 'cwd': '/work/hist', 'source': 'cli'}}) + '\n')
 
 
+def seed_digest(run):
+    """Host A's own pending digest, as `rhizome dream` would store it in review mode."""
+    now = datetime.now(timezone.utc)
+    digests = run / 'memory' / 'digests'
+    for directory in (run, run / 'memory', digests):
+        directory.mkdir(mode=0o700, exist_ok=True)
+        directory.chmod(0o700)
+    entry = {'type': 'decision', 'project': 'github.com/acme/app', 'sources': [{'session_id': 'hist-a', 'agent': 'claude'}],
+             'expires_at': (now + timedelta(days=7)).isoformat().replace('+00:00', 'Z')}
+    digest = {'version': 1, 'id': '00000000000000a1', 'created_at': now.isoformat().replace('+00:00', 'Z'), 'status': 'pending',
+              'entries': [dict(entry, text='digest shared with paired hosts'), dict(entry, type='gotcha', text='digest entry left unapproved')]}
+    path = digests / '00000000000000a1.json'
+    path.write_text(json.dumps(digest))
+    path.chmod(0o600)
+
+
 def port():
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
@@ -91,6 +107,10 @@ def main():
                     with config.open('a') as f:
                         f.write('gateway.history.enabled = true\nclaude.peer_history.lookback = "15d"\n'
                                 'codex.peer_history.enabled = false\n')
+                if name in ('a', 'b'):
+                    # A and B review digests; C keeps the default (off) and never negotiates them.
+                    with config.open('a') as f:
+                        f.write('gateway.dream.mode = "review"\n')
                 host = {'config': config, 'run': run, 'name': name}
                 hosts.append(host)
                 start(host)
@@ -99,6 +119,11 @@ def main():
                 clients.append(client)
             a, b, c = hosts
             ca, cb, cc = clients
+            # Review flow: only approved entries of A's digest are ever served.
+            seed_digest(a['run'])
+            assert '00000000000000a1' in command(a, 'dream', 'digest', 'list') and 'pending' in command(a, 'dream', 'digest', 'list')
+            command(a, 'dream', 'digest', 'approve', '00000000000000a1', '--entries', '1')
+            assert '*[1]' in command(a, 'dream', 'digest', 'show', '00000000000000a1')
             tokens = [(h['run'] / 'token').read_bytes() for h in hosts]
             assert len(set(tokens)) == 3
             code = command(a, 'invite').split()[-1]
@@ -117,6 +142,12 @@ def main():
             assert pi_recent['status'] == 'recent' and pi_recent['delivery_capable'] is False and pi_recent['host_id'] == host_a and pi_recent['identity']['agent_type'] == 'pi', pi_recent
             local = row(ca, 'hist-a')
             assert local['status'] == 'recent' and 'host_id' not in local, local
+            # B pulls A's approved digest over the dream subprotocol, attributed to A's host ID.
+            until(lambda: 'digest shared with paired hosts' in command(b, 'dream', 'digest', 'list', '--peers'))
+            peers_view = command(b, 'dream', 'digest', 'list', '--peers')
+            assert 'UNTRUSTED' in peers_view and 'host=' + host_a in peers_view and 'project github.com/acme/app' in peers_view, peers_view
+            assert 'left unapproved' not in peers_view, peers_view
+            assert 'no digests received' in command(a, 'dream', 'digest', 'list', '--peers')
             refused = cb.call('tools/call', {'name': 'send', 'arguments': {'session_id': 'hist-a', 'text': 'nobody home'}})
             assert refused.get('isError') and 'recent, not live' in refused['content'][0]['text'], refused
             offer_refused = cb.call('tools/call', {'name': 'send_file', 'arguments': {'session_id': 'hist-a', 'path': str(base / 'b' / 'config.toml')}})
@@ -208,13 +239,17 @@ def main():
             assert 'gateway-a' not in sessions(cc)
             assert 'gateway-c' not in sessions(ca)
             assert 'hist-a' not in sessions(cc)  # recent entries are never forwarded through B
+            # C left digest sharing off: its link to B stays up without the dream
+            # subprotocol, and digests are neither served to it nor forwarded through B.
+            assert 'no digests received' in command(c, 'dream', 'digest', 'list', '--peers')
             # History selection is direct only: C reaches B but never A through B.
             assert cc.error('search_sessions', {'host_id': host_a})['code'] == 'PEER_UNAVAILABLE'
             command(b, 'peers', 'revoke', paired['host_id'])
             until(lambda: 'gateway-a' not in sessions(cb) and 'hist-a' not in sessions(cb))
+            until(lambda: 'digest shared' not in command(b, 'dream', 'digest', 'list', '--peers'))  # deleted on revocation
             assert cb.call('tools/call', {'name': 'send', 'arguments': {'session_id': 'gateway-a', 'text': 'must fail'}}).get('isError')
             assert [(h['run'] / 'token').read_bytes() for h in hosts] == tokens
-            print('gateway smoke: PASS (pairing, distinct tokens, bidirectional routing, file transfers, opt-in history, recent-only advertisements, Pi over its subprotocol, activity, restart, non-transitivity, revocation)')
+            print('gateway smoke: PASS (pairing, distinct tokens, bidirectional routing, file transfers, opt-in history, recent-only advertisements, reviewed dream digests, Pi over its subprotocol, activity, restart, non-transitivity, revocation)')
         finally:
             for client in clients:
                 client.close()

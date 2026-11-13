@@ -50,6 +50,8 @@ type gateway struct {
 	historyPolicy                      config.HistoryPolicy
 	historyMu                          sync.Mutex
 	historyActive                      map[string]int // in-flight peer history requests per host
+	dreamMu                            sync.Mutex
+	dreamActive                        map[string]int // in-flight /v1/dream/digests requests per host
 	retry                              map[string]gatewayRetry
 	proxySlots                         chan struct{}
 	enrollmentRate                     *rate.Limiter
@@ -96,6 +98,11 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway, history
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
+	if cfg.Dream != (config.DreamSharing{}) {
+		if err := cfg.Dream.Validate(); err != nil {
+			return err
+		}
+	}
 	dir := filepath.Join(runtime, "gateway")
 	if err := localstate.SecureDir(runtime); err != nil {
 		return err
@@ -131,7 +138,7 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway, history
 	served := newHistoryService(historyScope{Runtime: runtime, ClaudeRoot: history.ClaudeRoot, CodexRoot: history.CodexRoot, OpenCodeRoot: history.OpenCodeRoot, PiRoot: history.PiRoot})
 	served.details = history.Details
 	served.peerActivity = history.PeerActivity
-	g := &gateway{recent: newGatewayRecent(dir), recentWindow: history.RecentWindow, history: served, historyPolicy: history.Policy, historyActive: map[string]int{}, retry: map[string]gatewayRetry{}, proxySlots: make(chan struct{}, 128), enrollmentRate: rate.NewLimiter(4, 8), ctx: ctx, cancel: cancel, cfg: cfg, runtime: runtime, host: host, endpoint: endpoint, cert: cert, statePath: statePath, state: state, links: map[string]*gatewayLink{}, dialing: map[string]bool{}}
+	g := &gateway{recent: newGatewayRecent(dir), recentWindow: history.RecentWindow, history: served, historyPolicy: history.Policy, historyActive: map[string]int{}, dreamActive: map[string]int{}, retry: map[string]gatewayRetry{}, proxySlots: make(chan struct{}, 128), enrollmentRate: rate.NewLimiter(4, 8), ctx: ctx, cancel: cancel, cfg: cfg, runtime: runtime, host: host, endpoint: endpoint, cert: cert, statePath: statePath, state: state, links: map[string]*gatewayLink{}, dialing: map[string]bool{}}
 	g.files, err = newGatewayFiles(runtime)
 	if err != nil {
 		return err
@@ -139,6 +146,8 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway, history
 	defer g.files.close()
 	g.recent.close() // never serve entries left by an earlier service instance
 	defer g.recent.close()
+	g.resetPeerDigests() // likewise for digests received by an earlier instance
+	defer g.resetPeerDigests()
 	g.base = newNode(ctx)
 	if err := g.base.start(Options{Runtime: runtime, Hostname: history.Hostname}); err != nil {
 		g.base.close()
@@ -156,6 +165,7 @@ func RunGateway(ctx context.Context, runtime string, cfg config.Gateway, history
 	if gatewayServesHistory {
 		mux.HandleFunc("/v1/history", g.historyHTTP)
 	}
+	mux.HandleFunc("/v1/dream/digests", g.dreamHTTP)
 	slots := make(chan struct{}, 32)
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -663,7 +673,7 @@ func (g *gateway) connect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "untrusted host", 403)
 		return
 	}
-	c, err := newGatewayUpgrader().Upgrade(w, r, nil)
+	c, err := newGatewayUpgrader(g.cfg.Dream.Enabled()).Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
@@ -723,7 +733,7 @@ func (g *gateway) tryDial(host string) {
 		}()
 		ctx, cancel := context.WithTimeout(g.ctx, 5*time.Second)
 		defer cancel()
-		d := newGatewayDialer(g.clientTLS(host))
+		d := newGatewayDialer(g.clientTLS(host), g.cfg.Dream.Enabled())
 		c, res, err := d.DialContext(ctx, "wss://"+p.Endpoint+"/v1/connect", nil)
 		if res != nil && res.Body != nil {
 			res.Body.Close()
