@@ -56,7 +56,8 @@ Arms prepend the same untrusted-notes preamble so only the notes differ:
 | `<variant>` | `rhizome dream show` output of that dream variant |
 | `raw` | unconsolidated recent assistant excerpts with the same byte budget as dream memory (does consolidation beat retrieval of raw text?) |
 | `oracle` | the question's own source session (ceiling; validates the questions) |
-| `tools` | no notes; Rhizome MCP `search_sessions`/`read_session_history` on the frozen catalog (on-demand retrieval) |
+| `tools` | no notes; Rhizome MCP `search_sessions`/`read_session_history` on the frozen catalog (unprompted tool discovery) |
+| `tools-guided` | the same tools, plus an explicit prompt that historical evidence is available through them (guided retrieval) |
 
 ## Grading and statistics
 

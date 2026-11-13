@@ -409,6 +409,10 @@ PREAMBLE = ("Below are notes about this user's past coding-agent sessions on thi
 
 
 def context_for(arm):
+    if arm == "tools-guided":
+        return ("Rhizome search_sessions and read_session_history are available to retrieve this user's "
+                "local coding-session history. Use them when past-session evidence would help answer the question. "
+                "Access history only through those tools, not by reading agent log or memory files.\n\n")
     if arm in ("none", "tools"):
         return ""
     if arm == "raw":

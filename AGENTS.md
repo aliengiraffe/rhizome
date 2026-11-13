@@ -213,6 +213,8 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   stays under `~/.rhizome-bench` (see [docs/dream-bench.md](docs/dream-bench.md)).
   Benchmark grading defaults to Claude; opt-in `--judge-agent codex` keeps
   model/effort-scoped grades and reports separate, with no judge tool use.
+  Open-book `tools` and `tools-guided` arms distinguish unprompted discovery
+  from an explicit history-tool hint; retain tool identities/inputs for audit.
   No scheduled runs, MCP tool, native agent memory writes, public usage or setup
   entries. See [docs/dream.md](docs/dream.md) for bounds, atomic-file/cache
   semantics, provenance, and the pending real-account manual checklist.
