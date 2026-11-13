@@ -194,10 +194,35 @@ See [setup](docs/reference.md#creating-the-configuration-file),
 
 ## Rhizome invariants
 
+- **Dreaming is hidden, explicit-only and owner-only.** `rhizome dream`
+  (`dream.go`, `internal/dream`) requires file-only `[dream].enabled` (default
+  false) before any model call. It sends redacted local history and memory to
+  OpenAI with `store:false`; `include_prompts` and `include_tool_bodies` are
+  independent opt-ins and never affect session sharing. Reuse confined history
+  snapshots from byte zero; no peers, nodes, collection leases, or agent daemons.
+  Redact the assembled request and returned text, validate the whole strict
+  operation set against exact sent sources, and keep logs metadata-only.
+  Private revisions live at `<runtime>/memory/user/log.jsonl`, with derived
+  `MEMORY.md` (at most 200 lines) and `topics/*.md`; `memory/dream.lock` excludes
+  writers. Dry-run leaves memory unchanged; rollback appends a revision.
+  Revisions carry per-session progress cursors (`channel.DreamProgress`), and
+  selection is oldest-first, so repeated runs drain history beyond one input
+  budget; never reintroduce a run-time cutoff that skips unsent events. Hold back
+  a partial timestamp group; fail without advancing if no complete group fits.
+  `scripts/bench_dream.py` benchmarks memory against agents; its private data
+  stays under `~/.rhizome-bench` (see [docs/dream-bench.md](docs/dream-bench.md)).
+  Benchmark grading defaults to Claude; opt-in `--judge-agent codex` keeps
+  model/effort-scoped grades and reports separate, with no judge tool use.
+  Open-book `tools` and `tools-guided` arms distinguish unprompted discovery
+  from an explicit history-tool hint; retain tool identities/inputs for audit.
+  No scheduled runs, MCP tool, native agent memory writes, public usage or setup
+  entries. See [docs/dream.md](docs/dream.md) for bounds, atomic-file/cache
+  semantics, provenance, and the pending real-account manual checklist.
+
 - **Experimental OAI commands are explicit-only and hidden.** `auth oai`
   (with `status` / `logout`) and `test oai` dispatch in `main.go` through
   `oai.go` / `internal/oai`; never list them in public usage, README or setup.
-  Only these commands access SIWC. Non-secret registration is atomically saved
+  These commands and the explicitly enabled hidden `dream` command access SIWC. Non-secret registration is atomically saved
   under `~/.rhizome/oai/state.json` with private permissions and a writer lock;
   tokens live only in Keychain, Secret Service or Windows Credential Manager,
   with no plaintext fallback, config storage or peer forwarding. Preserve
