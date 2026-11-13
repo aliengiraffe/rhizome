@@ -221,7 +221,16 @@ const startObserverHint = "No session-history catalog exists in this runtime dir
 // load returns the current catalog and whether the observer service holds its
 // runtime lock. Missing, corrupt, foreign-scope and newer catalogs are errors.
 func (r *catalogReader) load() (*catalogFile, bool, *historyError) {
-	running := observerRunning(r.scope.Runtime)
+	return r.loadWithStatus(true)
+}
+
+// loadWithStatus lets owner-only offline reads avoid even probing/creating the
+// observer lock. Normal MCP reads retain their existing liveness reporting.
+func (r *catalogReader) loadWithStatus(probe bool) (*catalogFile, bool, *historyError) {
+	running := false
+	if probe {
+		running = observerRunning(r.scope.Runtime)
+	}
 	path := r.scope.path()
 	st, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {

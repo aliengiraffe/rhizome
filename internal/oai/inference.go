@@ -17,6 +17,39 @@ func (c *Client) Test(ctx context.Context, model, prompt string) (string, error)
 	if len(model) > 200 || len(prompt) > 64<<10 {
 		return "", errors.New("model or prompt exceeds limit")
 	}
+	return c.Respond(ctx, Request{Model: model, Input: []Message{{Role: "user", Content: prompt}}})
+}
+
+// Message is one explicit input message.
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// Request supplies instructions and bounded multi-message input to Responses.
+type Request struct {
+	Model        string    `json:"model"`
+	Instructions string    `json:"instructions,omitempty"`
+	Input        []Message `json:"input"`
+}
+
+// Respond uses the same authenticated, non-retrying streaming path as Test.
+// Empty Model selects the first visible model in server order.
+func (c *Client) Respond(ctx context.Context, req Request) (string, error) {
+	size := len(req.Instructions)
+	if len(req.Model) > 200 || len(req.Input) == 0 || len(req.Input) > 32 {
+		return "", errors.New("invalid OAI request bounds")
+	}
+	for _, m := range req.Input {
+		if m.Role != "user" && m.Role != "assistant" {
+			return "", errors.New("invalid OAI message role")
+		}
+		size += len(m.Content)
+	}
+	if size > 2<<20 {
+		return "", errors.New("OAI input exceeds limit")
+	}
+	model := req.Model
 	ctx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 	v, e := openVault(c.dir, c.store, false)
@@ -37,12 +70,12 @@ func (c *Client) Test(ctx context.Context, model, prompt string) (string, error)
 			return "", e
 		}
 	}
+	req.Model = model
 	body, _ := json.Marshal(struct {
-		Model  string              `json:"model"`
-		Input  []map[string]string `json:"input"`
-		Store  bool                `json:"store"`
-		Stream bool                `json:"stream"`
-	}{Model: model, Input: []map[string]string{{"role": "user", "content": prompt}}, Stream: true})
+		Request
+		Store  bool `json:"store"`
+		Stream bool `json:"stream"`
+	}{Request: req, Stream: true})
 	resp, e := c.request(ctx, "POST", c.api+"/responses", "application/json", creds.Access, bytes.NewReader(body))
 	if e != nil {
 		return "", e
