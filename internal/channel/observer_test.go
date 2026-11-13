@@ -155,7 +155,7 @@ func TestObserverNativeNotificationsAndMissingRoots(t *testing.T) {
 	opts := ObserverOptions{Runtime: rt, ClaudeRoot: filepath.Join(dir, "late", "claude"), CodexRoot: filepath.Join(dir, "late", "codex")}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- RunObserver(ctx, opts) }()
+	go func() { done <- runObserver(ctx, opts, 20*time.Millisecond) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -184,9 +184,22 @@ func TestObserverNativeNotificationsAndMissingRoots(t *testing.T) {
 	}
 	appendLog(t, filepath.Join(opts.ClaudeRoot, "nested", "session.jsonl"), claudeRecord("native-claude", "1", "first"))
 	appendLog(t, filepath.Join(opts.CodexRoot, "nested", "rollout.jsonl"), fmt.Sprintf(`{"type":"session_meta","payload":{"id":"native-codex","cwd":%q,"source":"cli"}}`+"\n", dir)+`{"type":"response_item","payload":{"type":"message","id":"a","role":"assistant","content":[{"type":"output_text","text":"first"}]}}`+"\n")
-	// There is no normal-path polling scan. Discovery must come from notifications.
+	reader := &catalogReader{scope: historyScope{Runtime: rt, ClaudeRoot: opts.ClaudeRoot, CodexRoot: opts.CodexRoot}}
+	// Missing roots are discovered by the bounded root retry; subsequent changes use notifications.
 	for _, id := range []string{"native-claude", "native-codex"} {
 		eventually(t, func() bool { p, err := peer.resolve(context.Background(), id); return err == nil && p.ObservationOnly })
+		eventually(t, func() bool {
+			catalog, _, err := reader.load()
+			if err != nil {
+				return false
+			}
+			for key := range catalog.sessions() {
+				if key.Session == id {
+					return true
+				}
+			}
+			return false
+		})
 	}
 }
 func TestCodexLogFilteringAndDuplicates(t *testing.T) {
@@ -355,5 +368,138 @@ func TestObservedPathCannotRebindSilently(t *testing.T) {
 	}
 	if got := activityTexts(f.n); len(got) != 1 || got[0] != "new-only" {
 		t.Fatal(got)
+	}
+}
+
+func TestObserverWatchScope(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		t.Run(fmt.Sprintf("present=%v", present), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			o := observerHarness(t)
+			o.opts.ClaudeRoot = filepath.Join(home, ".claude", "projects")
+			o.opts.CodexRoot = filepath.Join(home, ".codex", "sessions")
+			o.opts.PiRoot = filepath.Join(home, ".pi", "agent", "sessions")
+			o.opts.OpenCodeRoot = filepath.Join(home, ".local", "share", "opencode")
+			o.index = newHistoryIndex(historyScope{Runtime: o.opts.Runtime, OpenCodeRoot: o.opts.OpenCodeRoot}, nil)
+			roots := []string{o.opts.ClaudeRoot, o.opts.CodexRoot, o.opts.PiRoot, o.opts.OpenCodeRoot}
+			want := map[string]bool{}
+			if present {
+				for _, root := range roots {
+					nested := filepath.Join(root, "nested")
+					if err := os.MkdirAll(nested, 0700); err != nil {
+						t.Fatal(err)
+					}
+					want[root] = true
+					if root != o.opts.OpenCodeRoot {
+						want[nested] = true
+					}
+				}
+			}
+			o.inventory(true)
+			if len(o.dirs) != len(want) {
+				t.Fatalf("watches = %v, want %v", o.dirs, want)
+			}
+			for dir := range o.dirs {
+				if !want[dir] {
+					t.Errorf("unexpected watch: %s", dir)
+				}
+			}
+			if o.retry {
+				t.Fatal("ordinary missing roots should not trigger full-tree reconciliation")
+			}
+		})
+	}
+}
+
+func TestObserverRejectsHomeAncestors(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	if err := os.Mkdir(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(base, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{home, base, filepath.VolumeName(home) + string(os.PathSeparator), filepath.Join(alias, "home"), alias} {
+		for _, agent := range []string{"claude", "opencode"} {
+			t.Run(agent+"/"+root, func(t *testing.T) {
+				o := observerHarness(t)
+				o.opts.CodexRoot = ""
+				o.opts.ClaudeRoot = ""
+				if agent == "claude" {
+					o.opts.ClaudeRoot = root
+				} else {
+					o.opts.OpenCodeRoot = root
+					o.index = newHistoryIndex(historyScope{Runtime: o.opts.Runtime}, nil)
+				}
+				o.inventory(true)
+				if len(o.dirs) != 0 || (root != alias && !o.retry) {
+					t.Fatalf("unsafe root: watches=%v degraded=%v", o.dirs, o.retry)
+				}
+			})
+		}
+	}
+}
+
+func TestObserverMissingCustomRootAndOpenCodeRecovery(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	o := observerHarness(t)
+	o.opts.ClaudeRoot = filepath.Join(home, "custom", "projects")
+	o.opts.CodexRoot = ""
+	o.opts.OpenCodeRoot = filepath.Join(home, ".local", "share", "opencode")
+	o.index = newHistoryIndex(historyScope{Runtime: o.opts.Runtime, ClaudeRoot: o.opts.ClaudeRoot, OpenCodeRoot: o.opts.OpenCodeRoot}, nil)
+	o.inventory(true)
+	if len(o.dirs) != 0 {
+		t.Fatalf("missing roots watched parents: %v", o.dirs)
+	}
+	for _, root := range []string{o.opts.ClaudeRoot, o.opts.OpenCodeRoot} {
+		if err := os.MkdirAll(filepath.Join(root, "nested"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(o.opts.ClaudeRoot, "new.jsonl")
+	appendLog(t, path, claudeRecord("late-root", "1", "new"))
+	o.index.ocDirty = false
+	o.retryRoots()
+	if !o.dirs[o.opts.ClaudeRoot] || !o.dirs[o.opts.OpenCodeRoot] || !o.index.ocDirty {
+		t.Fatalf("root recovery failed: watches=%v opencode dirty=%v", o.dirs, o.index.ocDirty)
+	}
+	if o.dirs[filepath.Join(o.opts.OpenCodeRoot, "nested")] {
+		t.Fatal("OpenCode subtree watched")
+	}
+	if o.files[path] == nil || o.files[path].n == nil || len(o.index.queue) == 0 {
+		t.Fatal("new log not collected and queued for indexing")
+	}
+	// Already watched roots are not traversed or refreshed by the retry timer.
+	o.index.ocDirty = false
+	o.retryRoots()
+	if o.index.ocDirty {
+		t.Fatal("unchanged OpenCode root refreshed by timer")
+	}
+}
+
+func TestObserverWatchDirectoryLimit(t *testing.T) {
+	o := observerHarness(t)
+	for i := 0; i < 4096; i++ {
+		o.dirs[fmt.Sprintf("existing-%d", i)] = true
+	}
+	o.addRoot(o.opts.ClaudeRoot, false)
+	o.health()
+	if len(o.dirs) != 4096 || !o.retry {
+		t.Fatalf("limit not enforced: %d, degraded=%v", len(o.dirs), o.retry)
+	}
+	data, err := os.ReadFile(filepath.Join(o.opts.Runtime, "observer-health.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health struct {
+		Degraded bool `json:"degraded"`
+	}
+	if err := json.Unmarshal(data, &health); err != nil || !health.Degraded {
+		t.Fatalf("degraded health missing: %s (%v)", data, err)
 	}
 }

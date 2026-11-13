@@ -582,7 +582,10 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   once, and a failed live peer is not re-probed by the process for 30 s
   (`internal/channel/registry.go`).
 - **Native watches drive observer collection.** Do not add normal-path tree
-  polling. Keep file/directory/session limits and visible degraded coverage.
+  polling. Watch only agent roots and their subdirectories (OpenCode: root only),
+  never parent folders, HOME or its ancestors, including symlink aliases. Bounded
+  rechecks of missing roots every 30 seconds are allowed, not tree polling.
+  Keep file/directory/session limits and visible degraded coverage.
   See `internal/channel/observer.go`, `ownership.go`, and `docs/service.md`.
 - **History is a read-only, local, metadata-first cache.** The observer is the
   only catalog writer (`<runtime>/history/catalog.json`, atomic rename, version
