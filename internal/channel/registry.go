@@ -103,6 +103,10 @@ func (n *Node) register(runtime string) error {
 	if names <= 0 {
 		names = defaultNameRefresh
 	}
+	git := n.gitRefresh
+	if git <= 0 {
+		git = defaultGitRefresh
+	}
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()
@@ -110,6 +114,8 @@ func (n *Node) register(runtime string) error {
 		defer ticker.Stop()
 		nameTicker := time.NewTicker(names)
 		defer nameTicker.Stop()
+		gitTicker := time.NewTicker(git)
+		defer gitTicker.Stop()
 		for {
 			select {
 			case <-n.ctx.Done():
@@ -118,6 +124,10 @@ func (n *Node) register(runtime string) error {
 				n.healRegistration()
 			case <-nameTicker.C:
 				n.syncOverride()
+			case <-gitTicker.C:
+				if n.updateGit() {
+					n.advertise()
+				}
 			}
 		}
 	}()

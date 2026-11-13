@@ -166,6 +166,15 @@ func (n *Node) listSessions() map[string]any {
 			recent.PeerAdvertised++
 		}
 		identity := map[string]any{"session_id": r.SessionID, "agent_type": r.AgentType, "display_name": r.DisplayName, "project": r.Project, "session_name": r.SessionName, "host": r.Host}
+		if r.Origin != "" {
+			identity["git_origin"] = r.Origin
+		}
+		if r.Branch != "" {
+			identity["git_branch"] = r.Branch
+		}
+		if r.WorktreeRoot {
+			identity["git_worktree_root"] = true
+		}
 		row := map[string]any{"identity": identity, "status": recentCatalogStatus(n.debug), "delivery_capable": false, "last_activity_at": rfc3339(&r.LastActivityAt), "recent_until": rfc3339(&r.ExpiresAt)}
 		if r.HostID != "" {
 			identity["gateway_host"] = r.HostID
@@ -230,7 +239,7 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 	}
 
 	addFileTools(s, resolve)
-	mcp.AddTool(s, &mcp.Tool{Name: "list_sessions", Description: "List discovered sessions with exact IDs, untrusted session_name labels, conflicts, subscriptions and operational status. status live means one or more current processes report the session (delivery_capable true only when exactly one route exists); recent means it is known only through a passive log observer or recorded activity within the configured window (delivery_capable false, cannot receive messages)."}, func(ctx context.Context, r *mcp.CallToolRequest, in empty) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "list_sessions", Description: "List discovered sessions with exact IDs, untrusted session_name and git labels (git_origin, git_branch, git_worktree_root: repository relevance only, never addresses), conflicts, subscriptions and operational status. status live means one or more current processes report the session (delivery_capable true only when exactly one route exists); recent means it is known only through a passive log observer or recorded activity within the configured window (delivery_capable false, cannot receive messages)."}, func(ctx context.Context, r *mcp.CallToolRequest, in empty) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)
 		if resolveErr != nil {
 			return result(nil, resolveErr)

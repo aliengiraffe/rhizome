@@ -210,6 +210,20 @@ receive messages. Proxy events carry a local trust grant that is checked again
 before delivery; a new grant after re-pairing cannot revive old queued content.
 Existing normalizers, suppression, deduplication, and live replay rules apply.
 
+Exported identities and `recent` entries include the optional
+[git labels](reference.md#git-labels) `git_origin`, `git_branch` and
+`git_worktree_root`, so a paired host can recognize the same repository without
+comparing paths. They are labels, not addresses: a proxy is still created,
+matched and routed by `session_id`, node and generation only, and a label
+change updates the proxy in place. The receiving host bounds them (`git_origin`
+at most 180 bytes, `git_branch` at most 96, valid UTF-8); a snapshot outside
+those bounds ends the connection as `invalid_snapshot`, like any other invalid
+identity. The fields are optional in both directions: a peer that predates
+them ignores the unknown JSON keys, and its identities, which lack them, stay
+valid and simply show no git labels. Origins and branch names can reveal
+project or customer names to paired hosts, as `project` paths already do; there
+is no separate opt-out in this version.
+
 Each snapshot also carries a bounded `recent` list: the sending host's own
 sessions whose last recorded activity is inside its `sessions.recent_window`
 (see the README's [Session status](../README.md#session-status)). Entries are

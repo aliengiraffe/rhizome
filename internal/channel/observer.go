@@ -557,6 +557,9 @@ func (o *observer) scan(path string, f *observedFile) {
 		n.identity.Project = clip(f.cwd, 180)
 		n.identity.DisplayName = clip(filepath.Base(f.cwd), 40)
 		n.identity.ObservationOnly = true
+		// The observer never opens project directories: it joins the record
+		// the session's own process wrote, when there is one.
+		loadGit(o.opts.Runtime, f.session).apply(n.identity)
 		n.details = o.opts.Details
 		n.peerActivity = o.opts.PeerActivity
 		if err := n.start(Options{Runtime: o.opts.Runtime, Hostname: o.opts.Hostname}); err != nil {

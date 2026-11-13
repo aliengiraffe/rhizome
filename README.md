@@ -256,6 +256,16 @@ eliminate leakage, may mask benign strings, and does not decode encoded
 secrets. Collected assistant text can still contain project-sensitive
 information.
 
+Session identities shown by `list_sessions` and `search_sessions` carry labels:
+the working directory (`project`), a session name, and, inside a git checkout,
+`git_origin` (the origin remote normalized to `host/org/repo`, with credentials
+removed), `git_branch` and `git_worktree_root`. The same repository reports the
+same `git_origin` on every machine and worktree, and `search_sessions` can
+filter by it. These are labels for relevance, never addresses: messages are
+routed only by exact `session_id`. Peers and paired hosts see them, so branch
+and repository names are as visible as project paths. See
+[git labels](docs/reference.md#git-labels).
+
 Delivery uses bounded queues, short replay windows, deduplication, and feedback
 controls. A successful send means the receiver **accepted it into a queue**,
 not that the agent read or acted on it. Restarts lose live replay state and

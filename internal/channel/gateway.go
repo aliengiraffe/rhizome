@@ -792,5 +792,6 @@ func (g *gateway) recentExport(now time.Time, pi bool) []recentSession {
 		name, _ := g.history.effectiveName(s, overrides)
 		return name
 	})
+	withGit(rows, g.history.scope.Runtime)
 	return rows
 }

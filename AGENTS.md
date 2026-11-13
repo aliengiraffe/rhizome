@@ -29,7 +29,7 @@ Start with [README.md](README.md) for capabilities, collaboration workflows and 
 | `internal/service/`, `internal/localstate/` | Native user-service definitions, private runtime state and OS locks; `update.go` and `finish_*.go` wire the auto-updater (restarters, detached finisher) into the observer. |
 | `internal/update/` | Verified self-update: eligibility, bounded GitHub source, signed-manifest/digest/codesign/`--version` verification chain, strict extraction, atomic install with one backup, state file, background loop. |
 | `server.go`, `client.go`, `cluster.go` | Legacy demo networking; not the production MCP channel. |
-| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), recent-only advertisements (`recent.go`), secret redaction of collected text (`redact.go`), and the OpenCode bridge (`opencode*.go`). |
+| `internal/channel/` | MCP, binding/lifecycle, discovery, routing, collection, delivery, session naming (`name.go`), git labels (`git.go`), session history (`history*.go`: catalog types, observer-side indexer, snapshot reader, MCP tools, paired-host policy in `history_peer.go`, OpenCode's SQLite source in `history_opencode.go`), recent-only advertisements (`recent.go`), secret redaction of collected text (`redact.go`), and the OpenCode bridge (`opencode*.go`). |
 | `plugins/` | Embedded OpenCode relay plugin (relay only, no decisions) and display-only TUI toast plugin; `plugins/pi/rhizome.js` is the Pi relay extension (embedded and installed by `setup --agents pi`). |
 | `proto/` | Protocol definitions and generated Go bindings. |
 | `scripts/` | Process smoke tests; `scripts/release/` holds the signing, notarization and `.pkg` scripts. |
@@ -445,6 +445,30 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   derive a name from prompts or transcript content, and a name-only change must
   not touch generation, streams, subscriptions, cursors, or queues
   (`internal/channel/name.go`, [reference "Session names"](docs/reference.md#session-names)).
+- **Git labels are untrusted labels, never addresses.** `Identity.git_origin`
+  (≤ 180 bytes), `git_branch` (≤ 96) and `git_worktree_root` (proto fields
+  16-18, optional on every wire) describe the repository of a session's working
+  directory for relevance and filtering only; routing, `matches`, the registry
+  record, proxies' identity and every queue stay keyed by `session_id`, node and
+  generation. `normalizeGitOrigin` is the single choke point for origins:
+  `host/path`, lowercased host, no scheme, userinfo, port, query or fragment, so
+  no credential from a remote URL is stored, logged or sent; an oversized
+  origin is dropped whole, never cut. Detection (`detectGit`) reads bounded
+  repository metadata only (`.git`, `HEAD`, `commondir`, `config`): never run
+  `git` or any repository-configured program, never fail or delay binding on
+  it, and never log the values. `Node.updateGit` runs on each bind path
+  (Claude, Codex, OpenCode, Pi) and every 15 s, and a label-only change must not
+  touch generation, streams, subscriptions, cursors or queues. Only the process
+  bound to a session reads the project directory; it persists the labels in
+  private `<runtime>/git/` (hashed session ID, newest 4,096). The observer,
+  `recent` rows and history rows join that record and must never open project
+  directories. `search_sessions` filters by normalized `git_origin` (equality).
+  Gateway validation bounds the labels in `validGatewayIdentity` and
+  `validRecentSession`; peers without the fields stay valid. `NodeMeta` drops
+  `git_branch` first, then trims `session_name`/`project`, then drops
+  `git_origin`/`git_worktree_root`, all before routing fields. No opt-out key
+  exists yet; a future one must gate export next to session privacy (#37)
+  (`internal/channel/git.go`, [reference "Git labels"](docs/reference.md#git-labels)).
 - **Never manually invoke `observe_session` or invent an ID.** Trusted hooks,
   verified transport identity, and authoritative log metadata own binding;
   synthetic test harnesses are not a user workflow (`internal/channel/node.go`, `internal/channel/codex.go`).

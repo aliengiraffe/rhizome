@@ -36,6 +36,7 @@ type recentSession struct {
 	Project        string    `json:"project,omitempty"`
 	SessionName    string    `json:"session_name,omitempty"`
 	Host           string    `json:"host,omitempty"`
+	gitInfo                  // untrusted labels from the owning host's git records; older peers ignore them
 	HostID         string    `json:"host_id,omitempty"` // authenticated paired host; empty on the owning device
 	LastActivityAt time.Time `json:"last_activity_at"`
 	ExpiresAt      time.Time `json:"expires_at"`
@@ -118,6 +119,14 @@ func sortRecent(rows []recentSession) {
 	})
 }
 
+// withGit joins this device's git records onto its own recent rows.
+func withGit(rows []recentSession, runtime string) {
+	records := gitRecords(runtime)
+	for i := range rows {
+		rows[i].gitInfo = knownGit(runtime, rows[i].SessionID, records)
+	}
+}
+
 // validRecentSession bounds an entry received from a paired host with the
 // same limits as exported identities. Peer-supplied host IDs are ignored.
 func validRecentSession(r recentSession, pi bool) bool {
@@ -126,7 +135,7 @@ func validRecentSession(r recentSession, pi bool) bool {
 			return false
 		}
 	}
-	return r.SessionID != "" && len(r.SessionID) <= 128 && (r.AgentType == "claude" || r.AgentType == "codex" || pi && r.AgentType == "pi") && len(r.DisplayName) <= 40 && len(r.Project) <= 180 && len(r.SessionName) <= 96 && len(r.Host) <= 64 && !r.LastActivityAt.IsZero() && !r.ExpiresAt.IsZero() && !r.ExpiresAt.Before(r.LastActivityAt)
+	return r.SessionID != "" && len(r.SessionID) <= 128 && (r.AgentType == "claude" || r.AgentType == "codex" || pi && r.AgentType == "pi") && len(r.DisplayName) <= 40 && len(r.Project) <= 180 && len(r.SessionName) <= 96 && len(r.Host) <= 64 && validGitLabels(r.Origin, r.Branch) && !r.LastActivityAt.IsZero() && !r.ExpiresAt.IsZero() && !r.ExpiresAt.Before(r.LastActivityAt)
 }
 
 // recentSessions returns this device's recent-only rows, the recorded last
@@ -165,6 +174,7 @@ func (n *Node) recentSessions(now time.Time) ([]recentSession, map[sessionKey]ti
 		name, _ := n.archive.effectiveName(s, overrides)
 		return name
 	})
+	withGit(rows, n.archive.scope.Runtime)
 	status.State = "enabled"
 	status.Advertised, status.Omitted = len(rows), omitted
 	return rows, activity, status
