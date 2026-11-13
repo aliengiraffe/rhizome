@@ -7,6 +7,7 @@ require (
 	github.com/betterleaks/betterleaks/v2 v2.0.0-rc.4
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/x/ansi v0.10.1
+	github.com/danieljoos/wincred v1.2.2
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/gorilla/websocket v1.5.3
