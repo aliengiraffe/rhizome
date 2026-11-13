@@ -291,7 +291,7 @@ def run_claude(prompt, cwd, tools, mcp=None, timeout=900):
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
     wall = time.time() - t0
-    r = {"wall_s": round(wall, 1), "answer": "", "tool_calls": 0, "leak": False, "error": None}
+    r = {"wall_s": round(wall, 1), "answer": "", "tool_calls": 0, "leak": False, "error": None, "tool_inputs": []}
     final = None
     for line in out.splitlines():
         try:
@@ -302,6 +302,7 @@ def run_claude(prompt, cwd, tools, mcp=None, timeout=900):
             for b in (d.get("message") or {}).get("content") or []:
                 if b.get("type") == "tool_use":
                     r["tool_calls"] += 1
+                    r["tool_inputs"].append({"type": b.get("name"), "input": b.get("input")})
                     if LEAK.search(json.dumps(b.get("input"))):
                         r["leak"] = True
         if d.get("type") == "result":
@@ -315,6 +316,18 @@ def run_claude(prompt, cwd, tools, mcp=None, timeout=900):
              uncached_input_tokens=u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0),
              output_tokens=u.get("output_tokens", 0), error=None if final.get("subtype") == "success" and not final.get("is_error") else "agent_error")
     return r
+
+
+def codex_tool_input(item):
+    """Inspect requested access, never returned text that merely mentions a path."""
+    kind = item.get("type")
+    if kind == "command_execution":
+        return item.get("command")
+    if kind == "mcp_tool_call":
+        return item.get("arguments")
+    if kind == "file_change":
+        return [change.get("path") for change in item.get("changes", [])]
+    return item.get("query") or item.get("action")
 
 
 def run_codex(prompt, cwd, mcp_env=None, timeout=900):
@@ -333,7 +346,7 @@ def run_codex(prompt, cwd, mcp_env=None, timeout=900):
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
     r = {"wall_s": round(time.time() - t0, 1), "answer": "", "tool_calls": 0, "leak": False, "error": "no_result",
-         "turns": 0, "input_tokens": 0, "uncached_input_tokens": 0, "output_tokens": 0}
+         "turns": 0, "input_tokens": 0, "uncached_input_tokens": 0, "output_tokens": 0, "tool_inputs": []}
     for line in out.splitlines():
         try:
             d = json.loads(line)
@@ -346,7 +359,9 @@ def run_codex(prompt, cwd, mcp_env=None, timeout=900):
                 r["answer"] = it.get("text") or ""
             elif it.get("type") in ("command_execution", "mcp_tool_call", "file_change", "web_search"):
                 r["tool_calls"] += 1
-                if LEAK.search(json.dumps(it)):
+                inputs = codex_tool_input(it)
+                r["tool_inputs"].append({"type": it["type"], "input": inputs})
+                if LEAK.search(json.dumps(inputs)):
                     r["leak"] = True
         elif t == "turn.completed":
             u = d.get("usage") or {}
@@ -454,6 +469,8 @@ def cmd_run(a):
             if (q["id"], ag, arm, rep) not in done]
     random.Random(7).shuffle(jobs)  # interleave arms so drift and rate limits hit all arms alike
     print(f"{len(jobs)} jobs", file=sys.stderr)
+    if jobs and a.suite == "open":
+        worktree()  # Create once before workers can race to initialize the checkout.
     with concurrent.futures.ThreadPoolExecutor(a.jobs) as ex:
         for i, row in enumerate(ex.map(run_one, jobs), 1):
             print(f"[{i}/{len(jobs)}] {row['agent']:6} {row['arm']:14} {row['qid']} {row['wall_s']:6}s err={row['error']} leak={row['leak']}", file=sys.stderr)

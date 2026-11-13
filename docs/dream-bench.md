@@ -10,7 +10,7 @@ the product.
 Benchmarks run against the developer's own history. Everything derived from it
 stays in a private directory, `RHIZOME_BENCH_DIR` (default `~/.rhizome-bench`,
 mode 0700): the frozen catalog, isolated runtimes, dream memory, generated
-questions, raw agent output and reports. Nothing from it belongs in this
+questions, agent answers, tool inputs and reports. Nothing from it belongs in this
 repository, issues or pull requests except aggregate numbers. Dreams spend
 ChatGPT plan usage; agent runs spend Claude/Codex usage.
 
@@ -28,9 +28,12 @@ ChatGPT plan usage; agent runs spend Claude/Codex usage.
   hooks: `claude -p --no-session-persistence --strict-mcp-config
   --setting-sources ''` and `codex exec --ephemeral --ignore-user-config`, so
   benchmark runs never feed later dreams. Codex uses `BENCH_CODEX_HOME`
-  (default `~/.codex-personal`). Any tool call touching agent logs or the bench
-  store marks the run `leak`; a closed-book Codex run that uses tools is
-  counted as a violation.
+  (default `~/.codex-personal`). Tool inputs matching agent-log or bench-store
+  paths mark the run `leak` for review; returned text mentioning those paths
+  does not. Inputs are retained privately for auditing flags. This is a
+  heuristic, not a filesystem access sandbox: inspect flagged requests before
+  interpreting scores. A closed-book Codex run that uses tools is counted as a
+  violation.
 
 ## Suites and arms
 
@@ -93,6 +96,9 @@ dream calls exit nonzero. Agent error responses are
 excluded from scoring, even when the CLI labels their subtype as success. Environment overrides:
 `BENCH_CLAUDE_MODEL`, `BENCH_CODEX_MODEL`, `BENCH_CODEX_EFFORT`,
 `BENCH_JUDGE_MODEL`, `BENCH_GEN_MODEL`, `RHIZOME_BIN`.
+
+Offline harness regression checks (no account, model calls or real agent state):
+`python3 scripts/test_bench_dream.py`.
 
 ## Limits
 
