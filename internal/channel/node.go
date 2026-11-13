@@ -60,6 +60,12 @@ type Hook struct {
 	ToolName       string `json:"tool_name,omitempty"`
 }
 type feed struct {
+	digestDue   time.Time
+	policy      subscriptionPolicy
+	suppressed  uint64
+	budgetStart time.Time
+	budgetUsed  int
+
 	cancel           context.CancelFunc
 	status           string
 	reconnects, gaps uint64

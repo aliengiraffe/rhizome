@@ -267,6 +267,7 @@ func (s *piSession) close() {
 // MCP on stdio for tool calls and a private socket for the paired extension.
 // Pi spawns this process through pi.registerMcpServer with RHIZOME_PI_NONCE set.
 func RunPi(c config.Config, o Options) error {
+	o.Subscriptions = c.Subscriptions
 	o.Runtime = c.RuntimeDir
 	o.Hostname = c.Hostname
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, LogOptions(c.Debug))))

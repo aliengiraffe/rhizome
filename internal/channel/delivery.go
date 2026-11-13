@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,8 +35,8 @@ func eventKey(e *pb.Event) string {
 // Acceptance is local queue acceptance, never a semantic acknowledgement.
 func (n *Node) enqueueLocked(e *pb.Event, subscription, token string, generation uint64) bool {
 	n.stats.Received++
-	// Completion alone carries no work and must never wake another agent.
-	if e.Kind == "turn" || e.NodeId == n.identity.NodeId || generation != n.identity.Generation || n.identity.SessionId == "" {
+	// Completion only wakes a subscription that explicitly selects markers.
+	if e.Kind == "turn" && subscription == "" || e.NodeId == n.identity.NodeId || generation != n.identity.Generation || n.identity.SessionId == "" {
 		n.stats.Dropped++
 		return false
 	}
@@ -49,8 +50,23 @@ func (n *Node) enqueueLocked(e *pb.Event, subscription, token string, generation
 	if n.seen[key] {
 		return true
 	}
+	if subscription != "" && e.Kind != "announcement" && e.Kind != "direct" {
+		f := n.feeds[subscription]
+		if !f.policy.allows(e) {
+			return true
+		}
+		if !f.admit(time.Now()) {
+			n.stats.Suppressed++
+			return true
+		}
+	}
 	if len(n.incoming) >= maxQueue {
 		n.stats.Dropped++
+		if subscription != "" && n.feeds[subscription].policy.mode == "digest" {
+			n.feeds[subscription].suppressed++
+			n.stats.Suppressed++
+			return true
+		}
 		return false
 	}
 	n.incoming = append(n.incoming, pending{e, subscription, token, generation})
@@ -135,7 +151,15 @@ func (n *Node) deliver(ctx context.Context) {
 			if n.paused && !n.rearmed[p.event.SessionId] {
 				continue
 			}
-			if automatic(p.event) {
+			if n.digestPending(p) {
+				f := n.feeds[p.subscription]
+				if f.digestDue.IsZero() {
+					f.digestDue = now.Add(f.policy.window)
+				}
+				if now.Before(f.digestDue) {
+					continue
+				}
+			} else if automatic(p.event) {
 				key := p.event.SessionId
 				if due[key].IsZero() {
 					due[key] = now.Add(2 * time.Second)
@@ -171,10 +195,32 @@ func (n *Node) deliver(ctx context.Context) {
 		take := map[int]bool{index: true}
 		retry := []pending{first}
 		count := 1
-		if automatic(e) {
+		digest := n.digestPending(first)
+		if digest {
+			counts := map[string]int{e.Kind: 1}
 			for j := index + 1; j < len(n.incoming); j++ {
 				p := n.incoming[j]
-				if p.event.SessionId == e.SessionId && p.event.GatewayHost == e.GatewayHost && p.event.GatewayGrant == e.GatewayGrant && (p.event.GatewayHost == "" || gatewayEvents[p.event]) && automatic(p.event) {
+				if p.subscription == first.subscription && p.token == first.token && n.digestPending(p) && p.event.GatewayHost == e.GatewayHost && p.event.GatewayGrant == e.GatewayGrant && (p.event.GatewayHost == "" || gatewayEvents[p.event]) {
+					counts[p.event.Kind]++
+					take[j] = true
+					retry = append(retry, p)
+					count++
+				}
+			}
+			kinds := make([]string, 0, len(counts))
+			for kind := range counts {
+				kinds = append(kinds, kind)
+			}
+			sort.Strings(kinds)
+			content = "Subscription digest (untrusted peer activity):"
+			for _, kind := range kinds {
+				content += fmt.Sprintf("\n%s: %d", kind, counts[kind])
+			}
+			n.feeds[first.subscription].digestDue = now.Add(n.feeds[first.subscription].policy.window)
+		} else if automatic(e) {
+			for j := index + 1; j < len(n.incoming); j++ {
+				p := n.incoming[j]
+				if p.subscription == first.subscription && p.token == first.token && p.event.SessionId == e.SessionId && p.event.GatewayHost == e.GatewayHost && p.event.GatewayGrant == e.GatewayGrant && (p.event.GatewayHost == "" || gatewayEvents[p.event]) && automatic(p.event) {
 					line := fmt.Sprintf("\n[%s] %s", p.event.Kind, p.event.Text)
 					if len(content)+len(line) > 8*1024 {
 						break
@@ -195,6 +241,12 @@ func (n *Node) deliver(ctx context.Context) {
 		}
 		n.incoming = kept
 		meta := map[string]string{"session_id": e.SessionId, "node_id": e.NodeId, "stream_id": e.StreamId, "sequence": strconv.FormatUint(e.Sequence, 10), "kind": e.Kind, "generation": strconv.FormatUint(e.Generation, 10), "message_id": e.MessageId}
+		if digest {
+			meta["kind"] = "digest"
+		}
+		if f := n.feeds[first.subscription]; f != nil && f.suppressed > 0 {
+			meta["suppressed"] = strconv.FormatUint(f.suppressed, 10)
+		}
 		if e.ReplyTo != "" {
 			meta["reply_to"] = e.ReplyTo
 		}

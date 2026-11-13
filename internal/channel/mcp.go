@@ -76,7 +76,7 @@ func (n *Node) status() map[string]any {
 		if n.paused && !n.rearmed[session] {
 			state = "paused"
 		}
-		feeds[session] = map[string]any{"state": state, "reconnects": f.reconnects, "replay_gaps": f.gaps}
+		feeds[session] = map[string]any{"state": state, "reconnects": f.reconnects, "replay_gaps": f.gaps, "mode": f.policy.mode, "kinds": f.policy.kinds, "tools": f.policy.tools, "include_text": !f.policy.excludeText, "max_per_minute": f.policy.maxPerMinute, "window": f.policy.window.String(), "filtering": "receiver", "suppressed": f.suppressed}
 	}
 	binding := "BOUND"
 	if n.identity.SessionId == "" {
@@ -237,12 +237,12 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 		}
 		return result(n.listSessions(), nil)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "subscribe", Description: "Follow exact session_id; idempotent, retains intent while absent, explicitly resumes that origin's paused feed."}, func(ctx context.Context, r *mcp.CallToolRequest, in sessionInput) (*mcp.CallToolResult, any, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "subscribe", Description: "Follow exact session_id; idempotent, retains intent while absent, explicitly resumes that origin's paused feed. Optional full/markers/tools/text/digest modes and kinds/include_text/tools filters apply on the receiver; max_per_minute bounds selected events and window controls digest batching. Re-subscribe updates preferences without replay."}, func(ctx context.Context, r *mcp.CallToolRequest, in subscribeInput) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)
 		if resolveErr != nil {
 			return result(nil, resolveErr)
 		}
-		err := n.subscribe(in.SessionID)
+		err := n.subscribeWith(in)
 		return result(n.status(), err)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "unsubscribe", Description: "Cancel following session_id and discard its queued subscription activity."}, func(ctx context.Context, r *mcp.CallToolRequest, in sessionInput) (*mcp.CallToolResult, any, error) {
@@ -286,6 +286,7 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 
 // Run serves the Claude channel with resolved configuration and network options.
 func Run(c config.Config, o Options) error {
+	o.Subscriptions = c.Subscriptions
 	o.Runtime = c.RuntimeDir
 	o.Hostname = c.Hostname
 	o.UpdateNotice = c.AutoUpdate.NotifySessions

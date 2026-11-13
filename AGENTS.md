@@ -469,6 +469,17 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   (`RHIZOME_DISCOVERY_INTERVAL`) and joined through the same token-keyed
   `join()` path as mDNS and `--join`. mDNS is off by default in this mode
   (`internal/channel/tailscale.go`, `internal/channel/lan.go`, README).
+- **Subscriptions filter on the receiver.** `internal/channel/subscriptions.go` owns
+  full/markers/tools/text/digest presets, validated call overrides and per-feed
+  budgets. File-only `[subscriptions]` defaults resolve through `internal/config`;
+  calls override retained feed preferences, then config, then legacy full. Re-subscribe
+  preserves the follower/cursor and prunes excluded pending events. Full retains
+  legacy turn/position consumption; explicit markers/kinds can deliver them. Digests
+  count kinds within the existing bounded receiver queue; suppression is visible in
+  subscription state and notification metadata. Direct/announcement messages bypass
+  filters and budgets; the global 30-notification guard remains. `filtering: receiver`
+  makes the network-exposure limitation explicit; no wire or history policy changes.
+  See [subscription filtering](README.md#subscription-filtering).
 - **Never silently loosen retention, queue, or deduplication limits.** They bound
   memory and slow-peer impact: publisher retention is five minutes/1,000 events/
   8 MiB, stream queues are 64 events, receiver queues 256, and dedup windows 4,096

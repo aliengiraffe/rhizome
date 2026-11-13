@@ -248,6 +248,7 @@ func queueCodex(ctx context.Context, binary, socket, thread, text string, meta m
 // RunCodex serves the Codex channel. c supplies the binary, Codex home and
 // runtime directory; o carries the LAN options.
 func RunCodex(c config.Config, o Options) error {
+	o.Subscriptions = c.Subscriptions
 	o.Runtime = c.RuntimeDir
 	o.Hostname = c.Hostname
 	o.UpdateNotice = c.AutoUpdate.NotifySessions

@@ -166,6 +166,10 @@ func (n *Node) send(ctx context.Context, session, text, reply string) (*pb.Accep
 	return pb.NewChannelClient(conn).Send(n.outgoing(ctx), &pb.SendRequest{Target: target, Sender: sender, Event: e})
 }
 func (n *Node) subscribe(session string) error {
+	return n.subscribeWith(subscribeInput{SessionID: session})
+}
+func (n *Node) subscribeWith(in subscribeInput) error {
+	session := in.SessionID
 	n.gate.Lock()
 	defer n.gate.Unlock()
 	n.mu.Lock()
@@ -176,13 +180,35 @@ func (n *Node) subscribe(session string) error {
 	if session == "" || session == n.identity.SessionId {
 		return errors.New("choose a non-self exact session_id")
 	}
+	var previous *subscriptionPolicy
+	if f := n.feeds[session]; f != nil {
+		previous = &f.policy
+	}
+	policy, err := resolveSubscription(n.opts.Subscriptions, previous, in)
+	if err != nil {
+		return err
+	}
 	n.rearmed[session] = true
 	if f := n.feeds[session]; f != nil {
-		f.status = "reconnecting"
+		if f.policy.mode != policy.mode || f.policy.window != policy.window {
+			f.digestDue = time.Time{}
+		}
+		f.policy = policy
+		// Tightening a filter removes pending exposure; broadening never resurrects
+		// already filtered events. Keep the follower and its cursor intact.
+		kept := n.incoming[:0]
+		for _, p := range n.incoming {
+			if p.subscription != session || policy.allows(p.event) {
+				kept = append(kept, p)
+			} else {
+				n.stats.Dropped++
+			}
+		}
+		n.incoming = kept
 		return nil
 	}
 	ctx, cancel := context.WithCancel(n.ctx)
-	f := &feed{cancel: cancel, status: "connecting", token: id()}
+	f := &feed{policy: policy, cancel: cancel, status: "connecting", token: id()}
 	n.feeds[session] = f
 	generation := n.identity.Generation
 	n.wg.Add(1)
@@ -308,9 +334,8 @@ func (n *Node) follow(ctx context.Context, session string, f *feed, generation u
 				}
 				f.status = "following"
 				accepted := true
-				// Turn markers are never queued; consume them so the cursor advances
-				// instead of replaying the same marker on every reconnect.
-				if e.Kind != "position" && e.Kind != "turn" {
+				// Filtering still advances the cursor, including for old publishers.
+				if f.policy.allows(e) {
 					accepted = n.enqueueLocked(e, session, f.token, generation)
 				}
 				if e.Kind == "gap" {

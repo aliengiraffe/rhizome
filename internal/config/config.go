@@ -51,16 +51,17 @@ type Config struct {
 		SessionsDir string      `toml:"sessions_dir"` // Session log root the observer indexes; default $PI_CODING_AGENT_DIR/sessions or ~/.pi/agent/sessions.
 		PeerHistory PeerHistory `toml:"peer_history"` // Override of gateway.history for Pi-sourced history.
 	} `toml:"pi"`
-	Gateway      Gateway           `toml:"gateway"`
-	Network      Network           `toml:"network"`
-	Sessions     Sessions          `toml:"sessions"`
-	Update       Update            `toml:"update"`
-	PeerHistory  HistoryPolicy     `toml:"-"` // Effective policy for paired hosts reading local history.
-	AutoUpdate   UpdatePolicy      `toml:"-"` // Effective [update] policy; only `service run` acts on it.
-	RecentWindow time.Duration     `toml:"-"` // Effective [sessions].recent_window; zero disables recent-only rows.
-	Path         string            `toml:"-"`
-	Found        bool              `toml:"-"`
-	Sources      map[string]string `toml:"-"`
+	Gateway       Gateway           `toml:"gateway"`
+	Network       Network           `toml:"network"`
+	Subscriptions Subscriptions     `toml:"subscriptions"`
+	Sessions      Sessions          `toml:"sessions"`
+	Update        Update            `toml:"update"`
+	PeerHistory   HistoryPolicy     `toml:"-"` // Effective policy for paired hosts reading local history.
+	AutoUpdate    UpdatePolicy      `toml:"-"` // Effective [update] policy; only `service run` acts on it.
+	RecentWindow  time.Duration     `toml:"-"` // Effective [sessions].recent_window; zero disables recent-only rows.
+	Path          string            `toml:"-"`
+	Found         bool              `toml:"-"`
+	Sources       map[string]string `toml:"-"`
 }
 
 // Network selects how `rhizome mcp` peers. Mode "local" (the default) is
@@ -253,9 +254,12 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	}
 	// TOML keys are case-sensitive even though the decoder can match Go fields
 	// case-insensitively. Reject alternate spellings instead of losing their source.
-	known := map[string]bool{"debug": true, "claude": true, "codex": true, "opencode": true, "pi": true, "network": true, "gateway": true, "sessions": true, "update": true}
+	known := map[string]bool{"debug": true, "claude": true, "codex": true, "opencode": true, "pi": true, "network": true, "gateway": true, "sessions": true, "update": true, "subscriptions": true}
 	for _, k := range networkKeys {
 		known["network."+k] = true
+	}
+	for _, k := range []string{"default_mode", "window", "max_per_minute"} {
+		known["subscriptions."+k] = true
 	}
 	for _, k := range sessionsKeys {
 		known["sessions."+k] = true
@@ -306,6 +310,30 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 			}
 			c.Sources[table+"."+k] = source
 		}
+	}
+	c.Subscriptions = Subscriptions{DefaultMode: "full", Window: "5m"}
+	for _, key := range []string{"default_mode", "window", "max_per_minute"} {
+		c.Sources["subscriptions."+key] = "default"
+		if md.IsDefined("subscriptions", key) {
+			c.Sources["subscriptions."+key] = "file"
+			switch key {
+			case "default_mode":
+				c.Subscriptions.DefaultMode = raw.Subscriptions.DefaultMode
+			case "window":
+				c.Subscriptions.Window = raw.Subscriptions.Window
+			case "max_per_minute":
+				if raw.Subscriptions.MaxPerMinute < 0 || raw.Subscriptions.MaxPerMinute > 29 {
+					return c, fmt.Errorf("subscriptions.max_per_minute must be 0-29")
+				}
+				c.Subscriptions.MaxPerMinute = raw.Subscriptions.MaxPerMinute
+			}
+		}
+	}
+	if err := ValidateSubscriptionMode(c.Subscriptions.DefaultMode); err != nil {
+		return c, err
+	}
+	if _, err := SubscriptionWindow(c.Subscriptions.Window); err != nil {
+		return c, err
 	}
 	c.Sessions, c.RecentWindow = raw.Sessions, DefaultRecentWindow
 	c.Sources["sessions.recent_window"] = "default"
@@ -516,6 +544,9 @@ func (c Config) Write(w io.Writer) error {
 		mdns = fmt.Sprint(*n.MDNS)
 	}
 	lines := []struct{ key, value string }{
+		{"subscriptions.default_mode", fmt.Sprintf("%q", c.Subscriptions.DefaultMode)},
+		{"subscriptions.window", fmt.Sprintf("%q", c.Subscriptions.Window)},
+		{"subscriptions.max_per_minute", fmt.Sprint(c.Subscriptions.MaxPerMinute)},
 		{"network.mode", fmt.Sprintf("%q", mode)},
 		{"network.bind_addr", fmt.Sprintf("%q", n.BindAddr)},
 		{"network.advertise_addr", fmt.Sprintf("%q", n.AdvertiseAddr)},

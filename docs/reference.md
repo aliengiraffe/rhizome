@@ -302,7 +302,7 @@ process (restart Claude Code) after changing the setting.
 | --- | --- |
 | `list_sessions()` | `live` or `recent` sessions, one row per `session_id` ([Session status](../README.md#session-status); `--debug` appends a substatus), `delivery_capable`, recorded `last_activity_at`, a `recent_sessions` block, bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](opencode.md#why-a-closed-session-can-still-be-live)). |
 | `set_session_name(name, session_id?)` | Name the caller's bound session for peers, or with an exact `session_id` another session on this device. Empty clears the override. Returns the effective name and its source. |
-| `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
+| `subscribe(session_id, mode?, kinds?, include_text?, tools?, max_per_minute?, window?)` | Follow an exact ID with [subscription filtering](../README.md#subscription-filtering). Retains intent while absent; re-subscribe updates options without replay and explicitly re-arms that origin if delivery is paused. |
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
 | `publish(text, reply_to?)` | Announce to current subscribers. |
 | `send(session_id, text, reply_to?)` | Direct message without a subscription. Returns a stable message ID and receiver queue acceptance. |

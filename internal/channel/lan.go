@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"rhizome/internal/config"
+
 	sockaddr "github.com/hashicorp/go-sockaddr"
 	"github.com/hashicorp/mdns"
 	"google.golang.org/grpc/credentials"
@@ -32,6 +34,8 @@ import (
 // boundary from "this user on this machine" to "any holder of the token on
 // the local network".
 type Options struct {
+	Subscriptions config.Subscriptions // resolved defaults for each session
+
 	Hostname      string        // display label; empty uses the OS hostname
 	Runtime       string        // registry directory; default ~/.rhizome/run
 	LAN           bool          // bind and advertise on the local network
