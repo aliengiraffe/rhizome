@@ -78,12 +78,20 @@ func (c *Client) jsonRequest(ctx context.Context, method, endpoint, contentType,
 		return e
 	}
 	if resp.StatusCode != http.StatusOK {
-		return remoteError(resp.StatusCode, resp.Header.Get("x-request-id"), b)
+		return remoteError(resp.StatusCode, requestID(resp.Header), b)
 	}
 	if out != nil && json.Unmarshal(b, out) != nil {
 		return errors.New("invalid OAI JSON response")
 	}
 	return nil
+}
+
+// requestID returns the server request ID; ChatGPT-plan routes send it as X-Oai-Request-Id.
+func requestID(h http.Header) string {
+	if id := h.Get("X-Request-Id"); id != "" {
+		return id
+	}
+	return h.Get("X-Oai-Request-Id")
 }
 func (c *Client) discover(ctx context.Context) (discovery, error) {
 	var d discovery

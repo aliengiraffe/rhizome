@@ -82,6 +82,7 @@ type fixture struct {
 	refreshSubject        string
 	badJWKS               bool
 	revokeStatus          int
+	streamType            *string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -176,7 +177,13 @@ func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
 		if b["store"] != false || b["stream"] != true || b["input"] == nil {
 			f.t.Error("wrong inference body")
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
+		if f.streamType == nil {
+			w.Header().Set("Content-Type", "text/event-stream")
+		} else if *f.streamType != "" {
+			w.Header().Set("Content-Type", *f.streamType)
+		} else {
+			w.Header()["Content-Type"] = nil // suppress net/http sniffing
+		}
 		io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\ndata: {\"type\":\"response.completed\"}\n\n")
 	default:
 		w.WriteHeader(404)
@@ -538,6 +545,41 @@ func TestRevocationFailure(t *testing.T) {
 	s, _ := f.c.Status()
 	if s.Secrets != nil || s.ClientID == "" {
 		t.Fatal("logout state")
+	}
+}
+func TestStreamContentType(t *testing.T) {
+	for _, tt := range []struct {
+		name, contentType string
+		ok                bool
+	}{
+		{"missing", "", true},
+		{"event stream with charset", "Text/Event-Stream; charset=utf-8", true},
+		{"json", "application/json", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.signin()
+			f.streamType = &tt.contentType
+			text, e := f.c.Test(context.Background(), "first", "hello")
+			if (e == nil) != tt.ok || (tt.ok && text != "hello") {
+				t.Fatalf("%q %v", text, e)
+			}
+		})
+	}
+}
+func TestRequestID(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		h    http.Header
+		want string
+	}{
+		{"standard", http.Header{"X-Request-Id": {"a"}, "X-Oai-Request-Id": {"b"}}, "a"},
+		{"oai", http.Header{"X-Oai-Request-Id": {"b"}}, "b"},
+		{"none", http.Header{}, ""},
+	} {
+		if got := requestID(tt.h); got != tt.want {
+			t.Errorf("%s: %q", tt.name, got)
+		}
 	}
 }
 func TestStream(t *testing.T) {

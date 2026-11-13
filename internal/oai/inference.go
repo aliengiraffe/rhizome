@@ -53,12 +53,14 @@ func (c *Client) Test(ctx context.Context, model, prompt string) (string, error)
 		if e != nil {
 			return "", e
 		}
-		return "", remoteError(resp.StatusCode, resp.Header.Get("x-request-id"), b)
+		return "", remoteError(resp.StatusCode, requestID(resp.Header), b)
 	}
-	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+	// ChatGPT-plan routes may stream without a Content-Type; readStream still
+	// requires response.completed, so only an explicit other type is rejected.
+	if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
 		return "", errors.New("expected an OAI event stream")
 	}
-	return readStream(resp.Body, resp.Header.Get("x-request-id"))
+	return readStream(resp.Body, requestID(resp.Header))
 }
 func (c *Client) model(ctx context.Context, token string) (string, error) {
 	var catalog struct {
