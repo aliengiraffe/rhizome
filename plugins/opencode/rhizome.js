@@ -88,6 +88,7 @@ export default {
       while (queue.length > 0 && socket.writableLength < MAX_PENDING_WRITE) socket.write(line(queue.shift()))
     }
     const send = (frame) => {
+      frame = { ...frame, emitted_at: Date.now() }
       if (queue.length >= MAX_BUFFER) { queue.shift(); dropped++ }
       queue.push(frame)
       flush()

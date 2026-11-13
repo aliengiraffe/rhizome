@@ -47,7 +47,7 @@ func toolNames(t *testing.T, s *mcp.Server) []string {
 func TestMakeServerToolsByAgent(t *testing.T) {
 	none := func(*mcp.CallToolRequest) (*Node, error) { return nil, errUnbound }
 	history := newHistoryService(historyScope{Runtime: t.TempDir()})
-	shared := []string{"accept_file", "cancel_file", "list_files", "list_sessions", "publish", "read_session_history", "search_sessions", "send", "send_file", "set_session_name", "subscribe", "unsubscribe"}
+	shared := []string{"accept_file", "cancel_file", "list_files", "list_sessions", "publish", "read_session_history", "search_sessions", "send", "send_file", "set_session_name", "set_session_visibility", "subscribe", "unsubscribe"}
 	withObserve := append([]string{"observe_session"}, shared...)
 	sort.Strings(withObserve)
 	for _, tc := range []struct {

@@ -223,7 +223,7 @@ func (h *historyIndex) indexOpenCode(ctx context.Context) {
 			others++
 		}
 	}
-	room := maxCatalogFiles - others
+	room := maxCatalogFiles - others - len(h.hidden)
 	if room < 0 {
 		room = 0
 	}
@@ -264,7 +264,7 @@ func (h *historyIndex) indexOpenCode(ctx context.Context) {
 	}
 	seen := map[string]bool{}
 	for _, r := range got {
-		if !validOpenCodeSessionID(r.id) {
+		if !validOpenCodeSessionID(r.id) || !sessionPublic(h.scope.Runtime, r.id) {
 			continue
 		}
 		path := openCodeSourcePath(root, r.id)

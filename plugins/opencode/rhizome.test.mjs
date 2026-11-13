@@ -60,6 +60,10 @@ function listen() {
       let i
       while ((i = buf.indexOf("\n")) >= 0) {
         const frame = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1)
+        if (["input", "text", "tool", "turn"].includes(frame.type)) {
+          assert.ok(Number.isSafeInteger(frame.emitted_at) && frame.emitted_at > 0)
+        }
+        delete frame.emitted_at // payload assertions below; timestamp checked separately above
         lines.push(frame); all.push(frame)
         const w = waiter; waiter = null; w?.()
       }

@@ -204,7 +204,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   existing file.
   Services pin that absolute path, never snapshot settings; installation requires
   the file and rejects overrides that would be lost when the service starts.
-  CLI usage: `rhizome --version | mcp | setup | uninstall | service | update | config | token | invite | join | peers | files | demo [flags]`.
+  CLI usage: `rhizome --version | mcp | setup | uninstall | service | update | config | token | session | invite | join | peers | files | demo [flags]`.
   Top-level `debug` (`RHIZOME_DEBUG`, `--debug`) is the one top-level boolean setting.
   `[update]` (`enabled` default true, `check_interval` default `24h`, 1h–720h)
   resolves with `RHIZOME_UPDATE` / `RHIZOME_UPDATE_CHECK_INTERVAL` and the
@@ -247,8 +247,8 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   stable reason and host ID prefix (never session data); a link that ends within
   5 s counts as a dial failure for the per-host backoff, whichever side dialed,
   and a longer one resets it. State is private under
-  `<runtime>/gateway/`. Session privacy (#37) is not yet implemented; the shared
-  export/access predicate must enforce it when added. See [docs/gateway.md](docs/gateway.md)
+  `<runtime>/gateway/`. Session privacy is enforced through the shared runtime policy before discovery,
+  recent export and route resolution; cached routes must still fail closed. See [docs/gateway.md](docs/gateway.md)
   for enrollment recovery, bounds, configuration, compatibility, and manual checks.
   Run `python3 scripts/smoke_gateway.py` for gateway changes in addition to the
   required existing checks. Gateway protocol code is in `internal/channel/gateway*.go`.
@@ -433,6 +433,19 @@ See [setup](docs/reference.md#creating-the-configuration-file),
 - **Route only by exact `session_id`, never display name, session name, cwd, or
   PID.** Multiple sessions can share those labels; ambiguous/stale identities must
   fail closed (`internal/channel/network.go`, `internal/channel/discovery.go`).
+- **Session privacy is persistent and fail-closed.** `visibility.go` owns exact-ID
+  public/private policy in `<runtime>/visibility/`. Caller-only
+  `set_session_visibility` and `rhizome session visibility` share a serialized
+  private barrier and bounded cross-process acknowledgements; never report a
+  policy write alone as completed revocation. Native runtime watches plus
+  reconciliation clear affected streams, subscriptions, replay and queues.
+  History checks every page, including stale catalogs; only the observer removes
+  catalog entries. Re-publication requires a fresh collection baseline and
+  explicit subscriptions. OpenCode/Pi relay `emitted_at` before buffering; frames
+  from before re-publication or old unstamped relays fail closed after a transition.
+  See [privacy](docs/privacy.md) for completion semantics, CLI, upgrade and scope.
+  Run `python3 scripts/smoke_visibility.py` for privacy changes, plus the gateway
+  smoke and standard checks. Do not log policy contents or transcript text.
 - **Session names are untrusted labels with fixed precedence.** Explicit
   `set_session_name` override, then the agent's native title (Claude
   `custom-title`/`ai-title` records, Codex `thread.name`), then the stable fallback
@@ -529,7 +542,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   only from the plugin bridge.** Never add `observe_session` to OpenCode mode. The
   plugin relays allowlisted events of its own directory's sessions and executes
   deliveries; all filtering stays in Go. OpenCode mode shares configuration,
-  `[network]` and the other 12 tools. Each bound session holds the collection
+  `[network]` and the other 13 tools. Each bound session holds the collection
   lease; on an instance reload the predecessor releases leases once a successor
   owns the socket (never unlinking it), and the successor retries busy binds for
   at most 60 s; the plugin re-binds its sessions after every reconnect. Bindings
@@ -647,8 +660,7 @@ See [setup](docs/reference.md#creating-the-configuration-file),
   own catalog only (never forwarded), stamped with the authenticated `host_id`
   on receipt, stored in private `<runtime>/gateway/recent.json` for local MCP
   processes only while the link and gateway live; they never become proxies and
-  grant no history access. `recentExportable` must be extended together with
-  `gatewayExportable` when session privacy (#37) lands. README "Session status"
+  grant no history access. Recent selection filters shared session visibility before applying the row cap. README "Session status"
   is the user contract; restart applies configuration changes.
 - **Peer history is opt-in, serving-host enforced and direct.** File-only keys
   `[gateway.history]` (`enabled` default false, `lookback` default `30d`) and

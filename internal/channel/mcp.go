@@ -70,6 +70,10 @@ func result(value any, err error) (*mcp.CallToolResult, any, error) {
 func (n *Node) status() map[string]any {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	visibility, verr := loadVisibility(n.runtime, n.identity.SessionId)
+	if verr != nil {
+		visibility.Visibility = "private"
+	}
 	feeds := map[string]any{}
 	for session, f := range n.feeds {
 		state := f.status
@@ -82,7 +86,7 @@ func (n *Node) status() map[string]any {
 	if n.identity.SessionId == "" {
 		binding = "UNBOUND: waiting for session hook; submit a prompt with observe_session hooks configured"
 	}
-	out := map[string]any{"binding": binding, "identity": cloneIdentity(n.identity), "subscriptions": feeds, "queue_depth": len(n.incoming), "delivery_paused": n.paused, "counters": n.stats, "collection_state": n.collectionState, "delivery_error": n.deliveryError}
+	out := map[string]any{"visibility": visibility.Visibility, "binding": binding, "identity": cloneIdentity(n.identity), "subscriptions": feeds, "queue_depth": len(n.incoming), "delivery_paused": n.paused, "counters": n.stats, "collection_state": n.collectionState, "delivery_error": n.deliveryError}
 	if n.hookDelivery {
 		out["claude_delivery"] = config.ClaudeDeliveryHooks
 		out["hook_queue_depth"] = len(n.hookInbox)
@@ -229,6 +233,11 @@ func makeServer(resolve func(*mcp.CallToolRequest) (*Node, error), kind agentKin
 		// Binding comes only from the trusted plugin/extension bridge; the model cannot bind.
 	}
 
+	mcp.AddTool(s, &mcp.Tool{Name: "set_session_visibility", Description: "Set only this verified bound session public or private. Private disconnects collaboration and hides history. Persistent across restarts. A failure may mean private policy persisted but local revocation is not fully acknowledged; retry."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
+		Visibility string `json:"visibility"`
+	}) (*mcp.CallToolResult, any, error) { n, err := resolve(r); if err != nil {
+		return result(nil, err)
+	}; return result(n.setSessionVisibility(ctx, in.Visibility)) })
 	addFileTools(s, resolve)
 	mcp.AddTool(s, &mcp.Tool{Name: "list_sessions", Description: "List discovered sessions with exact IDs, untrusted session_name labels, conflicts, subscriptions and operational status. status live means one or more current processes report the session (delivery_capable true only when exactly one route exists); recent means it is known only through a passive log observer or recorded activity within the configured window (delivery_capable false, cannot receive messages)."}, func(ctx context.Context, r *mcp.CallToolRequest, in empty) (*mcp.CallToolResult, any, error) {
 		n, resolveErr := resolve(r)

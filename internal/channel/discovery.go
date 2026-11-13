@@ -33,7 +33,7 @@ import (
 // (session_name, project) give way rune by rune, longest first, so routing and
 // authentication fields are never the reason an advertisement is dropped.
 func (n *Node) NodeMeta(limit int) []byte {
-	identity := n.local()
+	identity := n.exposed()
 	b, _ := json.Marshal(identity)
 	for len(b) > limit && (len(identity.Project) > 0 || len(identity.SessionName) > 0) {
 		if len(identity.SessionName) >= len(identity.Project) {
@@ -310,6 +310,9 @@ func (n *Node) start(o Options) error {
 	release()
 	n.joinRegistered(runtime, candidates, &counts)
 	counts.log()
+	if err := n.startVisibility(); err != nil {
+		return err
+	}
 	if n.mode != modeLocal {
 		for _, seed := range o.Join {
 			if err := n.join("join", seed); err != nil {
@@ -405,9 +408,12 @@ func (n *Node) updatePeer(member *memberlist.Node) {
 func (n *Node) peers() []*pb.Identity {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	out := []*pb.Identity{cloneIdentity(n.identity)}
+	out := []*pb.Identity{}
+	if n.publicLocked() {
+		out = append(out, cloneIdentity(n.identity))
+	}
 	for key, i := range n.discovered {
-		if key != n.identity.NodeId {
+		if key != n.identity.NodeId && (i.GatewayHost != "" || sessionPublic(n.runtime, i.SessionId)) {
 			out = append(out, cloneIdentity(i))
 		}
 	}
@@ -448,7 +454,7 @@ func (n *Node) resolve(ctx context.Context, session string) (*pb.Identity, error
 	}
 	return found, nil
 }
-func (n *Node) Info(context.Context, *pb.InfoRequest) (*pb.Identity, error) { return n.local(), nil }
+func (n *Node) Info(context.Context, *pb.InfoRequest) (*pb.Identity, error) { return n.exposed(), nil }
 
 type gossipLog struct{ source string }
 

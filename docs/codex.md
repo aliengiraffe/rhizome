@@ -186,3 +186,11 @@ local token. Restart MCP processes after upgrading to advertise gateway support.
 Remote activity uses the existing local delivery queue and suppression rules;
 history and daemon access remain local. Gateway synthetic smokes do not validate
 live Codex delivery; retain the opt-in live smoke and manual checks above.
+
+## Session privacy
+
+`set_session_visibility` uses the same verified per-thread caller as other tools.
+Private threads keep local status/control but lose collaboration and history
+exposure. Re-publication resets the live collector baseline; it never reads the
+private interval into replay or restores subscriptions. See [session privacy](privacy.md)
+for process acknowledgements and limitations; live smoke requirements still apply.

@@ -30,7 +30,7 @@ func main() {
 
 func entry() error {
 	if len(os.Args) < 2 {
-		return fmt.Errorf("usage: rhizome --version | mcp | setup | uninstall | service | update | config | token | files | invite | join | peers | demo [flags]")
+		return fmt.Errorf("usage: rhizome --version | mcp | setup | uninstall | service | update | config | token | session | files | invite | join | peers | demo [flags]")
 	}
 	mode := os.Args[1]
 	if mode == "--version" || mode == "-version" {
@@ -117,6 +117,8 @@ func entry() error {
 			return err
 		}
 		return c.Write(os.Stdout)
+	case "session":
+		return sessionCommand(os.Args[1:])
 	case "files":
 		return filesCommand(os.Args[1:])
 	case "invite", "join", "peers":

@@ -300,7 +300,7 @@ func (g *gateway) fileCommand(ctx context.Context, cmd GatewayCommand) (any, err
 	// Local CLI is a trusted local-user API. MCP always supplies its verified
 	// bound identity, never a caller-selected source session.
 	local, err := g.base.resolve(ctx, cmd.Session)
-	if err != nil || !gatewayExportable(local) || local.ObservationOnly {
+	if err != nil || !gatewayExportable(g.base.runtime, local) || local.ObservationOnly {
 		return nil, errors.New("exact live local session required")
 	}
 	if cmd.Action == "files-list" {

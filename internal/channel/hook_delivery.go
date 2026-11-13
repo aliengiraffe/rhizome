@@ -32,6 +32,7 @@ func (n *Node) holdForHook(_ context.Context, text string, meta map[string]strin
 		return errDestinationUnavailable
 	}
 	n.hookInbox = append(n.hookInbox, envelope)
+	n.hookOrigins = append(n.hookOrigins, meta["session_id"])
 	n.hookInboxBytes += len(envelope)
 	return nil
 }
@@ -45,11 +46,11 @@ func (n *Node) hookOutput(ctx context.Context, event string, started time.Time) 
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if !n.hookDelivery || len(n.hookInbox) == 0 || ctx.Err() != nil || time.Since(started) >= hookDeliveryBudget {
+	if !n.publicLocked() || !n.hookDelivery || len(n.hookInbox) == 0 || ctx.Err() != nil || time.Since(started) >= hookDeliveryBudget {
 		return map[string]any{}
 	}
 	held := n.hookInbox
-	n.hookInbox, n.hookInboxBytes = nil, 0
+	n.hookInbox, n.hookInboxBytes, n.hookOrigins = nil, 0, nil
 	n.stats.HookInjected += uint64(len(held))
 	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": event, "additionalContext": strings.Join(held, "\n\n")}}
 }

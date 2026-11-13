@@ -55,11 +55,10 @@ type recentStatus struct {
 	Limit          int    `json:"limit"`
 }
 
-// recentExportable is the recent-row counterpart of gatewayExportable: session
-// privacy (#37) must extend both. Only sessions with exactly one readable
-// source qualify; tombstones and duplicate sources are never advertised.
-func recentExportable(s *historySession) bool {
-	return s != nil && s.SessionID != "" && len(s.SessionID) <= 128 && (s.AgentType == "claude" || s.AgentType == "codex" || s.AgentType == "pi") && (s.Availability == "available" || s.Availability == "partial")
+// recentExportable is the recent-row counterpart of gatewayExportable. Only
+// public sessions with exactly one readable source qualify.
+func recentExportable(runtime string, s *historySession) bool {
+	return s != nil && s.SessionID != "" && len(s.SessionID) <= 128 && (s.AgentType == "claude" || s.AgentType == "codex" || s.AgentType == "pi") && (s.Availability == "available" || s.Availability == "partial") && sessionPublic(runtime, s.SessionID)
 }
 
 // recentUntil applies the recency rule to one recorded timestamp and returns
@@ -78,14 +77,18 @@ func recentUntil(last *time.Time, window time.Duration, now time.Time) (time.Tim
 // maxRecentSessions; the second value counts rows dropped by the cap.
 // accept, when not nil, filters by agent type before sorting and capping, so rows
 // withheld from one audience never use up its 64 slots.
-func recentFromCatalog(c *catalogFile, window time.Duration, now time.Time, host string, accept func(agent string) bool, name func(*historySession) string) ([]recentSession, int) {
+func recentFromCatalog(c *catalogFile, window time.Duration, now time.Time, host string, accept func(agent string) bool, name func(*historySession) string, runtime ...string) ([]recentSession, int) {
 	if c == nil || window <= 0 {
 		return nil, 0
 	}
 	now = now.UTC()
 	var out []recentSession
+	scope := ""
+	if len(runtime) > 0 {
+		scope = runtime[0]
+	}
 	for _, s := range c.sessions() {
-		if !recentExportable(s) || accept != nil && !accept(s.AgentType) {
+		if !recentExportable(scope, s) || accept != nil && !accept(s.AgentType) {
 			continue
 		}
 		expires, ok := recentUntil(s.LastActivityAt, window, now)
@@ -164,7 +167,7 @@ func (n *Node) recentSessions(now time.Time) ([]recentSession, map[sessionKey]ti
 	rows, omitted := recentFromCatalog(c, n.recentWindow, now, n.local().Host, nil, func(s *historySession) string {
 		name, _ := n.archive.effectiveName(s, overrides)
 		return name
-	})
+	}, n.runtime)
 	status.State = "enabled"
 	status.Advertised, status.Omitted = len(rows), omitted
 	return rows, activity, status

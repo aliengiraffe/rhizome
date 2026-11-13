@@ -155,6 +155,9 @@ func (n *Node) healRegistration() {
 // is still running. On Windows an open lock file cannot be deleted; a failed
 // removal leaves an orphan lock that a later bootstrap sweeps.
 func (n *Node) unregister() {
+	if n.runtime != "" {
+		_ = os.Remove(filepath.Join(n.runtime, "visibility", n.local().NodeId+".ack"))
+	}
 	if n.registration != "" {
 		_ = os.Remove(n.registration)
 	}

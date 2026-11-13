@@ -32,6 +32,18 @@ the API session. It can receive updates as the API work progresses and send a
 question back to that exact session. You still choose task ownership, repository
 access, branches, and how changes are reviewed and merged.
 
+## Session privacy
+
+Use `set_session_visibility(visibility="private")` to disconnect the calling
+session from discovery, collaboration and history. The choice persists across
+restarts. Use `public` to resume with a fresh live baseline, then subscribe
+explicitly. Humans can inspect or change inactive sessions with
+`rhizome session visibility <exact-local-session-id> [public|private]`.
+Success waits for local revocation acknowledgements; incomplete transitions
+remain private and report an error. Privacy cannot retract content already
+shared or delete native logs. See [session privacy](docs/privacy.md) for
+completion semantics, relay upgrades and first-exposure limitations.
+
 ## Quickstart
 
 ![Concept illustration of coding agents connected through Rhizome nodes](docs/images/rhizome-agents.svg)

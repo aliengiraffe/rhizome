@@ -35,12 +35,17 @@ func (n *Node) Subscribe(req *pb.FollowRequest, ss pb.Channel_SubscribeServer) e
 		return status.Error(codes.FailedPrecondition, "target is stale or ambiguous")
 	}
 	n.mu.Lock()
-	if !matches(n.identity, req.Target) {
+	if !n.publicLocked() || !sessionPublic(n.runtime, req.Subscriber.GetSessionId()) || !matches(n.identity, req.Target) {
 		n.mu.Unlock()
 		return status.Error(codes.FailedPrecondition, "target binding changed")
 	}
+	policy, _ := loadVisibility(n.runtime, n.identity.SessionId)
+	if policy.Revision != "" && req.StreamId != "" && req.StreamId != n.stream {
+		n.mu.Unlock()
+		return status.Error(codes.PermissionDenied, "subscription revoked; explicitly subscribe again")
+	}
 	n.evictLocked(time.Now())
-	l := &listener{queue: make(chan *pb.Event, 64), done: make(chan struct{}), details: req.Details}
+	l := &listener{subscriber: req.Subscriber.SessionId, queue: make(chan *pb.Event, 64), done: make(chan struct{}), details: req.Details}
 	n.listeners[l] = true
 	position := &pb.Event{SessionId: n.identity.SessionId, NodeId: n.identity.NodeId, Generation: n.identity.Generation, StreamId: n.stream, Sequence: n.sequence, Kind: "position", UnixMillis: time.Now().UnixMilli()}
 	var replay []*pb.Event
@@ -66,12 +71,23 @@ func (n *Node) Subscribe(req *pb.FollowRequest, ss pb.Channel_SubscribeServer) e
 	}
 	n.mu.Unlock()
 	defer func() { n.mu.Lock(); delete(n.listeners, l); n.mu.Unlock() }()
+	send := func(e *pb.Event) error {
+		l.egress.Lock()
+		defer l.egress.Unlock()
+		n.mu.Lock()
+		allowed := n.publicLocked() && sessionPublic(n.runtime, req.Subscriber.GetSessionId()) && matches(n.identity, req.Target) && n.listeners[l]
+		n.mu.Unlock()
+		if !allowed {
+			return status.Error(codes.PermissionDenied, "session unavailable")
+		}
+		return ss.Send(e)
+	}
 	for _, e := range replay {
-		if err := ss.Send(e); err != nil {
+		if err := send(e); err != nil {
 			return err
 		}
 	}
-	if err := ss.Send(position); err != nil {
+	if err := send(position); err != nil {
 		return err
 	}
 	for {
@@ -85,11 +101,11 @@ func (n *Node) Subscribe(req *pb.FollowRequest, ss pb.Channel_SubscribeServer) e
 				ended := proto.Clone(position).(*pb.Event)
 				ended.Kind = "session-ended"
 				ended.Text = "Publisher session binding ended"
-				_ = ss.Send(ended)
+				_ = send(ended)
 			}
 			return status.Error(codes.ResourceExhausted, "stream ended or subscriber queue overflow; reconnect with cursor")
 		case e := <-l.queue:
-			if err := ss.Send(e); err != nil {
+			if err := send(e); err != nil {
 				return err
 			}
 		}
@@ -119,7 +135,7 @@ func (n *Node) Send(ctx context.Context, req *pb.SendRequest) (*pb.Acceptance, e
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if !matches(n.identity, req.Target) {
+	if !n.publicLocked() || !sessionPublic(n.runtime, req.Sender.GetSessionId()) || !matches(n.identity, req.Target) {
 		return nil, status.Error(codes.FailedPrecondition, "receiver binding changed")
 	}
 	if !n.enqueueLocked(e, "", "", n.identity.Generation) {
@@ -128,6 +144,8 @@ func (n *Node) Send(ctx context.Context, req *pb.SendRequest) (*pb.Acceptance, e
 	return &pb.Acceptance{Accepted: true, MessageId: e.MessageId}, nil
 }
 func (n *Node) send(ctx context.Context, session, text, reply string) (*pb.Acceptance, error) {
+	n.gate.Lock()
+	defer n.gate.Unlock()
 	if strings.TrimSpace(text) == "" {
 		return nil, errors.New("text must not be empty")
 	}
@@ -135,6 +153,10 @@ func (n *Node) send(ctx context.Context, session, text, reply string) (*pb.Accep
 	if n.identity.SessionId == "" {
 		n.mu.Unlock()
 		return nil, errUnbound
+	}
+	if !n.publicLocked() {
+		n.mu.Unlock()
+		return nil, errPrivate
 	}
 	if session == n.identity.SessionId {
 		n.mu.Unlock()
@@ -172,6 +194,9 @@ func (n *Node) subscribe(session string) error {
 	defer n.mu.Unlock()
 	if n.identity.SessionId == "" {
 		return errUnbound
+	}
+	if !n.publicLocked() || !sessionPublic(n.runtime, session) {
+		return errPrivate
 	}
 	if session == "" || session == n.identity.SessionId {
 		return errors.New("choose a non-self exact session_id")
@@ -327,6 +352,14 @@ func (n *Node) follow(ctx context.Context, session string, f *feed, generation u
 			}
 		}()
 		if ctx.Err() != nil {
+			return
+		}
+		if status.Code(err) == codes.PermissionDenied {
+			n.mu.Lock()
+			if n.feeds[session] == f {
+				delete(n.feeds, session)
+			}
+			n.mu.Unlock()
 			return
 		}
 		n.mu.Lock()
