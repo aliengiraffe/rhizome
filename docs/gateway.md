@@ -303,3 +303,56 @@ bounded, and cancellable; there are no pairing or revocation actions.
 Plain `rhizome peers list` continues to print JSON, including on terminals.
 Explicit `--tui` fails for redirected input/output or `TERM=dumb`. No tokens or
 invitation secrets are fetched by this view.
+
+## Subscription filtering across paired hosts
+
+See also [subscription filtering](../README.md#subscription-filtering).
+
+`subscribe(session_id)` keeps legacy delivery with no configuration. For monitoring,
+choose `mode="markers"` (turn, position, gap and pause markers) or `mode="digest"`
+(counts per event kind in one notification per nonempty window). For collaboration,
+`full` keeps the existing stream; `tools` selects tool names/status only and `text`
+selects assistant `activity` summaries only. Legacy `full` consumes turn/position
+markers without notifying; select `markers` or explicit `kinds` to receive them.
+`digest` counts the same events as `full`, without copying their bodies.
+
+```toml
+[subscriptions]
+default_mode = "markers" # full (built-in default), markers, tools, text, digest
+window = "5m"            # digest default; 1s to 24h
+max_per_minute = 20      # selected events per subscription; 0 (default) disables this budget
+```
+
+`rhizome config` shows these file-only defaults and their `file` or `default`
+sources. Restart MCP processes after changing them. Precedence is call arguments,
+then the existing subscription's in-memory settings for that session ID, then
+`[subscriptions]`, then built-ins. Unsubscribe or restart discards in-memory settings.
+
+All optional `subscribe` arguments:
+
+| Argument | Meaning |
+| --- | --- |
+| `mode` | `full`, `markers`, `tools`, `text`, or `digest`. |
+| `kinds` | Explicit selection overriding mode: `activity`, `tool`, `turn`, `position`, `gap`, `paused`, `session-ended`, `prompt`, `tool_input`, `tool_output`. An empty list selects none. |
+| `include_text` | `false` excludes assistant `activity` text, retaining markers and tools in `full`; it does not disable opt-in prompt/tool bodies. |
+| `tools` | Exact, case-sensitive built-in tool name allowlist, e.g. `["Bash", "Edit"]` or `["commandExecution"]`. Omit to accept all names, including custom/plugin tools; an empty list selects no tools. |
+| `max_per_minute` | `1`–`29` selected events per subscription per minute; `0` disables this budget for compatibility. Excess events are dropped only for that subscription. |
+| `window` | Digest duration (`1s`–`24h`), usable only with effective `mode="digest"`; defaults to `5m`. |
+
+Unknown modes, kinds, and allowlisted tools return errors listing valid values.
+An explicit mode clears an earlier `kinds` selection; other omitted options retain
+their values. Re-subscribe updates the same follower without resetting its cursor:
+tightening drops excluded queued events, and broadening never replays filtered history.
+`send` and `publish` announcements bypass these filters, budgets, and digest windows.
+The existing 30-notification-per-minute delivery safety guard remains in force.
+
+`list_sessions` reports each subscription's effective options, `filtering: "receiver"`,
+and cumulative `suppressed` count. Suppression counts also accompany subsequent
+notifications. Digests share the bounded 256-event receiver queue; overflow is
+counted as suppressed, and unavailable or paused destinations can delay delivery.
+
+This version filters on the receiver, including for older publishers and paired
+hosts. Unwanted text still crosses the network; publisher-side filtering is deferred.
+These controls do not change collection, redaction, or history sharing:
+`[gateway.history]` remains separate. Peer content is always untrusted, including
+in text and digest modes; it never authorizes a reply or action.

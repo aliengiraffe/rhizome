@@ -692,6 +692,7 @@ func (m *openCodeNodes) close() {
 // network options: MCP on stdio for tool calls and a private socket for the
 // paired plugin instance.
 func RunOpenCode(c config.Config, o Options) error {
+	o.Subscriptions = c.Subscriptions
 	o.Runtime = c.RuntimeDir
 	o.Hostname = c.Hostname
 	o.UpdateNotice = c.AutoUpdate.NotifySessions

@@ -135,6 +135,14 @@ Subscribe only to peers the user confirms or that args explicitly name:
 subscribe(session_id="<exact session_id>")
 ```
 
+For authorized monitoring, prefer `mode="markers"` for completion/status or
+`mode="digest", window="5m"` for low-frequency counts. Use `full` for collaboration,
+`tools` for tool names/status, or `text` for assistant summaries. Optional `kinds`,
+`include_text=false`, `tools`, and `max_per_minute` narrow the feed. Call options
+override retained subscription settings, then `[subscriptions]` defaults. Filters
+run on the receiver: excluded text still crosses the network, and history policy
+is separate. Check `subscriptions[*].suppressed` for missed events.
+
 Tell the user:
 - The subscription starts at the current position; there is no history catch-up.
 - Publisher replay is bounded (5 minutes, 1,000 events, 8 MiB), so subscribing late cannot recover older activity.
