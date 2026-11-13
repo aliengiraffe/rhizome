@@ -323,6 +323,14 @@ func (h *historyService) search(ctx context.Context, n *Node, raw json.RawMessag
 // or one paired host, whose policy is applied before enumeration and on every
 // page so rows that aged out or became disallowed are never returned.
 func (h *historyService) searchWith(ctx context.Context, live func() *liveView, access *historyAccess, raw json.RawMessage) (any, *historyError) {
+	if h.scope.Runtime != "" {
+		lock, err := visibilityLock(ctx, h.scope.Runtime)
+		if err != nil {
+			return nil, herr("HISTORY_UNAVAILABLE", "visibility policy unavailable", true)
+		}
+		defer lock.Close()
+	}
+
 	q, cursor, e := parseSearch(raw)
 	if e != nil {
 		return nil, e
@@ -354,7 +362,7 @@ func (h *historyService) searchWith(ctx context.Context, live func() *liveView, 
 	} else {
 		var matched []*historySession
 		for _, s := range sessions {
-			if access != nil && !access.session(s) {
+			if !sessionPublic(h.scope.Runtime, s.SessionID) || access != nil && !access.session(s) {
 				continue
 			}
 			if q.SessionID != "" && s.SessionID != q.SessionID || q.AgentType != "" && s.AgentType != q.AgentType || q.ProjectPath != "" && s.ProjectPath != q.ProjectPath {
@@ -406,7 +414,7 @@ func (h *historyService) searchWith(ctx context.Context, live func() *liveView, 
 	removed := 0
 	for _, key := range keys[start:end] {
 		s := sessions[key]
-		if s == nil || access != nil && !access.session(s) {
+		if s == nil || !sessionPublic(h.scope.Runtime, s.SessionID) || access != nil && !access.session(s) {
 			removed++
 			continue
 		}
@@ -452,6 +460,14 @@ func (h *historyService) read(ctx context.Context, n *Node, raw json.RawMessage)
 // outside the window are indistinguishable from absent ones, and every page
 // re-applies the current cutoff to each event.
 func (h *historyService) readWith(ctx context.Context, live func() *liveView, access *historyAccess, raw json.RawMessage) (any, *historyError) {
+	if h.scope.Runtime != "" {
+		lock, err := visibilityLock(ctx, h.scope.Runtime)
+		if err != nil {
+			return nil, herr("HISTORY_UNAVAILABLE", "visibility policy unavailable", true)
+		}
+		defer lock.Close()
+	}
+
 	var in readInput
 	if e := decodeArgs(raw, &in); e != nil {
 		return nil, e
@@ -477,6 +493,9 @@ func (h *historyService) readWith(ctx context.Context, live func() *liveView, ac
 		cursor = *in.Cursor
 	}
 	agent, session := *in.AgentType, *in.SessionID
+	if !sessionPublic(h.scope.Runtime, session) {
+		return nil, herr("SESSION_NOT_FOUND", "no available session matches this exact ID", false)
+	}
 	hash := queryHash("read", h.scope.hash(), agent, session, fmt.Sprint(limit))
 	if access != nil {
 		if !access.policy.Agent(agent).Enabled {
@@ -497,7 +516,7 @@ func (h *historyService) readWith(ctx context.Context, live func() *liveView, ac
 	}
 	sessions := c.sessions()
 	s := sessions[sessionKey{agent, session}]
-	if s == nil || access != nil && !access.session(s) {
+	if s == nil || !sessionPublic(h.scope.Runtime, s.SessionID) || access != nil && !access.session(s) {
 		return nil, &historyError{Code: "SESSION_NOT_FOUND", Message: "no cataloged session matches this exact agent_type and session_id; check catalog coverage before treating it as absent", Extra: map[string]any{"catalog": catalogState(c, running)}}
 	}
 	switch s.Availability {

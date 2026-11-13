@@ -791,6 +791,6 @@ func (g *gateway) recentExport(now time.Time, pi bool) []recentSession {
 	rows, _ := recentFromCatalog(c, g.recentWindow, now, g.base.local().Host, func(agent string) bool { return pi || agent != "pi" }, func(s *historySession) string {
 		name, _ := g.history.effectiveName(s, overrides)
 		return name
-	})
+	}, g.base.runtime)
 	return rows
 }

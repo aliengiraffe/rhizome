@@ -175,7 +175,7 @@ def opencode_scenario(directory, claude):
         digest = hashlib.sha256(os.path.realpath(project).encode()).hexdigest()[:12]
         path = oc.run / f'opencode-{os.getpid()}-{digest}.sock'
         names = [t['name'] for t in oc.call('tools/list', {})['tools']]
-        assert 'observe_session' not in names and len(names) == 12, names
+        assert 'observe_session' not in names and len(names) == 13, names
         assert 'verified _meta' in oc.tool_error('list_sessions')
         alpha = {'ai.opencode/sessionID': 'ses_smokeAlpha1'}
         assert 'rhizome setup --agents opencode' in oc.tool_error('list_sessions', meta=alpha)

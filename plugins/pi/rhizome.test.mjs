@@ -85,7 +85,7 @@ test("queues events before the bind, then relays them in order after it", async 
   await srv.until((f) => f.some((x) => x.type === "turn"))
   assert.deepEqual(srv.frames.map((f) => f.type), ["hello", "bind", "input", "text", "tool", "tool", "turn"])
   assert.equal(srv.frames[1].sessionID, "s1")
-  assert.deepEqual(srv.frames.slice(2).map(({ sessionID, ...f }) => f), [
+  assert.deepEqual(srv.frames.slice(2).map(({ sessionID, emitted_at, ...f }) => { assert.ok(Number.isSafeInteger(emitted_at) && emitted_at > 0); return f }), [
     { type: "input", kind: "user", text: "fix it" },
     { type: "text", messageID: "r1", text: "on it" },
     { type: "tool", callID: "c1", name: "read", phase: "start", text: '{"path":"a"}' },

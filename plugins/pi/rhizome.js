@@ -150,6 +150,7 @@ export default function (pi) {
   // Until the bind is written they wait in a bounded queue, and what overflows is
   // reported as a gap so subscribers never mistake a hole for silence.
   function emit(s, f) {
+    f = { ...f, emitted_at: Date.now() };
     if (!s || s.closed || s !== current) return;
     f = { ...f, sessionID: s.sessionId };
     if (typeof f.text === "string") f.text = f.text.slice(0, MAX_TEXT);

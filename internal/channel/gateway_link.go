@@ -330,14 +330,14 @@ func (l *gatewayLink) advertise() {
 		sessions := []*pb.Identity{}
 		scanCtx, stopScan := context.WithTimeout(l.ctx, 3*time.Second)
 		for _, p := range logicalPeers(l.g.base.peers()) {
-			if !gatewayExportable(p) || !l.accepts(p) {
+			if !gatewayExportable(l.g.base.runtime, p) || !l.accepts(p) {
 				continue
 			}
 			// Probe before export: stale gossip never establishes remote authority.
 			ctx, cancel := context.WithTimeout(scanCtx, 700*time.Millisecond)
 			actual, err := l.g.base.probe(ctx, p)
 			cancel()
-			if err != nil || !matches(actual, p) || !gatewayExportable(actual) {
+			if err != nil || !matches(actual, p) || !gatewayExportable(l.g.base.runtime, actual) {
 				continue
 			}
 			actual.Endpoint = ""
@@ -498,7 +498,7 @@ func (l *gatewayLink) localRoute(ctx context.Context, source, target *pb.Identit
 		return nil, nil, errors.New("unadvertised source")
 	}
 	dst, err := l.g.base.resolve(ctx, target.SessionId)
-	if err != nil || !gatewayExportable(dst) || !l.accepts(dst) || !matches(dst, target) {
+	if err != nil || !gatewayExportable(l.g.base.runtime, dst) || !l.accepts(dst) || !matches(dst, target) {
 		return nil, nil, errors.New("stale or ambiguous local target")
 	}
 	src, err := l.g.base.resolve(ctx, source.SessionId)
@@ -589,7 +589,7 @@ func (p *gatewayProxy) source(ctx context.Context, source, target *pb.Identity) 
 		return nil, errors.New("stale gateway target")
 	}
 	actual, err := p.node.resolve(ctx, source.GetSessionId())
-	if err != nil || !gatewayExportable(actual) || !p.link.accepts(actual) || !matches(actual, source) {
+	if err != nil || !gatewayExportable(p.link.g.base.runtime, actual) || !p.link.accepts(actual) || !matches(actual, source) {
 		return nil, errors.New("invalid local gateway source")
 	}
 	actual.Endpoint = ""
@@ -641,9 +641,6 @@ func (p *gatewayProxy) close() {
 	p.closed.Do(func() { p.node.close(); <-p.link.g.proxySlots })
 }
 
-// gatewayExportable is the single export/access policy hook. Session privacy
-// (#37) must extend this predicate; paired peers currently see all bound local
-// sessions from bridge-capable processes, but never forwarded identities.
 // gatewaySubprotocolOpenCode is offered and selected on the link's websocket
 // handshake by builds whose snapshots may carry OpenCode sessions. Builds that
 // predate OpenCode support select no subprotocol and reject any snapshot
@@ -685,6 +682,8 @@ func gatewayPeerAccepts(p *pb.Identity, opencode, pi bool) bool {
 	return true
 }
 
-func gatewayExportable(p *pb.Identity) bool {
-	return p != nil && p.SessionId != "" && p.GatewayHost == "" && p.GatewayVersion == 1
+// gatewayExportable applies shared visibility to every local export/access path,
+// including file transfers; forwarded identities never qualify.
+func gatewayExportable(runtime string, p *pb.Identity) bool {
+	return p != nil && p.SessionId != "" && p.GatewayHost == "" && p.GatewayVersion == 1 && sessionPublic(runtime, p.SessionId)
 }

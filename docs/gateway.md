@@ -303,3 +303,10 @@ bounded, and cancellable; there are no pairing or revocation actions.
 Plain `rhizome peers list` continues to print JSON, including on terminals.
 Explicit `--tui` fails for redirected input/output or `TERM=dumb`. No tokens or
 invitation secrets are fetched by this view.
+
+## Session privacy
+
+Local visibility policy filters live identities, recent metadata and exact route
+resolution, including file-transfer access checks. Paired-host history enforces
+the same policy on every page. Previously shared metadata may take time to
+withdraw; cached routes do not grant content access. See [session privacy](privacy.md).

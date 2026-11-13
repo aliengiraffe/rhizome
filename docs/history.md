@@ -673,3 +673,11 @@ has no disabling switch. Setup updates preserve `[gateway.history]` and each
 agent's `[peer_history]` overrides, including explicit false values and lookback windows. Enabling gateway
 pairing through setup never enables history sharing. These policies remain
 file-only; restart the service to apply deliberate policy edits.
+
+## Session privacy
+
+Private sessions are absent from search and recent metadata. Direct reads and
+existing read cursors return `SESSION_NOT_FOUND`; search pages omit newly private
+rows. Policy is rechecked even against a stale catalog with a stopped observer.
+Only the observer removes catalog rows; MCP remains a catalog reader. Explicit
+re-publication permits native log history again. See [session privacy](privacy.md).

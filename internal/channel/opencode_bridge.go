@@ -30,6 +30,7 @@ var errAckMissing = errors.New("OpenCode delivery acknowledgement missing (accep
 // and Rhizome. Fields are a union; Type selects which are meaningful.
 type bridgeFrame struct {
 	Type      string `json:"type"`
+	EmittedAt int64  `json:"emitted_at,omitempty"`
 	Version   int    `json:"version,omitempty"`
 	OpenCode  string `json:"opencode,omitempty"`
 	SessionID string `json:"sessionID,omitempty"`

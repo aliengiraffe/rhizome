@@ -151,7 +151,7 @@ services pin the absolute TOML path and reread it on restart; see
 
 ## Codex
 
-Local Codex sessions use `rhizome mcp --agent codex`, with the same thirteen tools and
+Local Codex sessions use `rhizome mcp --agent codex`, with the same fourteen tools and
 cross-agent subscriptions. Incoming events use `codex queue`; outgoing activity
 comes from read-only App Server polling. Each caller thread has an independent
 node even when Codex shares an MCP connection. See [Codex setup and tested
@@ -198,7 +198,7 @@ from the checkout in place of `rhizome`.
 
 ## OpenCode
 
-Local OpenCode 2.x sessions use `rhizome mcp --agent opencode` (twelve tools; no
+Local OpenCode 2.x sessions use `rhizome mcp --agent opencode` (thirteen tools; no
 `observe_session`) plus an embedded relay plugin installed by
 `rhizome setup --agents opencode`. Configuration and `[network]` modes apply as
 for the other agents. A session binds on its first human prompt; its
@@ -301,6 +301,7 @@ process (restart Claude Code) after changing the setting.
 | Tool | Behavior |
 | --- | --- |
 | `list_sessions()` | `live` or `recent` sessions, one row per `session_id` ([Session status](../README.md#session-status); `--debug` appends a substatus), `delivery_capable`, recorded `last_activity_at`, a `recent_sessions` block, bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](opencode.md#why-a-closed-session-can-still-be-live)). |
+| `set_session_visibility(visibility)` | Set only the verified caller public or private; persists and waits for local revocation acknowledgements. See [privacy](privacy.md). |
 | `set_session_name(name, session_id?)` | Name the caller's bound session for peers, or with an exact `session_id` another session on this device. Empty clears the override. Returns the effective name and its source. |
 | `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
@@ -999,3 +1000,11 @@ Files are limited to 16 MiB and arrive in a private **temporary** inbox. Copy a
 verified download to your project to keep it: expiry, disconnection, or service
 restart removes inbox files. Offers never authorize automatic acceptance or
 execution. See [file transfers](files.md) for CLI usage, limits and lifecycle.
+
+## Session privacy
+
+The caller-only `set_session_visibility(visibility="private"|"public")` tool and
+`rhizome session visibility [--config FILE] <exact-local-session-id> [public|private]`
+control persistent local policy. Private sessions retain their local status/control
+interface. See [session privacy](privacy.md) for acknowledgements, errors,
+re-publication, relay upgrades and limitations.

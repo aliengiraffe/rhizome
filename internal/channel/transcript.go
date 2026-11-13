@@ -19,25 +19,26 @@ const maxRecord = 2 * 1024 * 1024
 
 // Only this collector's goroutine accesses offset, tail and normalization state.
 type collector struct {
-	passive      bool
-	agent        string
-	more         bool
-	path         string
-	offset       int64
-	info         os.FileInfo
-	tail         []byte
-	dropping     bool
-	wake         chan struct{}
-	seen         map[string]bool
-	order        []string
-	tools        map[string]string
-	toolOrder    []string
-	anchor       []byte
-	codexHuman   bool // human event in the current rollout turn
-	unknownTurn  bool // baseline/handoff lacks input context; policy must not bypass it
-	peerResponse bool
-	baseline     int64 // bytes present at binding; scanned once for title records only
-	titled       bool
+	privacyRevision string
+	passive         bool
+	agent           string
+	more            bool
+	path            string
+	offset          int64
+	info            os.FileInfo
+	tail            []byte
+	dropping        bool
+	wake            chan struct{}
+	seen            map[string]bool
+	order           []string
+	tools           map[string]string
+	toolOrder       []string
+	anchor          []byte
+	codexHuman      bool // human event in the current rollout turn
+	unknownTurn     bool // baseline/handoff lacks input context; policy must not bypass it
+	peerResponse    bool
+	baseline        int64 // bytes present at binding; scanned once for title records only
+	titled          bool
 }
 
 func newCollector(path string) (*collector, error) {
@@ -110,6 +111,27 @@ func (c *collector) run(ctx context.Context, n *Node, gen uint64) {
 	}
 }
 func (c *collector) scan(n activitySink, gen uint64) {
+	if node, ok := n.(*Node); ok {
+		node.collectionGate.Lock()
+		defer node.collectionGate.Unlock()
+		identity := node.local()
+		policy, err := loadVisibility(node.runtime, identity.SessionId)
+		if err != nil || policy.Visibility != "public" {
+			c.privacyRevision = "private"
+			c.more = false
+			return
+		}
+		if c.privacyRevision != policy.Revision {
+			fresh, err := newCollector(c.path)
+			if err != nil {
+				return
+			}
+			fresh.agent, fresh.passive, fresh.wake = c.agent, c.passive, c.wake
+			fresh.unknownTurn, fresh.privacyRevision = true, policy.Revision
+			*c = *fresh
+			return
+		}
+	}
 	c.more = false
 	f, err := os.Open(c.path)
 	if err != nil {

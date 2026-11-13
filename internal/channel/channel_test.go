@@ -441,7 +441,7 @@ func TestMCPHandshakeAndTools(t *testing.T) {
 		t.Fatal("channel capability missing")
 	}
 	tools, err := cs.ListTools(n.ctx, nil)
-	if err != nil || len(tools.Tools) != 11 {
+	if err != nil || len(tools.Tools) != 12 {
 		t.Fatalf("tools %v %v", tools, err)
 	}
 	r, err := cs.CallTool(n.ctx, &mcp.CallToolParams{Name: "publish", Arguments: map[string]any{"text": "unbound"}})

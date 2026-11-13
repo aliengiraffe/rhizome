@@ -119,14 +119,15 @@ type itemState struct {
 	status string
 }
 type codexCollector struct {
-	thread   string
-	reader   codexReader
-	wake     chan struct{}
-	baseline bool
-	lastTurn string
-	items    map[string]itemState
-	turns    map[string]string
-	order    []string
+	privacyRevision string
+	thread          string
+	reader          codexReader
+	wake            chan struct{}
+	baseline        bool
+	lastTurn        string
+	items           map[string]itemState
+	turns           map[string]string
+	order           []string
 }
 
 func newCodexCollector(thread string, reader codexReader) *codexCollector {
@@ -193,6 +194,23 @@ func (c *codexCollector) gap(n *Node, gen uint64, reason string) {
 	c.order = nil
 }
 func (c *codexCollector) scan(ctx context.Context, n *Node, gen uint64) bool {
+	n.collectionGate.Lock()
+	defer n.collectionGate.Unlock()
+	identity := n.local()
+	policy, err := loadVisibility(n.runtime, identity.SessionId)
+	if err != nil || policy.Visibility != "public" {
+		c.privacyRevision = "private"
+		return true
+	}
+	if c.privacyRevision != policy.Revision {
+		c.baseline = false
+		c.lastTurn = ""
+		c.items = map[string]itemState{}
+		c.turns = map[string]string{}
+		c.order = nil
+		c.privacyRevision = policy.Revision
+	}
+
 	var read struct {
 		Thread struct {
 			ID     string  `json:"id"`

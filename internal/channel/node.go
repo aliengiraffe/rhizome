@@ -66,9 +66,11 @@ type feed struct {
 	token            string
 }
 type listener struct {
-	queue   chan *pb.Event
-	done    chan struct{}
-	details bool // subscriber accepts detail kinds (FollowRequest.details)
+	egress     sync.Mutex
+	subscriber string
+	queue      chan *pb.Event
+	done       chan struct{}
+	details    bool // subscriber accepts detail kinds (FollowRequest.details)
 }
 type pending struct {
 	event        *pb.Event
@@ -104,6 +106,7 @@ type Node struct {
 	// channel notifications; hookInbox and hookInboxBytes are guarded by mu.
 	hookDelivery   bool
 	hookInbox      []string
+	hookOrigins    []string
 	hookInboxBytes int
 	// external marks delivery to an agent's own queue (Codex, OpenCode): gated
 	// on deliveryReady and counted as queue handoffs.
@@ -116,6 +119,10 @@ type Node struct {
 	wg     sync.WaitGroup
 	// gate serializes lifecycle transitions with channel writes; collection never takes it.
 	gate                         sync.Mutex
+	collectionGate               sync.Mutex
+	visibilityAck                string
+	visibilityBlocked            bool
+	visibilityAdvertised         bool
 	mu                           sync.Mutex
 	identity                     *pb.Identity
 	names                        nameState
@@ -319,6 +326,9 @@ func (n *Node) evictLocked(now time.Time) {
 	}
 }
 func (n *Node) publishLocked(kind, text, reply string) *pb.Event {
+	if !n.publicLocked() {
+		return nil
+	}
 	n.sequence++
 	e := &pb.Event{SessionId: n.identity.SessionId, NodeId: n.identity.NodeId, Generation: n.identity.Generation, StreamId: n.stream, Sequence: n.sequence, Kind: kind, UnixMillis: time.Now().UnixMilli(), Text: clip(text, maxText), MessageId: id(), ReplyTo: clip(reply, 128)}
 	n.history = append(n.history, e)
@@ -408,6 +418,9 @@ func (n *Node) announce(text, reply string) error {
 	defer n.mu.Unlock()
 	if n.identity.SessionId == "" {
 		return errUnbound
+	}
+	if !n.publicLocked() {
+		return errPrivate
 	}
 	if strings.TrimSpace(text) == "" {
 		return errors.New("text must not be empty")

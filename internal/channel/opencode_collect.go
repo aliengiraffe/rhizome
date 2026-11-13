@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+	"time"
 )
 
 // openCodeCollector normalizes plugin events for one bound session. Pi's
@@ -12,9 +13,11 @@ import (
 // forwards raw allowlisted events; every publication decision is made here.
 // Callers serialize handle (openCodeNodes holds frameMu).
 type openCodeCollector struct {
-	peer  bool // current turn was started only by Rhizome deliveries
-	seen  map[string]bool
-	order []string
+	privacyRevision string
+	privateTurn     bool
+	peer            bool // current turn was started only by Rhizome deliveries
+	seen            map[string]bool
+	order           []string
 }
 
 func newOpenCodeCollector() *openCodeCollector {
@@ -36,6 +39,27 @@ func (c *openCodeCollector) once(key string) bool {
 }
 
 func (c *openCodeCollector) handle(n *Node, gen uint64, f bridgeFrame) {
+	n.collectionGate.Lock()
+	defer n.collectionGate.Unlock()
+	policy, err := loadVisibility(n.runtime, n.local().SessionId)
+	if err != nil || policy.Visibility != "public" {
+		c.privateTurn = true
+		c.privacyRevision = "private"
+		return
+	}
+	if c.privacyRevision != policy.Revision {
+		c.privateTurn = true
+		c.privacyRevision = policy.Revision
+	}
+	if policy.Revision != "" && (f.EmittedAt <= policy.PublicAfter || f.EmittedAt > time.Now().Add(5*time.Second).UnixMilli()) {
+		return
+	}
+	if c.privateTurn {
+		if f.Type != "input" || f.Kind != "user" || f.Rhizome || isPeerInput(f.Text) {
+			return
+		}
+		c.privateTurn = false
+	}
 	switch f.Type {
 	case "input":
 		// Peer deliveries mark the turn as a reaction until a human prompt arrives.

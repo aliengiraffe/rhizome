@@ -453,20 +453,20 @@ func TestGatewayTLSIdentityPinning(t *testing.T) {
 }
 func TestGatewayProtocolCompatibility(t *testing.T) {
 	local := &pb.Identity{Protocol: 1, SessionId: "local"}
-	if !validChannelProtocol(local) || gatewayExportable(local) {
+	if !validChannelProtocol(local) || gatewayExportable("", local) {
 		t.Fatal("legacy node must remain local-only")
 	}
 	local.GatewayVersion = 1
-	if !gatewayExportable(local) {
+	if !gatewayExportable("", local) {
 		t.Fatal("new local node not exportable")
 	}
 	host, _ := gatewayRandom()
 	local.GatewayHost = host
-	if validChannelProtocol(local) || gatewayExportable(local) {
+	if validChannelProtocol(local) || gatewayExportable("", local) {
 		t.Fatal("accepted protocol-1 proxy")
 	}
 	local.Protocol = 2
-	if !validChannelProtocol(local) || gatewayExportable(local) {
+	if !validChannelProtocol(local) || gatewayExportable("", local) {
 		t.Fatal("proxy protocol policy")
 	}
 }

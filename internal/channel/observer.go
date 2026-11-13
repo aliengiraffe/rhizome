@@ -40,13 +40,15 @@ type observedFile struct {
 	identityError              string
 }
 type observer struct {
-	ctx   context.Context
-	opts  ObserverOptions
-	watch *fsnotify.Watcher
-	files map[string]*observedFile
-	dirs  map[string]bool
-	retry bool
-	index *historyIndex // catalog writer; nil only in harnesses that skip indexing
+	ctx                 context.Context
+	opts                ObserverOptions
+	watch               *fsnotify.Watcher
+	files               map[string]*observedFile
+	dirs                map[string]bool
+	visibilityAck       string
+	visibilityPublished string
+	retry               bool
+	index               *historyIndex // catalog writer; nil only in harnesses that skip indexing
 }
 
 // RunObserver observes local log changes until cancellation. Only one observer
@@ -103,6 +105,12 @@ func runObserver(ctx context.Context, opts ObserverOptions, retryInterval time.D
 		}
 		os.Remove(filepath.Join(opts.Runtime, "observer-health.json"))
 	}()
+	if err := localstate.SecureDir(filepath.Join(opts.Runtime, "visibility")); err != nil {
+		return err
+	}
+	if err := w.Add(filepath.Join(opts.Runtime, "visibility")); err != nil {
+		return err
+	}
 	o.inventory(true)
 	o.index.walkDone()
 	o.health()
@@ -116,6 +124,10 @@ func runObserver(ctx context.Context, opts ObserverOptions, retryInterval time.D
 		case event, ok := <-w.Events:
 			if !ok {
 				return errors.New("filesystem event channel closed")
+			}
+			if filepath.Dir(event.Name) == filepath.Join(opts.Runtime, "visibility") {
+				o.syncVisibility()
+				continue
 			}
 			if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 				for dir := range o.dirs {
@@ -156,6 +168,7 @@ func runObserver(ctx context.Context, opts ObserverOptions, retryInterval time.D
 			}
 			o.watchFailed(err)
 		case <-tick.C:
+			o.syncVisibility()
 			if time.Since(lastRetry) >= retryInterval {
 				if o.retry {
 					o.retry = false
@@ -533,6 +546,15 @@ func (o *observer) scan(path string, f *observedFile) {
 	}
 	f.session = session
 	f.cwd = cwd
+	if !sessionPublic(o.opts.Runtime, session) {
+		if f.n != nil {
+			f.n.close()
+			f.n = nil
+		}
+		f.c.privacyRevision = "private"
+		f.c.more = false
+		return
+	}
 
 	// Never open more than 64 observed publisher nodes per service.
 	if f.n == nil {

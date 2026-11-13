@@ -64,3 +64,10 @@ tests, Node 20+) and `python3 scripts/smoke_pi.py`. The smoke runs a real
 `models.json` in a private agent directory (no credentials, no real provider),
 a peer session in the same runtime, and covers bind, `/new` rebind, published
 activity, peer `send` delivery and non-republication of the reaction.
+
+## Session privacy
+
+Persistent session privacy uses the verified nonce-bound identity. Re-publication
+requires a fresh human input and excludes pre-publication or unstamped relay
+frames. Rerun setup to upgrade the extension (`emitted_at` is captured before
+buffering). See [session privacy](privacy.md).

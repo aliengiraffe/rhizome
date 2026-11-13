@@ -369,3 +369,11 @@ Arrows and PgUp/PgDn scroll; resizing and no-color terminals are supported.
 status view without lifecycle actions. Explicit subcommands remain one-shot;
 `service run` never launches a UI. Bare noninteractive `service` remains a usage
 error. An explicit `--tui` requires usable terminals and otherwise fails promptly.
+
+## Session privacy
+
+The observer watches the shared visibility directory and acknowledges a transition
+only after private catalog rows have been removed and flushed. It does not create
+private publisher nodes after direct integrations release their collection lease.
+No service restart is required. An old or unresponsive process causes an incomplete
+transition error, with private policy retained. See [session privacy](privacy.md).

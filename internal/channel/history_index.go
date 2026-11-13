@@ -31,6 +31,7 @@ type historyCounters struct {
 // goroutine, parses only identity, timestamp and title fields, and never
 // publishes activity, creates nodes, or touches collection leases.
 type historyIndex struct {
+	hidden     map[string]string
 	scope      historyScope
 	files      map[string]*indexedFile
 	queue      []string
@@ -55,7 +56,7 @@ type historyIndex struct {
 }
 
 func newHistoryIndex(scope historyScope, degraded func() bool) *historyIndex {
-	h := &historyIndex{scope: scope, files: map[string]*indexedFile{}, queued: map[string]bool{}, seen: map[string]bool{}, degraded: degraded}
+	h := &historyIndex{hidden: map[string]string{}, scope: scope, files: map[string]*indexedFile{}, queued: map[string]bool{}, seen: map[string]bool{}, degraded: degraded}
 	if raw, err := os.ReadFile(scope.path()); err == nil && len(raw) <= maxCatalogBytes {
 		var c catalogFile
 		if json.Unmarshal(raw, &c) == nil && c.Version == catalogVersion && c.Scope == scope.hash() {
@@ -153,6 +154,12 @@ func (h *historyIndex) work(ctx context.Context) {
 
 func (h *historyIndex) indexFile(path string, budget int64) (int64, bool) {
 	f := h.files[path]
+	if f != nil && f.Session != "" && !sessionPublic(h.scope.Runtime, f.Session) {
+		h.hidden[path] = f.Session
+		delete(h.files, path)
+		h.dirty = true
+		return 0, false
+	}
 	st, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if f != nil {
@@ -170,7 +177,7 @@ func (h *historyIndex) indexFile(path string, budget int64) (int64, bool) {
 	}
 	agent, _ := h.scope.root(path)
 	if f == nil {
-		if len(h.files) >= maxCatalogFiles {
+		if len(h.files)+len(h.hidden) >= maxCatalogFiles {
 			if !h.limitHit {
 				slog.Warn("history_index_limit", "files", len(h.files))
 			}
@@ -252,6 +259,12 @@ func (h *historyIndex) indexFile(path string, budget int64) (int64, bool) {
 		if complete {
 			if !dropping && len(record) > 0 {
 				h.indexLine(f, bytes.TrimRight(record, "\r\n"))
+				if f.Session != "" && !sessionPublic(h.scope.Runtime, f.Session) {
+					h.hidden[path] = f.Session
+					delete(h.files, path)
+					h.dirty = true
+					return total + pending, false
+				}
 			}
 			record = nil
 			dropping = false
@@ -448,7 +461,9 @@ func (h *historyIndex) flush() {
 	}
 	files := make([]*indexedFile, 0, len(h.files))
 	for _, f := range h.files {
-		files = append(files, f)
+		if sessionPublic(h.scope.Runtime, f.Session) {
+			files = append(files, f)
+		}
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	now := time.Now().UTC()

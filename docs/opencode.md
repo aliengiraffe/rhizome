@@ -48,7 +48,7 @@ and `--agents` flag; it installs only the skill and plugins and never writes
 OpenCode configuration. Which agent a process serves stays the per-launch
 `--agent` flag.
 
-OpenCode mode exposes twelve tools: the thirteen of Claude and Codex mode minus
+OpenCode mode exposes thirteen tools: the fourteen of Claude and Codex mode minus
 `observe_session`. Every tool resolves the caller from `_meta`, including the
 file-transfer tools (`send_file`, `list_files`, `accept_file`, `cancel_file`;
 paired hosts only, see [file transfers](files.md)) and the read-only history
@@ -262,3 +262,10 @@ Known CLI caveat: from a non-interactive parent, run `opencode run` with stdin
 closed (`</dev/null`); an open stdin was a confirmed cause of hangs. Hangs were
 also seen when message text contained `ses_...` IDs; that cause is unconfirmed.
 The plugin `ctx.session.synthetic` API handled such text fine.
+
+## Session privacy
+
+Persistent session privacy applies to every bound session. After re-publication,
+the collector requires a fresh human input and ignores pre-publication or
+unstamped relay frames. Rerun setup to upgrade the relay, which captures
+`emitted_at` before buffering. See [session privacy](privacy.md).

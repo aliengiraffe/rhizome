@@ -33,6 +33,9 @@ func eventKey(e *pb.Event) string {
 
 // Acceptance is local queue acceptance, never a semantic acknowledgement.
 func (n *Node) enqueueLocked(e *pb.Event, subscription, token string, generation uint64) bool {
+	if !n.publicLocked() || !sessionPublic(n.runtime, e.SessionId) {
+		return false
+	}
 	n.stats.Received++
 	// Completion alone carries no work and must never wake another agent.
 	if e.Kind == "turn" || e.NodeId == n.identity.NodeId || generation != n.identity.Generation || n.identity.SessionId == "" {
@@ -111,7 +114,7 @@ func (n *Node) deliver(ctx context.Context) {
 			due = map[string]time.Time{}
 			generation = n.identity.Generation
 		}
-		if !n.ready || n.notify == nil || n.identity.SessionId == "" || (n.external && !n.deliveryReady) {
+		if !n.publicLocked() || !n.ready || n.notify == nil || n.identity.SessionId == "" || (n.external && !n.deliveryReady) {
 			n.mu.Unlock()
 			n.gate.Unlock()
 			continue
@@ -129,6 +132,9 @@ func (n *Node) deliver(ctx context.Context) {
 		now := time.Now()
 		index := -1
 		for i, p := range n.incoming {
+			if !sessionPublic(n.runtime, p.event.SessionId) {
+				continue
+			}
 			if p.event.GatewayHost != "" && !gatewayEvents[p.event] {
 				continue
 			} // validate newly queued events on the next tick
