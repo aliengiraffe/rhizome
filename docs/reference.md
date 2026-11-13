@@ -300,7 +300,7 @@ process (restart Claude Code) after changing the setting.
 
 | Tool | Behavior |
 | --- | --- |
-| `list_sessions()` | `live` or `recent` sessions, one row per `session_id` ([Session status](../README.md#session-status); `--debug` appends a substatus), `delivery_capable`, recorded `last_activity_at`, a `recent_sessions` block, bound peer identities, project, `session_name` and host labels, conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](opencode.md#why-a-closed-session-can-still-be-live)). |
+| `list_sessions()` | `live` or `recent` sessions, one row per `session_id` ([Session status](../README.md#session-status); `--debug` appends a substatus), `delivery_capable`, recorded `last_activity_at`, a `recent_sessions` block, bound peer identities, project, `session_name`, host and [git labels](#git-labels), conflicts, local binding, subscription/reconnect/gap state, queue depth and counters. `live` means a node is bound and reachable, not that a window is open: OpenCode and Codex sessions can stay `live` after their UI closes (see [docs/opencode.md](opencode.md#why-a-closed-session-can-still-be-live)). |
 | `set_session_name(name, session_id?)` | Name the caller's bound session for peers, or with an exact `session_id` another session on this device. Empty clears the override. Returns the effective name and its source. |
 | `subscribe(session_id)` | Follow an exact ID. Idempotent; retains intent while absent. Explicitly re-arms that origin if delivery is paused. |
 | `unsubscribe(session_id)` | Cancel follow and remove pending activity from that subscription. Direct messages are independent. |
@@ -308,7 +308,7 @@ process (restart Claude Code) after changing the setting.
 | `send(session_id, text, reply_to?)` | Direct message without a subscription. Returns a stable message ID and receiver queue acceptance. |
 | `observe_session(...)` | Internal hook binding/refresh and transcript wake-up. With `claude.delivery = "hooks"`, main-thread `UserPromptSubmit`/`PreToolUse` calls return held peer events as `additionalContext` ([Claude delivery](#claude-delivery)). Not offered in OpenCode mode. |
 | `send_file`, `list_files`, `accept_file`, `cancel_file` | Explicit file offers between sessions on paired hosts; see [file transfers](files.md). |
-| `search_sessions(filters…, host_id?)` | Metadata search of the local history catalog by exact ID, agent, project path, title substring, and activity date, with deterministic pagination. Rows carry history availability and current live status separately. Requires the observer service's catalog. With `host_id`, searches one directly paired host that opted in. |
+| `search_sessions(filters…, host_id?)` | Metadata search of the local history catalog by exact ID, agent, project path, normalized `git_origin`, title substring, and activity date, with deterministic pagination. Rows carry history availability and current live status separately. Requires the observer service's catalog. With `host_id`, searches one directly paired host that opted in. |
 | `read_session_history(session_id, agent_type, limit?, cursor?, host_id?)` | Bounded pages of recorded assistant text and tool/turn markers from one historical session's native log, in source order over a fixed snapshot. Excludes reasoning, subagents, and peer traffic, and excludes prompts and tool bodies unless the serving host sets `[sessions].share_prompts_and_tools`. With `host_id`, reads from one opted-in paired host within its owner's lookback. |
 
 The two history tools are read-only and local unless `host_id` names a paired
@@ -369,6 +369,50 @@ metadata and the authenticated `Info` RPC), so treat them as team-visible labels
 and treat peer names as untrusted text. Older peers without the field remain
 usable and simply show no name. When gossip metadata would exceed its budget,
 `session_name` and `project` are shortened before routing fields.
+
+## Git labels
+
+Every bound identity can carry three optional labels describing the repository
+its working directory belongs to, so the same repository is recognizable across
+machines and worktrees without comparing absolute paths:
+
+| Field | Meaning |
+| --- | --- |
+| `git_origin` | The `origin` remote, normalized to `host/path` (for example `github.com/org/repo`). SCP-style (`git@github.com:org/repo.git`), `ssh://` and `https://` remotes of one repository give the same value. The host is lowercased; the scheme, user and password, port, query, fragment and a trailing `.git` are removed, so credentials embedded in a remote URL are never stored or sent. The path keeps its case. Local-path remotes are not reported. At most 180 bytes; a longer value is omitted, never cut. |
+| `git_branch` | The checked-out branch. Absent on a detached `HEAD` or outside a repository. At most 96 bytes, cut on a rune boundary. |
+| `git_worktree_root` | `true` when `project` is the top level of a linked worktree (`git worktree add`) rather than the main checkout or a subdirectory. It shares its `git_origin` with the main checkout. |
+
+They are **labels, never addresses**: untrusted, optional, not unique, and used
+only for relevance and filtering. Sessions are still routed by exact
+`session_id` alone, and a label change never touches `node_id`, generation,
+streams, subscriptions, cursors or queues. Any of them may be absent: outside a
+repository, without an `origin` remote, on unreadable metadata, or from a peer
+running an older Rhizome. A missing label means "not reported".
+
+The process bound to a session (`rhizome mcp` for Claude Code, Codex, OpenCode
+and Pi) reads the repository metadata of its working directory directly
+(`.git`, `HEAD`, `commondir` and the `[remote "origin"]` `url` of the repository
+`config`) with bounded reads. It never runs `git`, so no hook, alias or
+credential helper configured in a repository executes, and it does not follow
+`include` directives or `url.<base>.insteadOf` rewrites. Detection runs on every
+binding event and again every 15 seconds, so a branch switch reaches peers
+without a new binding. Failures leave the labels empty and never fail binding.
+
+That process also writes the labels to `<runtime>/git/` (private, keyed by a
+hash of the exact session ID, newest 4,096 kept; removed when the labels become
+empty). The observer service never opens project directories: its
+`recent (observer)` publishers, `recent` catalog rows and
+[`search_sessions`](history.md#search_sessions) join that record, so a session
+that never ran with the Rhizome MCP server has no git labels.
+
+Labels are shared with every trusted peer through discovery and with paired
+hosts through the gateway, like `project` and `session_name`. Origins and branch
+names can reveal project or customer names; there is no separate opt-out in this
+version. When gossip metadata would exceed its 512-byte budget, `git_branch` is
+dropped first, then `session_name` and `project` are shortened, then
+`git_origin` and `git_worktree_root` are dropped, all before routing fields.
+Gateway proxies carry a `gateway_host` and reach the budget sooner, so a long
+branch name is often absent for paired-host sessions.
 
 An accepted direct message is **queued**, not necessarily written, read or acted
 upon. A lost RPC response can leave acceptance uncertain; calling `send` again

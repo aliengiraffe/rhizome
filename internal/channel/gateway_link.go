@@ -363,7 +363,7 @@ func (l *gatewayLink) advertise() {
 // validGatewayIdentity bounds a session received from a paired host. Pi
 // sessions are valid only on a link that negotiated the Pi subprotocol.
 func validGatewayIdentity(p *pb.Identity, pi bool) bool {
-	return p != nil && p.Protocol == 1 && p.GatewayVersion == 1 && len(p.NodeId) == 32 && p.SessionId != "" && len(p.SessionId) <= 128 && p.Generation > 0 && p.GatewayHost == "" && p.Endpoint == "" && p.GossipEndpoint == "" && p.CertFingerprint == "" && len(p.Host) <= 64 && len(p.SessionName) <= 96 && len(p.Project) <= 180 && len(p.DisplayName) <= 40 && (p.AgentType == "claude" || p.AgentType == "codex" || p.AgentType == "opencode" || pi && p.AgentType == "pi")
+	return p != nil && p.Protocol == 1 && p.GatewayVersion == 1 && len(p.NodeId) == 32 && p.SessionId != "" && len(p.SessionId) <= 128 && p.Generation > 0 && p.GatewayHost == "" && p.Endpoint == "" && p.GossipEndpoint == "" && p.CertFingerprint == "" && len(p.Host) <= 64 && len(p.SessionName) <= 96 && len(p.Project) <= 180 && len(p.DisplayName) <= 40 && validGitLabels(p.GitOrigin, p.GitBranch) && (p.AgentType == "claude" || p.AgentType == "codex" || p.AgentType == "opencode" || pi && p.AgentType == "pi")
 }
 func (l *gatewayLink) reconcile() {
 	for {
@@ -401,7 +401,8 @@ func (l *gatewayLink) reconcile() {
 				l.mu.Unlock()
 				if p != nil {
 					p.node.mu.Lock()
-					changed := p.node.identity.SessionName != remote.SessionName || p.node.identity.DisplayName != remote.DisplayName || p.node.identity.Project != remote.Project || p.node.identity.Host != remote.Host
+					changed := p.node.identity.SessionName != remote.SessionName || p.node.identity.DisplayName != remote.DisplayName || p.node.identity.Project != remote.Project || p.node.identity.Host != remote.Host || identityGit(p.node.identity) != identityGit(remote)
+					identityGit(remote).apply(p.node.identity)
 					p.node.identity.SessionName = remote.SessionName
 					p.node.identity.DisplayName = remote.DisplayName
 					p.node.identity.Project = remote.Project
@@ -426,6 +427,7 @@ func (l *gatewayLink) reconcile() {
 				n.identity.Project = remote.Project
 				n.identity.DisplayName = remote.DisplayName
 				n.identity.SessionName = remote.SessionName
+				identityGit(remote).apply(n.identity)
 				n.identity.ObservationOnly = remote.ObservationOnly
 				n.identity.GatewayHost = l.host
 				p = &gatewayProxy{link: l, remote: cloneIdentity(remote), node: n}

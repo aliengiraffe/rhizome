@@ -183,9 +183,13 @@ func (n *Node) observeCodex(ctx context.Context, h Hook) error {
 	}
 	n.identity.Project = clip(h.Cwd, 180)
 	n.identity.DisplayName = clip(filepath.Base(h.Cwd), 40)
+	n.cwd = h.Cwd
 	renamed := n.resolveNameLocked()
 	gen := n.identity.Generation
 	n.mu.Unlock()
+	if n.updateGit() {
+		renamed = true
+	}
 	if renamed && !first {
 		n.advertise()
 	}

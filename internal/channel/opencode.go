@@ -508,11 +508,15 @@ func (m *openCodeNodes) bind(f bridgeFrame) error {
 	n.mu.Lock()
 	n.identity.Project = clip(f.Directory, 180)
 	n.identity.DisplayName = clip(filepath.Base(f.Directory), 40)
+	n.cwd = f.Directory
 	if title := cleanName(f.Title); title != "" {
 		n.names.custom = title
 	}
 	changed := n.resolveNameLocked()
 	n.mu.Unlock()
+	if n.updateGit() {
+		changed = true
+	}
 	if changed || created {
 		n.advertise()
 	}

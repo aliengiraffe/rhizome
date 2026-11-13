@@ -152,6 +152,14 @@ type Node struct {
 	nameRefresh time.Duration
 	// noticeRefresh overrides defaultNoticeRefresh in tests.
 	noticeRefresh time.Duration
+	// gitRefresh overrides defaultGitRefresh in tests.
+	gitRefresh time.Duration
+	// cwd is the unclipped working directory behind identity.project, guarded
+	// by mu; gitSynced is the generation whose git record was last written.
+	// gitMu serializes updateGit and is taken before mu.
+	cwd       string
+	gitSynced uint64
+	gitMu     sync.Mutex
 	// opts, mode, bind, advertiseAddr, gossipAddr, beaconPort, ts and cert are
 	// fixed by start before any goroutine reads them.
 	opts                            Options
@@ -295,6 +303,7 @@ func (n *Node) observe(h Hook) error {
 	}
 	n.identity.Project = clip(h.Cwd, 180)
 	n.identity.DisplayName = clip(filepath.Base(h.Cwd), 40)
+	n.cwd = h.Cwd
 	n.resolveNameLocked()
 	if n.collector != nil {
 		select {
@@ -304,6 +313,7 @@ func (n *Node) observe(h Hook) error {
 	}
 	generation := n.identity.Generation
 	n.mu.Unlock()
+	n.updateGit()
 	if n.members != nil {
 		if err := n.members.UpdateNode(time.Second); err != nil {
 			slog.Warn("discovery_update", "error", err)

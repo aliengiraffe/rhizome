@@ -30,17 +30,27 @@ import (
 )
 
 // NodeMeta serializes the identity into memberlist's bounded metadata. Labels
-// (session_name, project) give way rune by rune, longest first, so routing and
-// authentication fields are never the reason an advertisement is dropped.
+// give way so routing and authentication fields are never the reason an
+// advertisement is dropped: first the git branch (whole, a cut branch would
+// name another one), then session_name and project rune by rune, longest
+// first, then the git origin (whole, it is compared for equality) and the host.
 func (n *Node) NodeMeta(limit int) []byte {
 	identity := n.local()
 	b, _ := json.Marshal(identity)
+	if len(b) > limit && identity.GitBranch != "" {
+		identity.GitBranch = ""
+		b, _ = json.Marshal(identity)
+	}
 	for len(b) > limit && (len(identity.Project) > 0 || len(identity.SessionName) > 0) {
 		if len(identity.SessionName) >= len(identity.Project) {
 			identity.SessionName = trimRune(identity.SessionName)
 		} else {
 			identity.Project = trimRune(identity.Project)
 		}
+		b, _ = json.Marshal(identity)
+	}
+	if len(b) > limit && (identity.GitOrigin != "" || identity.GitWorktreeRoot) {
+		identity.GitOrigin, identity.GitWorktreeRoot = "", false
 		b, _ = json.Marshal(identity)
 	}
 	for len(b) > limit && len(identity.Host) > 0 {
