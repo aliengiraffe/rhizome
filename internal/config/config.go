@@ -53,6 +53,7 @@ type Config struct {
 	} `toml:"pi"`
 	Gateway      Gateway           `toml:"gateway"`
 	Network      Network           `toml:"network"`
+	Dream        Dream             `toml:"dream"`
 	Sessions     Sessions          `toml:"sessions"`
 	Update       Update            `toml:"update"`
 	PeerHistory  HistoryPolicy     `toml:"-"` // Effective policy for paired hosts reading local history.
@@ -253,9 +254,12 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 	}
 	// TOML keys are case-sensitive even though the decoder can match Go fields
 	// case-insensitively. Reject alternate spellings instead of losing their source.
-	known := map[string]bool{"debug": true, "claude": true, "codex": true, "opencode": true, "pi": true, "network": true, "gateway": true, "sessions": true, "update": true}
+	known := map[string]bool{"debug": true, "claude": true, "codex": true, "opencode": true, "pi": true, "network": true, "gateway": true, "sessions": true, "update": true, "dream": true}
 	for _, k := range networkKeys {
 		known["network."+k] = true
+	}
+	for _, k := range dreamKeys {
+		known["dream."+k] = true
 	}
 	for _, k := range sessionsKeys {
 		known["sessions."+k] = true
@@ -306,6 +310,10 @@ func resolveDocument(c Config, home string, file []byte, flags map[string]string
 			}
 			c.Sources[table+"."+k] = source
 		}
+	}
+	c.Dream, err = resolveDream(raw.Dream, func(k string) bool { return md.IsDefined("dream", k) })
+	if err != nil {
+		return c, err
 	}
 	c.Sessions, c.RecentWindow = raw.Sessions, DefaultRecentWindow
 	c.Sources["sessions.recent_window"] = "default"

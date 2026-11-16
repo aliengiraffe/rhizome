@@ -49,6 +49,8 @@ func entry() error {
 	}
 	service.SetBuild(buildVersion, buildCommit)
 	switch mode {
+	case "dream":
+		return dreamCommand(os.Args[1:])
 	case "auth", "test":
 		return oaiCommand(mode, os.Args[1:])
 	case "mcp":
