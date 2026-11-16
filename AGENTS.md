@@ -194,6 +194,21 @@ See [setup](docs/reference.md#creating-the-configuration-file),
 
 ## Rhizome invariants
 
+- **Experimental OAI commands are explicit-only and hidden.** `auth oai`
+  (with `status` / `logout`) and `test oai` dispatch in `main.go` through
+  `oai.go` / `internal/oai`; never list them in public usage, README or setup.
+  Only these commands access SIWC. Non-secret registration is atomically saved
+  under `~/.rhizome/oai/state.json` with private permissions and a writer lock;
+  tokens live only in Keychain, Secret Service or Windows Credential Manager,
+  with no plaintext fallback, config storage or peer forwarding. Preserve
+  loopback PKCE/state/nonce and full ID-token verification, client-ID persistence
+  before exchange, and rotated credentials persisted as unusable until identity
+  verification completes. Ambiguous refreshes require reauthorization. `status`
+  is a read-only metadata snapshot. Inference uses `store:false`, bounded SSE
+  through completion, no redirects or retries. No LLM feature, device-code flow,
+  multi-profile UX or uninstall integration is implied. See [docs/oai.md](docs/oai.md)
+  for protocol decisions, storage limits and pending live verification.
+
 - **One configuration resolver.** `internal/config` owns settings with explicit
   flag > env > TOML > default precedence and strict unknown-key rejection.
   MCP and service share `runtime_dir` through `~/.rhizome/config.toml`; tokens

@@ -49,6 +49,8 @@ func entry() error {
 	}
 	service.SetBuild(buildVersion, buildCommit)
 	switch mode {
+	case "auth", "test":
+		return oaiCommand(mode, os.Args[1:])
 	case "mcp":
 		opts := flag.NewFlagSet("mcp", flag.ContinueOnError)
 		agent := opts.String("agent", "claude", "delivery agent: claude, codex, opencode or pi")
