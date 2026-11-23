@@ -144,7 +144,9 @@ through an injectable `serviceInstaller`, reports running only after
 `service.Inspect` confirms the observer lock, records whether the observer
 already ran before the step (`WasRunning`), distinguishes an installed
 definition from a running observer on failure, and is never run by `--list` or
-by `--network` without the interactive questions. Pairing is a separate
+by `--network` without the interactive questions. On Linux both installers and
+the service CLI share the user-manager environment fallback in
+[`docs/service.md`](docs/service.md#platform-lifecycle). Pairing is a separate
 post-apply phase (`setup_pairing.go`, same in the screen and `--plain`): only
 when the saved file enables the gateway, the service step confirmed the
 observer, the service was not already running a rewritten file (then it prints

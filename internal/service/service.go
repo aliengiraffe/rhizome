@@ -81,7 +81,7 @@ func newManager(configPath string) (*manager, error) {
 	m.run = func(ctx context.Context, name string, args ...string) error {
 		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, name, args...)
+		cmd := managerCommand(ctx, name, args...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {

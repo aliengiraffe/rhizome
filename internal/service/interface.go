@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -86,7 +85,7 @@ func ManageQuiet(ctx context.Context, action string, c Config) error {
 	m.run = func(ctx context.Context, name string, args ...string) error {
 		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, name, args...)
+		cmd := managerCommand(ctx, name, args...)
 		output := &boundedOutput{}
 		cmd.Stdout, cmd.Stderr = output, output
 		if err := cmd.Run(); err != nil {

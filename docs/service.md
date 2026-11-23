@@ -107,6 +107,13 @@ can disallow registration; configure permission through the administrator rather
 than changing the collector's user. The task does not run while the user is logged
 out. Native service-manager status is separate from observer health.
 
+On Linux, a terminal multiplexer or SSH shell can omit the login environment
+even while the user manager is running. If both `XDG_RUNTIME_DIR` and
+`DBUS_SESSION_BUS_ADDRESS` are empty, Rhizome uses `/run/user/<uid>` for
+`systemctl --user` when it is a private (0700) directory owned by the current
+user. If setup already installed the definition, `rhizome service install`
+retries the service step.
+
 Installed observers write JSON diagnostics to `observer.log`, rotated at 2 MiB
 with one backup. `observer-health.json` reports last update, the running `version`, watched directories,
 tracked files, active observed publishers, degraded coverage, parser skips,
